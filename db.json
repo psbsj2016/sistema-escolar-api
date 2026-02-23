@@ -1,6 +1,14 @@
 {
   "escola": {},
-  "usuarios": [],
+  "usuarios": [
+    {
+      "id": "1",
+      "nome": "Gestor Principal",
+      "login": "admin",
+      "senha": "123",
+      "tipo": "Gestor"
+    }
+  ],
   "alunos": [],
   "turmas": [],
   "cursos": [],
