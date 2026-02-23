@@ -8,24 +8,26 @@ const app = express();
 app.use(cors({
     origin: '*', // Permite que a Vercel acesse a API
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-ID'] // Libera o nosso "crachá"
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-ID'] 
 }));
 
-app.use(express.json({ limit: '10mb' })); // Permite salvar as fotos e logos
+app.use(express.json({ limit: '10mb' })); 
 
-// Conexão com o Banco de Dados
+// Conexão com o Banco de Dados (CORRIGIDA PARA MÚLTIPLOS ACESSOS)
 const uri = process.env.MONGODB_URI;
 let client;
-let db;
+let clientPromise;
 
 async function connectDB() {
-    if (!client) {
+    // Se ainda não começou a conectar, inicia a conexão
+    if (!clientPromise) {
         client = new MongoClient(uri);
-        await client.connect();
-        db = client.db('sistema-escolar');
-        console.log("Conectado ao Banco de Dados Permanente!");
+        clientPromise = client.connect();
+        console.log("Iniciando conexão com o Banco de Dados Permanente...");
     }
-    return db;
+    // Aguarda a conexão terminar, mesmo se 10 pedidos chegarem ao mesmo tempo
+    await clientPromise;
+    return client.db('sistema-escolar');
 }
 
 // Middleware de Segurança e Isolamento (Multi-escola)
