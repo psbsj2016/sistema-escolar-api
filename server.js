@@ -3,7 +3,14 @@ const cors = require('cors');
 const { MongoClient } = require('mongodb');
 
 const app = express();
-app.use(cors());
+
+// --- CONFIGURAÇÃO DE CORS REFORÇADA ---
+app.use(cors({
+    origin: '*', // Permite que a Vercel acesse a API
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-ID'] // Libera o nosso "crachá"
+}));
+
 app.use(express.json({ limit: '10mb' })); // Permite salvar as fotos e logos
 
 // Conexão com o Banco de Dados
