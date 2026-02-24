@@ -42,15 +42,15 @@ app.use((req, res, next) => {
 // =========================================================
 
 const transporter = nodemailer.createTransport({
-    host: "smtp-mail.outlook.com",
+    host: "smtp.office365.com", // Endereço oficial e mais estável da Microsoft
     port: 587,
-    secure: false, // false porque usa a porta 587 (TLS)
+    secure: false, 
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
     },
     tls: {
-        ciphers: 'SSLv3'
+        rejectUnauthorized: false // Evita que o Render trave por causa de certificados de nuvem
     }
 });
 
