@@ -37,8 +37,12 @@ app.use((req, res, next) => {
 });
 
 // =========================================================
-// MOTOR DE E-MAILS (SAAS) - RESEND
+// MOTOR DE E-MAILS (SAAS) E VALIDAÇÃO DE REGISTO
 // =========================================================
+
+// Cofre de memória temporária para guardar os códigos de quem está a tentar registar-se
+const codigosAtivos = new Map();
+const PIN_MESTRE = "7777"; // O seu PIN secreto intocável!
 
 app.post('/auth/enviar-codigo', async (req, res) => {
     const { email } = req.body;
@@ -48,7 +52,7 @@ app.post('/auth/enviar-codigo', async (req, res) => {
 
     try {
         const { data, error } = await resend.emails.send({
-            from: 'Sistema Escolar <onboarding@resend.dev>', // Ou seu domínio verificado
+            from: 'Sistema Escolar <onboarding@resend.dev>', // Ou o seu domínio verificado
             to: email, 
             subject: '🔐 Seu Código - Sistema Escolar',
             html: `
@@ -57,7 +61,7 @@ app.post('/auth/enviar-codigo', async (req, res) => {
                     <p>Você iniciou o cadastro para uma nova instituição.</p>
                     <p>Seu código de verificação é:</p>
                     <h1 style="letter-spacing: 5px; color: #2c3e50; background: #f4f6f7; padding: 15px; border-radius: 8px; display: inline-block;">${codigoGerado}</h1>
-                    <p style="font-size: 12px; color: #7f8c8d; margin-top: 20px;">Use este código junto com o PIN Exclusivo do Gestor para liberar sua conta.</p>
+                    <p style="font-size: 12px; color: #7f8c8d; margin-top: 20px;">Use este código junto com o PIN Exclusivo do Gestor para liberar a sua conta.</p>
                 </div>
             `
         });
@@ -67,10 +71,53 @@ app.post('/auth/enviar-codigo', async (req, res) => {
             return res.status(500).json({ error: 'Erro ao disparar Resend' });
         }
 
-        res.json({ success: true, codigo: codigoGerado });
+        // SEGURANÇA MÁXIMA: Guardamos o código no servidor e NÃO o devolvemos ao frontend!
+        codigosAtivos.set(email, codigoGerado);
+        
+        // Destrói o código passado 10 minutos (Segurança extra contra tentativas infinitas)
+        setTimeout(() => codigosAtivos.delete(email), 10 * 60 * 1000);
+
+        res.json({ success: true, mensagem: 'Código enviado com sucesso' });
     } catch (error) {
         console.error("Erro interno:", error);
         res.status(500).json({ error: 'Falha no servidor' });
+    }
+});
+
+app.post('/auth/validar-cadastro', async (req, res) => {
+    const { email, codigo, pin } = req.body;
+
+    if (!email || !codigo || !pin) {
+        return res.status(400).json({ error: 'Dados incompletos.' });
+    }
+
+    // 1ª Barreira: O PIN Mestre bate certo?
+    if (pin !== PIN_MESTRE) {
+        return res.status(401).json({ error: 'PIN Exclusivo incorreto.' });
+    }
+
+    // 2ª Barreira: O Código é exatamente o que enviámos para aquele e-mail?
+    const codigoReal = codigosAtivos.get(email);
+    if (!codigoReal || codigoReal !== codigo) {
+        return res.status(401).json({ error: 'Código de e-mail inválido ou expirado.' });
+    }
+
+    // Passou em tudo! Limpamos o código da memória para não ser reutilizado.
+    codigosAtivos.delete(email);
+
+    try {
+        const database = await connectDB();
+        
+        // Garante que a conta admin base existe para o primeiro login
+        const userExistente = await database.collection('usuarios').findOne({ login: "admin" });
+        if (!userExistente) {
+            const defaultAdmin = { id: Date.now().toString(), nome: "Gestor Principal", login: "admin", senha: "123", tipo: "Gestor" };
+            await database.collection('usuarios').insertOne(defaultAdmin);
+        }
+
+        res.json({ success: true, mensagem: 'Sistema ativado!' });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao configurar a conta.' });
     }
 });
 
