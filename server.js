@@ -75,8 +75,33 @@ app.post('/auth/enviar-codigo', async (req, res) => {
 });
 
 // =========================================================
-// ROTAS PADRÕES DO SISTEMA
+// ROTA SEGURA DE LOGIN
 // =========================================================
+app.post('/auth/login', async (req, res) => {
+    const { login, senha } = req.body;
+    
+    if (!login || !senha) {
+        return res.status(400).json({ error: 'Login e senha são obrigatórios.' });
+    }
+
+    try {
+        const database = await connectDB();
+        // Procura exatamente o utilizador com esse login e senha
+        const usuario = await database.collection('usuarios').findOne({ login: login, senha: senha });
+
+        if (usuario) {
+            // Removemos a senha antes de devolver os dados para o navegador (Boas práticas!)
+            delete usuario.senha;
+            delete usuario._id;
+            res.json({ success: true, usuario: usuario });
+        } else {
+            res.status(401).json({ error: 'Utilizador ou senha incorretos.' });
+        }
+    } catch (error) {
+        console.error("Erro no login seguro:", error);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
 
 app.get('/usuarios', async (req, res) => {
     const database = await connectDB();
