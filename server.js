@@ -2,9 +2,13 @@ const express = require('express');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
 const { Resend } = require('resend');
+const jwt = require('jsonwebtoken'); // <-- NOVO: O Gerador de Pulseiras VIP
 
 const app = express();
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+// A Senha Mestra do seu servidor (nunca a mostre a ninguém)
+const JWT_SECRET = process.env.JWT_SECRET || 'chave_super_secreta_gestao_escolar_777';
 
 // --- CONFIGURAÇÃO DE CORS REFORÇADA ---
 app.use(cors({
@@ -30,10 +34,27 @@ async function connectDB() {
     return client.db('sistema-escolar');
 }
 
-// Middleware de Segurança e Isolamento (Multi-escola)
+// =========================================================
+// MIDDLEWARE DE SEGURANÇA MÁXIMA (JWT)
+// =========================================================
 app.use((req, res, next) => {
-    req.userId = req.headers['x-user-id'];
-    next();
+    // Deixa passar livremente quem está a tentar fazer login ou a criar conta (rotas /auth)
+    if (req.path.startsWith('/auth/')) return next();
+
+    // Pede a pulseira VIP (Token)
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(403).json({ error: 'Acesso negado. Token não fornecido.' });
+
+    const token = authHeader.split(' ')[1]; // Separa a palavra "Bearer" do token em si
+
+    // Verifica se a pulseira é falsa ou expirou
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err) return res.status(401).json({ error: 'Sessão expirada ou token inválido.' });
+        
+        // Se for verdadeira, guardamos a identidade de forma segura no servidor!
+        req.userId = decoded.id; 
+        next();
+    });
 });
 
 // =========================================================
@@ -136,11 +157,15 @@ app.post('/auth/login', async (req, res) => {
         // Procura exatamente o utilizador com esse login e senha
         const usuario = await database.collection('usuarios').findOne({ login: login, senha: senha });
 
-        if (usuario) {
-            // Removemos a senha antes de devolver os dados para o navegador (Boas práticas!)
+       if (usuario) {
             delete usuario.senha;
             delete usuario._id;
-            res.json({ success: true, usuario: usuario });
+            
+            // Cria a Pulseira VIP criptografada com validade de 12 horas!
+            const token = jwt.sign({ id: usuario.id, tipo: usuario.tipo }, JWT_SECRET, { expiresIn: '12h' });
+            
+            // Devolve o utilizador E o token
+            res.json({ success: true, usuario: usuario, token: token });
         } else {
             res.status(401).json({ error: 'Utilizador ou senha incorretos.' });
         }
@@ -161,7 +186,7 @@ app.get('/usuarios', async (req, res) => {
     }
     // IMPORTANTE DE SEGURANÇA: Não vamos enviar as senhas para o navegador em listas abertas!
     // Mas para o login provisório funcionar até fazermos a rota de login seguro, deixaremos retornar.
-    const formatted = data.map(item => { const { _id, ...rest } = item; return rest; });
+    const formatted = data.map(item => { const { _id, senha, ...rest } = item; return rest; });
     res.json(formatted);
 });
 
