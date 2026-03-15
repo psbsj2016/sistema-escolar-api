@@ -246,6 +246,43 @@ app.delete('/:collection/:id', async (req, res) => {
     res.json({ success: true });
 });
 
+// =========================================================
+// ROTA SEGURA PARA TROCA DE SENHA
+// =========================================================
+app.put('/usuarios/mudar-senha', async (req, res) => {
+    const { senhaAtual, novaSenha } = req.body;
+    
+    // O id do utilizador vem da nossa Pulseira VIP (Token JWT)
+    const userId = req.userId;
+
+    if (!senhaAtual || !novaSenha) {
+        return res.status(400).json({ error: 'Preencha a senha atual e a nova.' });
+    }
+
+    try {
+        const database = await connectDB();
+        
+        // Vai ao cofre buscar o utilizador para ver a senha real dele
+        const usuario = await database.collection('usuarios').findOne({ id: userId });
+
+        // Se a senha digitada for diferente da do cofre, bloqueia!
+        if (!usuario || usuario.senha !== senhaAtual) {
+            return res.status(401).json({ error: 'Senha atual incorreta.' });
+        }
+
+        // Se estiver certa, atualiza para a nova senha
+        await database.collection('usuarios').updateOne(
+            { id: userId },
+            { $set: { senha: novaSenha } }
+        );
+
+        res.json({ success: true, mensagem: 'Senha alterada com sucesso!' });
+    } catch (error) {
+        console.error("Erro ao mudar senha:", error);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
 // Inicialização Correta
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => { console.log(`API Blindada rodando na porta ${PORT} com Resend!`); });
