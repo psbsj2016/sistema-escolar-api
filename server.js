@@ -38,8 +38,8 @@ async function connectDB() {
 // MIDDLEWARE DE SEGURANÇA MÁXIMA (JWT)
 // =========================================================
 app.use((req, res, next) => {
-    // Deixa passar livremente quem está a tentar fazer login ou a criar conta (rotas /auth)
-    if (req.path.startsWith('/auth/')) return next();
+    // Deixa passar livremente quem está a tentar fazer login, criar conta ou ver o logotipo da escola
+    if (req.path.startsWith('/auth/') || (req.path === '/escola' && req.method === 'GET')) return next();
 
     // Pede a pulseira VIP (Token)
     const authHeader = req.headers['authorization'];
@@ -73,7 +73,7 @@ app.post('/auth/enviar-codigo', async (req, res) => {
 
     try {
         const { data, error } = await resend.emails.send({
-            from: 'Sistema Escolar <onboarding@resend.dev>', // Ou o seu domínio verificado
+            from: 'Sistema Escolar <nao-responda@sistemaptt.com.br>',
             to: email, 
             subject: '🔐 Seu Código - Sistema Escolar',
             html: `
