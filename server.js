@@ -129,11 +129,14 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     try {
         const database = await connectDB();
         
-        // Garante que a conta admin base existe para o primeiro login
+        // Garante que a conta admin base existe para o primeiro login e já guarda o E-MAIL
         const userExistente = await database.collection('usuarios').findOne({ login: "admin" });
         if (!userExistente) {
-            const defaultAdmin = { id: Date.now().toString(), nome: "Gestor Principal", login: "admin", senha: "123", tipo: "Gestor" };
+            const defaultAdmin = { id: Date.now().toString(), nome: "Gestor Principal", login: "admin", senha: "123", tipo: "Gestor", email: email };
             await database.collection('usuarios').insertOne(defaultAdmin);
+        } else {
+            // Se o admin já existe, apenas atualiza adicionando o e-mail dono
+            await database.collection('usuarios').updateOne({ login: "admin" }, { $set: { email: email } });
         }
 
         res.json({ success: true, mensagem: 'Sistema ativado!' });
@@ -193,10 +196,10 @@ app.get('/usuarios', async (req, res) => {
 });
 
 // =========================================================
-// ROTA SEGURA PARA ATUALIZAR DADOS DA CONTA (LOGIN/SENHA)
+// ROTA SEGURA PARA ATUALIZAR DADOS DA CONTA (LOGIN/SENHA/EMAIL)
 // =========================================================
 app.put('/usuarios/atualizar-conta', async (req, res) => {
-    const { novoLogin, senhaAtual, novaSenha } = req.body;
+    const { novoLogin, novoEmail, senhaAtual, novaSenha } = req.body;
     
     // O id do utilizador vem da nossa Pulseira VIP (Token JWT)
     const userId = req.userId;
@@ -219,6 +222,7 @@ app.put('/usuarios/atualizar-conta', async (req, res) => {
         // Prepara a sacola de atualizações
         const atualizacoes = {};
         if (novaSenha) atualizacoes.senha = novaSenha;
+        if (novoEmail) atualizacoes.email = novoEmail; // Guarda o E-MAIL
         
         if (novoLogin && novoLogin !== usuario.login) {
             // Verifica se alguém já está usando esse novo login
