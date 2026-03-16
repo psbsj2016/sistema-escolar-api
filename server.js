@@ -193,16 +193,16 @@ app.get('/usuarios', async (req, res) => {
 });
 
 // =========================================================
-// ROTA SEGURA PARA TROCA DE SENHA (AGORA NO LUGAR CERTO!)
+// ROTA SEGURA PARA ATUALIZAR DADOS DA CONTA (LOGIN/SENHA)
 // =========================================================
-app.put('/usuarios/mudar-senha', async (req, res) => {
-    const { senhaAtual, novaSenha } = req.body;
+app.put('/usuarios/atualizar-conta', async (req, res) => {
+    const { novoLogin, senhaAtual, novaSenha } = req.body;
     
     // O id do utilizador vem da nossa Pulseira VIP (Token JWT)
     const userId = req.userId;
 
-    if (!senhaAtual || !novaSenha) {
-        return res.status(400).json({ error: 'Preencha a senha atual e a nova.' });
+    if (!senhaAtual) {
+        return res.status(400).json({ error: 'A senha atual é obrigatória para autorizar alterações.' });
     }
 
     try {
@@ -216,15 +216,33 @@ app.put('/usuarios/mudar-senha', async (req, res) => {
             return res.status(401).json({ error: 'Senha atual incorreta.' });
         }
 
-        // Se estiver certa, atualiza para a nova senha
+        // Prepara a sacola de atualizações
+        const atualizacoes = {};
+        if (novaSenha) atualizacoes.senha = novaSenha;
+        
+        if (novoLogin && novoLogin !== usuario.login) {
+            // Verifica se alguém já está usando esse novo login
+            const loginExistente = await database.collection('usuarios').findOne({ login: novoLogin, id: { $ne: userId } });
+            if (loginExistente) {
+                return res.status(400).json({ error: 'Este login já está em uso por outro usuário.' });
+            }
+            atualizacoes.login = novoLogin;
+        }
+
+        // Se não houver nada para atualizar, avisa
+        if (Object.keys(atualizacoes).length === 0) {
+             return res.status(400).json({ error: 'Nenhuma alteração foi solicitada.' });
+        }
+
+        // Aplica as atualizações no banco de dados
         await database.collection('usuarios').updateOne(
             { id: userId },
-            { $set: { senha: novaSenha } }
+            { $set: atualizacoes }
         );
 
-        res.json({ success: true, mensagem: 'Senha alterada com sucesso!' });
+        res.json({ success: true, mensagem: 'Conta atualizada com sucesso!' });
     } catch (error) {
-        console.error("Erro ao mudar senha:", error);
+        console.error("Erro ao atualizar conta:", error);
         res.status(500).json({ error: 'Erro interno do servidor.' });
     }
 });
