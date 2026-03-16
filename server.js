@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
 const { Resend } = require('resend');
-const jwt = require('jsonwebtoken'); // <-- NOVO: O Gerador de Pulseiras VIP
+const jwt = require('jsonwebtoken'); // <-- O Gerador de Pulseiras VIP
 
 const app = express();
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -175,6 +175,9 @@ app.post('/auth/login', async (req, res) => {
     }
 });
 
+// =========================================================
+// ROTAS ESPECÍFICAS DE USUÁRIOS
+// =========================================================
 app.get('/usuarios', async (req, res) => {
     const database = await connectDB();
     let data = await database.collection('usuarios').find({}).toArray();
@@ -185,11 +188,50 @@ app.get('/usuarios', async (req, res) => {
         data = [defaultAdmin];
     }
     // IMPORTANTE DE SEGURANÇA: Não vamos enviar as senhas para o navegador em listas abertas!
-    // Mas para o login provisório funcionar até fazermos a rota de login seguro, deixaremos retornar.
     const formatted = data.map(item => { const { _id, senha, ...rest } = item; return rest; });
     res.json(formatted);
 });
 
+// =========================================================
+// ROTA SEGURA PARA TROCA DE SENHA (AGORA NO LUGAR CERTO!)
+// =========================================================
+app.put('/usuarios/mudar-senha', async (req, res) => {
+    const { senhaAtual, novaSenha } = req.body;
+    
+    // O id do utilizador vem da nossa Pulseira VIP (Token JWT)
+    const userId = req.userId;
+
+    if (!senhaAtual || !novaSenha) {
+        return res.status(400).json({ error: 'Preencha a senha atual e a nova.' });
+    }
+
+    try {
+        const database = await connectDB();
+        
+        // Vai ao cofre buscar o utilizador para ver a senha real dele
+        const usuario = await database.collection('usuarios').findOne({ id: userId });
+
+        // Se a senha digitada for diferente da do cofre, bloqueia!
+        if (!usuario || usuario.senha !== senhaAtual) {
+            return res.status(401).json({ error: 'Senha atual incorreta.' });
+        }
+
+        // Se estiver certa, atualiza para a nova senha
+        await database.collection('usuarios').updateOne(
+            { id: userId },
+            { $set: { senha: novaSenha } }
+        );
+
+        res.json({ success: true, mensagem: 'Senha alterada com sucesso!' });
+    } catch (error) {
+        console.error("Erro ao mudar senha:", error);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
+// =========================================================
+// ROTAS DA ESCOLA
+// =========================================================
 app.get('/escola', async (req, res) => {
     const database = await connectDB();
     const data = await database.collection('escola').findOne({}) || {};
@@ -205,6 +247,9 @@ app.put('/escola', async (req, res) => {
     res.json(body);
 });
 
+// =========================================================
+// ROTAS GENÉRICAS (MANTIDAS NO FINAL)
+// =========================================================
 app.get('/:collection', async (req, res) => {
     if(req.params.collection === 'escola' || req.params.collection === 'usuarios') return;
     const database = await connectDB();
@@ -246,43 +291,6 @@ app.delete('/:collection/:id', async (req, res) => {
     res.json({ success: true });
 });
 
-// =========================================================
-// ROTA SEGURA PARA TROCA DE SENHA
-// =========================================================
-app.put('/usuarios/mudar-senha', async (req, res) => {
-    const { senhaAtual, novaSenha } = req.body;
-    
-    // O id do utilizador vem da nossa Pulseira VIP (Token JWT)
-    const userId = req.userId;
-
-    if (!senhaAtual || !novaSenha) {
-        return res.status(400).json({ error: 'Preencha a senha atual e a nova.' });
-    }
-
-    try {
-        const database = await connectDB();
-        
-        // Vai ao cofre buscar o utilizador para ver a senha real dele
-        const usuario = await database.collection('usuarios').findOne({ id: userId });
-
-        // Se a senha digitada for diferente da do cofre, bloqueia!
-        if (!usuario || usuario.senha !== senhaAtual) {
-            return res.status(401).json({ error: 'Senha atual incorreta.' });
-        }
-
-        // Se estiver certa, atualiza para a nova senha
-        await database.collection('usuarios').updateOne(
-            { id: userId },
-            { $set: { senha: novaSenha } }
-        );
-
-        res.json({ success: true, mensagem: 'Senha alterada com sucesso!' });
-    } catch (error) {
-        console.error("Erro ao mudar senha:", error);
-        res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
-});
-
 // Inicialização Correta
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => { console.log(`API Blindada rodando na porta ${PORT} com Resend!`); });
+app.listen(PORT, () => { console.log(`API Blindada rodando na porta ${PORT} com Resend e JWT!`); });
