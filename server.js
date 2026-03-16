@@ -61,9 +61,11 @@ app.use((req, res, next) => {
 // MOTOR DE E-MAILS (SAAS) E VALIDAÇÃO DE REGISTO
 // =========================================================
 
-// Cofre de memória temporária para guardar os códigos de quem está a tentar registar-se
+// Cofre temporário para o código de 6 dígitos enviado por e-mail
 const codigosAtivos = new Map();
-const PIN_MESTRE = "7777"; // O seu PIN secreto intocável!
+
+// 👑 A SENHA SECRETA DO DONO DO SISTEMA (Mude se quiser)
+const SENHA_DONO = process.env.SENHA_DONO || "master777"; 
 
 app.post('/auth/enviar-codigo', async (req, res) => {
     const { email } = req.body;
@@ -80,27 +82,36 @@ app.post('/auth/enviar-codigo', async (req, res) => {
                 <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; color: #333;">
                     <h2 style="color: #27ae60;">Bem-vindo ao Sistema Escolar!</h2>
                     <p>Você iniciou o cadastro para uma nova instituição.</p>
-                    <p>Seu código de verificação é:</p>
+                    <p>Seu código de verificação do e-mail é:</p>
                     <h1 style="letter-spacing: 5px; color: #2c3e50; background: #f4f6f7; padding: 15px; border-radius: 8px; display: inline-block;">${codigoGerado}</h1>
-                    <p style="font-size: 12px; color: #7f8c8d; margin-top: 20px;">Use este código junto com o PIN Exclusivo do Gestor para liberar a sua conta.</p>
+                    <p style="font-size: 12px; color: #7f8c8d; margin-top: 20px;">Use este código junto com o <b>PIN Exclusivo de Liberação</b> fornecido pelo administrador para ativar a sua conta.</p>
                 </div>
             `
         });
 
         if (error) {
-            console.error("Erro no Resend:", error);
             return res.status(500).json({ error: 'Erro ao disparar Resend' });
         }
 
-        // SEGURANÇA MÁXIMA: Guardamos o código no servidor e NÃO o devolvemos ao frontend!
         codigosAtivos.set(email, codigoGerado);
-        
-        // Destrói o código passado 10 minutos (Segurança extra contra tentativas infinitas)
         setTimeout(() => codigosAtivos.delete(email), 10 * 60 * 1000);
+
+        // --- MÁGICA: REGISTRA NA TABELA DO DONO COMO 'PENDENTE' (🟡) ---
+        const database = await connectDB();
+        const ativacao = await database.collection('ativacoes').findOne({ email: email });
+        
+        if (!ativacao) {
+            await database.collection('ativacoes').insertOne({
+                id: Date.now().toString(),
+                email: email,
+                status: 'Pendente',
+                pinAtivacao: null, // Ainda precisa que o Dono gere!
+                dataRequisicao: new Date().toLocaleDateString('pt-BR')
+            });
+        }
 
         res.json({ success: true, mensagem: 'Código enviado com sucesso' });
     } catch (error) {
-        console.error("Erro interno:", error);
         res.status(500).json({ error: 'Falha no servidor' });
     }
 });
@@ -108,34 +119,44 @@ app.post('/auth/enviar-codigo', async (req, res) => {
 app.post('/auth/validar-cadastro', async (req, res) => {
     const { email, codigo, pin } = req.body;
 
-    if (!email || !codigo || !pin) {
-        return res.status(400).json({ error: 'Dados incompletos.' });
+    if (!email || !codigo || !pin) return res.status(400).json({ error: 'Dados incompletos.' });
+
+    const database = await connectDB();
+    const ativacao = await database.collection('ativacoes').findOne({ email: email });
+
+    // 1ª Barreira: Existe solicitação para este e-mail?
+    if (!ativacao) return res.status(400).json({ error: 'E-mail não encontrado nas solicitações.' });
+
+    // 2ª Barreira: Está bloqueado ou já ativado?
+    if (ativacao.status === 'Verificado') return res.status(400).json({ error: 'Esta conta já está ativada e em uso!' });
+    if (ativacao.status === 'Bloqueado') return res.status(403).json({ error: 'Cadastro bloqueado pelo administrador.' });
+
+    // 3ª Barreira: O PIN digitado é o mesmo que o Dono gerou?
+    if (!ativacao.pinAtivacao || ativacao.pinAtivacao !== pin) {
+        return res.status(401).json({ error: 'O PIN Único está incorreto ou ainda não foi liberado pelo Dono.' });
     }
 
-    // 1ª Barreira: O PIN Mestre bate certo?
-    if (pin !== PIN_MESTRE) {
-        return res.status(401).json({ error: 'PIN Exclusivo incorreto.' });
-    }
-
-    // 2ª Barreira: O Código é exatamente o que enviámos para aquele e-mail?
+    // 4ª Barreira: O código do E-mail está certo?
     const codigoReal = codigosAtivos.get(email);
     if (!codigoReal || codigoReal !== codigo) {
         return res.status(401).json({ error: 'Código de e-mail inválido ou expirado.' });
     }
 
-    // Passou em tudo! Limpamos o código da memória para não ser reutilizado.
-    codigosAtivos.delete(email);
+    codigosAtivos.delete(email); // Limpa da memória
 
     try {
-        const database = await connectDB();
+        // MUDA O STATUS PARA VERIFICADO (🟢) E "QUEIMA" O PIN PARA NÃO SER REUTILIZADO!
+        await database.collection('ativacoes').updateOne(
+            { email: email }, 
+            { $set: { status: 'Verificado', pinAtivacao: 'USADO E QUEIMADO' } }
+        );
         
-        // Garante que a conta admin base existe para o primeiro login e já guarda o E-MAIL
+        // Garante que o Admin base existe para o login inicial
         const userExistente = await database.collection('usuarios').findOne({ login: "admin" });
         if (!userExistente) {
             const defaultAdmin = { id: Date.now().toString(), nome: "Gestor Principal", login: "admin", senha: "123", tipo: "Gestor", email: email };
             await database.collection('usuarios').insertOne(defaultAdmin);
         } else {
-            // Se o admin já existe, apenas atualiza adicionando o e-mail dono
             await database.collection('usuarios').updateOne({ login: "admin" }, { $set: { email: email } });
         }
 
@@ -143,6 +164,63 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     } catch (error) {
         res.status(500).json({ error: 'Erro ao configurar a conta.' });
     }
+});
+
+// =========================================================
+// 👑 ÁREA SECRETA DO DONO DO SISTEMA (MASTER)
+// =========================================================
+
+app.post('/master/login', (req, res) => {
+    const { senha } = req.body;
+    if (senha === SENHA_DONO) {
+        const tokenMaster = jwt.sign({ master: true }, JWT_SECRET, { expiresIn: '2h' });
+        res.json({ success: true, token: tokenMaster });
+    } else {
+        res.status(401).json({ error: 'Senha Mestra Incorreta!' });
+    }
+});
+
+const masterAuth = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(403).json({ error: 'Acesso negado.' });
+    const token = authHeader.split(' ')[1];
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err || !decoded.master) return res.status(401).json({ error: 'Sessão do dono inválida.' });
+        next();
+    });
+};
+
+// Puxar todos os e-mails
+app.get('/master/ativacoes', masterAuth, async (req, res) => {
+    const database = await connectDB();
+    const lista = await database.collection('ativacoes').find({}).sort({ _id: -1 }).toArray();
+    res.json(lista);
+});
+
+// Gerar o PIN Único
+app.post('/master/gerar-pin', masterAuth, async (req, res) => {
+    const { email } = req.body;
+    const database = await connectDB();
+    
+    // Cria um PIN Único no formato ABX-9R2
+    const novoPin = Math.random().toString(36).substring(2, 5).toUpperCase() + '-' + Math.random().toString(36).substring(2, 5).toUpperCase();
+    
+    await database.collection('ativacoes').updateOne(
+        { email: email },
+        { $set: { pinAtivacao: novoPin, status: 'Pendente' } }
+    );
+    res.json({ success: true, pin: novoPin });
+});
+
+// Botão de bloquear mal intencionados
+app.post('/master/bloquear', masterAuth, async (req, res) => {
+    const { email } = req.body;
+    const database = await connectDB();
+    await database.collection('ativacoes').updateOne(
+        { email: email },
+        { $set: { status: 'Bloqueado', pinAtivacao: 'BLOQUEADO' } }
+    );
+    res.json({ success: true });
 });
 
 // =========================================================
