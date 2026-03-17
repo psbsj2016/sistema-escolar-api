@@ -85,7 +85,7 @@ app.use((req, res, next) => {
 // MOTOR DE E-MAILS (SAAS) E VALIDAÇÃO DE REGISTO
 // =========================================================
 const codigosAtivos = new Map();
-const SENHA_DONO = process.env.SENHA_DONO || "master777"; 
+const SENHA_DONO = process.env.SENHA_DONO || "@Psbsj.2026@"; 
 
 app.post('/auth/enviar-codigo', async (req, res) => {
     const { email } = req.body;
