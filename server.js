@@ -3,7 +3,7 @@ const cors = require('cors');
 const { MongoClient } = require('mongodb');
 const { Resend } = require('resend');
 const jwt = require('jsonwebtoken'); 
-const bcrypt = require('bcrypt'); // <-- NOVO: Motor de Criptografia de Senhas!
+const bcrypt = require('bcrypt'); // Motor de Criptografia de Senhas
 
 const app = express();
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -18,6 +18,40 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' })); 
 
+// =========================================================
+// 🛡️ FILTRO PURIFICADOR ANTI-XSS (BARREIRA DE ENTRADA)
+// =========================================================
+const sanitizeString = (str) => {
+    if (typeof str !== 'string') return str;
+    // Transforma símbolos de código em texto inofensivo
+    return str.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+};
+
+const sanitizeObject = (obj) => {
+    if (typeof obj !== 'object' || obj === null) return sanitizeString(obj);
+    if (Array.isArray(obj)) return obj.map(sanitizeObject);
+    const sanitized = {};
+    for (const [key, value] of Object.entries(obj)) {
+        // Ignora os campos de senha (eles já são protegidos pelo bcrypt)
+        if (key === 'senha' || key === 'senhaAtual' || key === 'novaSenha' || key === 'pin') {
+            sanitized[key] = value;
+        } else {
+            sanitized[key] = sanitizeObject(value);
+        }
+    }
+    return sanitized;
+};
+
+// Middleware Global: Tudo passa por aqui antes de chegar ao banco de dados!
+app.use((req, res, next) => {
+    if (req.body) req.body = sanitizeObject(req.body);
+    if (req.query) req.query = sanitizeObject(req.query);
+    next();
+});
+
+// =========================================================
+// CONEXÃO COM O BANCO DE DADOS
+// =========================================================
 const uri = process.env.MONGODB_URI;
 let client;
 let clientPromise;
@@ -134,7 +168,6 @@ app.post('/auth/validar-cadastro', async (req, res) => {
         
         const userExistente = await database.collection('usuarios').findOne({ login: "admin" });
         if (!userExistente) {
-            // CRIPTOGRAFA A SENHA PADRÃO '123' NA CRIAÇÃO DA CONTA
             const senhaCriptografada = await bcrypt.hash("123", 10);
             const defaultAdmin = { id: Date.now().toString(), nome: "Gestor Principal", login: "admin", senha: senhaCriptografada, tipo: "Gestor", email: email };
             await database.collection('usuarios').insertOne(defaultAdmin);
@@ -216,14 +249,11 @@ app.post('/auth/login', async (req, res) => {
 
         let senhaCorreta = false;
 
-        // Verifica se a senha já está criptografada (bcrypt gera hashes começando com $2b$ ou $2a$)
         if (usuario.senha && (usuario.senha.startsWith('$2b$') || usuario.senha.startsWith('$2a$'))) {
             senhaCorreta = await bcrypt.compare(senha, usuario.senha);
         } else {
-            // Se for uma senha antiga em texto limpo
             senhaCorreta = (senha === usuario.senha);
             
-            // AUTO-MIGRAÇÃO: Se a senha limpa estiver certa, criptografa e atualiza o banco silenciosamente!
             if (senhaCorreta) {
                 const novaSenhaHash = await bcrypt.hash(senha, 10);
                 await database.collection('usuarios').updateOne({ id: usuario.id }, { $set: { senha: novaSenhaHash } });
@@ -260,7 +290,6 @@ app.get('/usuarios', async (req, res) => {
     res.json(formatted);
 });
 
-// Criptografa ao criar novo utilizador
 app.post('/usuarios', async (req, res) => {
     const database = await connectDB();
     const body = { ...req.body };
@@ -275,9 +304,8 @@ app.post('/usuarios', async (req, res) => {
     res.json(body);
 });
 
-// Criptografa ao editar utilizador (caso tenha mudado a senha)
 app.put('/usuarios/:id', async (req, res) => {
-    if(req.params.id === 'atualizar-conta' || req.params.id === 'mudar-senha') return; // Evita conflito com rotas abaixo
+    if(req.params.id === 'atualizar-conta' || req.params.id === 'mudar-senha') return; 
     const database = await connectDB();
     const body = { ...req.body };
     delete body._id;
@@ -302,7 +330,6 @@ app.put('/usuarios/atualizar-conta', async (req, res) => {
 
         if (!usuario) return res.status(401).json({ error: 'Usuário não encontrado.' });
 
-        // Valida a senha atual (suportando auto-migração se ainda for texto limpo)
         let senhaCorreta = false;
         if (usuario.senha && (usuario.senha.startsWith('$2b$') || usuario.senha.startsWith('$2a$'))) {
             senhaCorreta = await bcrypt.compare(senhaAtual, usuario.senha);
@@ -313,7 +340,7 @@ app.put('/usuarios/atualizar-conta', async (req, res) => {
         if (!senhaCorreta) return res.status(401).json({ error: 'Senha atual incorreta.' });
 
         const atualizacoes = {};
-        if (novaSenha) atualizacoes.senha = await bcrypt.hash(novaSenha, 10); // Criptografa a nova!
+        if (novaSenha) atualizacoes.senha = await bcrypt.hash(novaSenha, 10); 
         if (novoEmail) atualizacoes.email = novoEmail; 
         
         if (novoLogin && novoLogin !== usuario.login) {
@@ -367,7 +394,7 @@ app.get('/:collection/:id', async (req, res) => {
 });
 
 app.post('/:collection', async (req, res) => {
-    if(req.params.collection === 'usuarios') return; // Proteção extra
+    if(req.params.collection === 'usuarios') return; 
     const database = await connectDB();
     const body = { ...req.body };
     if (!body.id) body.id = Date.now().toString() + Math.floor(Math.random()*1000);
@@ -378,7 +405,7 @@ app.post('/:collection', async (req, res) => {
 });
 
 app.put('/:collection/:id', async (req, res) => {
-    if(req.params.collection === 'usuarios') return; // Proteção extra
+    if(req.params.collection === 'usuarios') return; 
     const database = await connectDB();
     const body = { ...req.body };
     delete body._id;
@@ -393,4 +420,4 @@ app.delete('/:collection/:id', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => { console.log(`API Blindada rodando na porta ${PORT} com senhas criptografadas!`); });
+app.listen(PORT, () => { console.log(`API Blindada (JWT, Bcrypt e Anti-XSS) rodando na porta ${PORT}!`); });
