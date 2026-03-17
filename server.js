@@ -23,7 +23,6 @@ app.use(express.json({ limit: '10mb' }));
 // =========================================================
 const sanitizeString = (str) => {
     if (typeof str !== 'string') return str;
-    // Transforma símbolos de código em texto inofensivo
     return str.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 };
 
@@ -32,7 +31,6 @@ const sanitizeObject = (obj) => {
     if (Array.isArray(obj)) return obj.map(sanitizeObject);
     const sanitized = {};
     for (const [key, value] of Object.entries(obj)) {
-        // Ignora os campos de senha (eles já são protegidos pelo bcrypt)
         if (key === 'senha' || key === 'senhaAtual' || key === 'novaSenha' || key === 'pin') {
             sanitized[key] = value;
         } else {
@@ -42,7 +40,6 @@ const sanitizeObject = (obj) => {
     return sanitized;
 };
 
-// Middleware Global: Tudo passa por aqui antes de chegar ao banco de dados!
 app.use((req, res, next) => {
     if (req.body) req.body = sanitizeObject(req.body);
     if (req.query) req.query = sanitizeObject(req.query);
@@ -87,7 +84,6 @@ app.use((req, res, next) => {
 // =========================================================
 // MOTOR DE E-MAILS (SAAS) E VALIDAÇÃO DE REGISTO
 // =========================================================
-
 const codigosAtivos = new Map();
 const SENHA_DONO = process.env.SENHA_DONO || "master777"; 
 
@@ -184,7 +180,6 @@ app.post('/auth/validar-cadastro', async (req, res) => {
 // =========================================================
 // 👑 ÁREA SECRETA DO DONO DO SISTEMA (MASTER)
 // =========================================================
-
 app.post('/master/login', (req, res) => {
     const { senha } = req.body;
     if (senha === SENHA_DONO) {
@@ -234,7 +229,7 @@ app.post('/master/bloquear', masterAuth, async (req, res) => {
 });
 
 // =========================================================
-// ROTA SEGURA DE LOGIN (COM AUTO-MIGRAÇÃO DE SENHAS)
+// ROTA SEGURA DE LOGIN E USUÁRIOS
 // =========================================================
 app.post('/auth/login', async (req, res) => {
     const { login, senha } = req.body;
@@ -253,7 +248,6 @@ app.post('/auth/login', async (req, res) => {
             senhaCorreta = await bcrypt.compare(senha, usuario.senha);
         } else {
             senhaCorreta = (senha === usuario.senha);
-            
             if (senhaCorreta) {
                 const novaSenhaHash = await bcrypt.hash(senha, 10);
                 await database.collection('usuarios').updateOne({ id: usuario.id }, { $set: { senha: novaSenhaHash } });
@@ -274,9 +268,6 @@ app.post('/auth/login', async (req, res) => {
     }
 });
 
-// =========================================================
-// ROTAS ESPECÍFICAS DE USUÁRIOS E SENHAS
-// =========================================================
 app.get('/usuarios', async (req, res) => {
     const database = await connectDB();
     let data = await database.collection('usuarios').find({}).toArray();
@@ -358,9 +349,6 @@ app.put('/usuarios/atualizar-conta', async (req, res) => {
     }
 });
 
-// =========================================================
-// ROTAS DA ESCOLA E GENÉRICAS
-// =========================================================
 app.get('/escola', async (req, res) => {
     const database = await connectDB();
     const data = await database.collection('escola').findOne({}) || {};
@@ -376,8 +364,22 @@ app.put('/escola', async (req, res) => {
     res.json(body);
 });
 
-app.get('/:collection', async (req, res) => {
-    if(req.params.collection === 'escola' || req.params.collection === 'usuarios') return;
+// =========================================================
+// 🚧 GUARDAS DE FRONTEIRA: ROTAS GENÉRICAS
+// =========================================================
+
+// Apenas estas coleções podem ser lidas ou gravadas pelas rotas genéricas
+const COLECOES_PERMITIDAS = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos'];
+
+// Segurança VIP
+const validarColecao = (req, res, next) => {
+    if (!COLECOES_PERMITIDAS.includes(req.params.collection)) {
+        return res.status(403).json({ error: 'Acesso bloqueado: Coleção não autorizada.' });
+    }
+    next();
+};
+
+app.get('/:collection', validarColecao, async (req, res) => {
     const database = await connectDB();
     let query = {};
     if (req.userId) query.donoId = req.userId;
@@ -386,15 +388,14 @@ app.get('/:collection', async (req, res) => {
     res.json(formatted);
 });
 
-app.get('/:collection/:id', async (req, res) => {
+app.get('/:collection/:id', validarColecao, async (req, res) => {
     const database = await connectDB();
     const data = await database.collection(req.params.collection).findOne({ id: req.params.id });
     if(data) delete data._id;
     res.json(data || {});
 });
 
-app.post('/:collection', async (req, res) => {
-    if(req.params.collection === 'usuarios') return; 
+app.post('/:collection', validarColecao, async (req, res) => {
     const database = await connectDB();
     const body = { ...req.body };
     if (!body.id) body.id = Date.now().toString() + Math.floor(Math.random()*1000);
@@ -404,8 +405,7 @@ app.post('/:collection', async (req, res) => {
     res.json(body);
 });
 
-app.put('/:collection/:id', async (req, res) => {
-    if(req.params.collection === 'usuarios') return; 
+app.put('/:collection/:id', validarColecao, async (req, res) => {
     const database = await connectDB();
     const body = { ...req.body };
     delete body._id;
@@ -413,11 +413,11 @@ app.put('/:collection/:id', async (req, res) => {
     res.json(body);
 });
 
-app.delete('/:collection/:id', async (req, res) => {
+app.delete('/:collection/:id', validarColecao, async (req, res) => {
     const database = await connectDB();
     await database.collection(req.params.collection).deleteOne({ id: req.params.id });
     res.json({ success: true });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => { console.log(`API Blindada (JWT, Bcrypt e Anti-XSS) rodando na porta ${PORT}!`); });
+app.listen(PORT, () => { console.log(`API Blindada (JWT, Bcrypt, XSS e Filtro de Tabelas) rodando na porta ${PORT}!`); });
