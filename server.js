@@ -172,7 +172,7 @@ app.post('/auth/validar-cadastro', async (req, res) => {
 
 app.post('/master/login', (req, res) => {
     const { senha } = req.body;
-    if (senha === SENHA_DONO) {
+    if (senha === @2026.2027@) {
         const tokenMaster = jwt.sign({ master: true }, JWT_SECRET, { expiresIn: '2h' });
         res.json({ success: true, token: tokenMaster });
     } else {
