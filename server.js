@@ -490,9 +490,10 @@ const SCHEMAS_PERMITIDOS = {
     cursos: ['id', 'escolaId', 'donoId', 'nome', 'carga', 'modulos'],
     financeiro: ['id', 'escolaId', 'donoId', 'idCarne', 'idAluno', 'alunoNome', 'valor', 'vencimento', 'status', 'descricao', 'tipo', 'dataGeracao', 'pagamentoData', 'formaPagamento'],
     eventos: ['id', 'escolaId', 'donoId', 'data', 'tipo', 'descricao', 'inicio', 'fim'],
-    chamadas: ['id', 'escolaId', 'donoId', 'data', 'turma', 'disciplina', 'alunos', 'obs'],
-    avaliacoes: ['id', 'escolaId', 'donoId', 'data', 'turma', 'disciplina', 'tipo', 'notas', 'obs'],
-    planejamentos: ['id', 'escolaId', 'donoId', 'semana', 'data', 'turma', 'disciplina', 'conteudo', 'metodologia', 'avaliacao', 'obs']
+    // 🚀 ATUALIZADO: O Servidor agora reconhece os dados do novo Módulo Pedagógico
+    chamadas: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'data', 'status', 'duracao'],
+    avaliacoes: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'disciplina', 'data', 'tipo', 'valorMax', 'nota', 'bimestre', 'dataLancamento'],
+    planejamentos: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'curso', 'aulas']
 };
 
 const purificarDados = (colecao, dadosBrutos) => {
