@@ -41,12 +41,11 @@ app.use(globalLimiter);
 
 // 🛡️ 4. LIMITADOR DE FORÇA BRUTA (Anti-Hacker): Máximo de 15 tentativas para rotas sensíveis
 const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutos
+    windowMs: 15 * 60 * 1000, 
     max: 15, 
     message: { error: 'Muitas tentativas falhadas. Sistema bloqueado para este IP por 15 minutos para proteger a conta.' },
 });
 
-// Aplica o bloqueio de força bruta apenas nas portas de entrada
 app.use('/auth/login', authLimiter);
 app.use('/auth/enviar-codigo', authLimiter);
 app.use('/master/login', authLimiter);
@@ -57,7 +56,7 @@ app.use('/escola/validar-pin', authLimiter);
 // =========================================================
 const sanitizeString = (str) => {
     if (typeof str !== 'string') return str;
-    return str.replace(/</g, '&lt;').replace(/>/g, '&gt;'); // Transforma tags HTML em texto inofensivo
+    return str.replace(/</g, '&lt;').replace(/>/g, '&gt;'); 
 };
 
 const sanitizeObject = (obj) => {
@@ -111,7 +110,7 @@ app.use((req, res, next) => {
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
         if (err) return res.status(401).json({ error: 'Sessão expirada ou token inválido.' });
         req.userId = decoded.id; 
-        req.escolaId = decoded.escolaId; // 🛡️ O SEGREDO DO SAAS: O ID DA ESCOLA
+        req.escolaId = decoded.escolaId; 
         next();
     });
 });
@@ -168,7 +167,6 @@ app.post('/auth/enviar-codigo', async (req, res) => {
     }
 });
 
-// 🚀 O NOVO MOTOR DE CRIAÇÃO ISOLADA DE ESCOLAS
 app.post('/auth/validar-cadastro', async (req, res) => {
     const { email, codigo, pin } = req.body;
 
@@ -258,7 +256,6 @@ app.get('/master/ativacoes', masterAuth, async (req, res) => {
     res.json(lista);
 });
 
-// 🚀 O NOVO MOTOR DE GERAÇÃO E AUTO-SYNC
 app.post('/master/gerar-pin', masterAuth, async (req, res) => {
     const { email, plano } = req.body;
     const database = await connectDB();
@@ -299,7 +296,7 @@ app.post('/master/bloquear', masterAuth, async (req, res) => {
 });
 
 // =========================================================
-// ROTA DE VALIDAÇÃO DE PIN PELO CLIENTE (APP.JS)
+// ROTA DE VALIDAÇÃO DE PIN PELO CLIENTE
 // =========================================================
 app.post('/escola/validar-pin', async (req, res) => {
     const { pin } = req.body;
@@ -478,6 +475,33 @@ app.put('/escola', async (req, res) => {
 });
 
 // =========================================================
+// 🛡️ FILTRO DE QUALIDADE DE DADOS (SCHEMA VALIDATOR ESTRITO)
+// =========================================================
+const SCHEMAS_PERMITIDOS = {
+    alunos: ['id', 'escolaId', 'donoId', 'nome', 'nascimento', 'rg', 'cpf', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'estado', 'nomePai', 'nomeMae', 'telEmergencia', 'whatsapp', 'curso', 'turma', 'modulo', 'dataMatricula', 'diaVencimento', 'valorMensalidade', 'obs'],
+    turmas: ['id', 'escolaId', 'donoId', 'nome', 'curso', 'dia', 'horario', 'professor', 'maxAlunos'],
+    cursos: ['id', 'escolaId', 'donoId', 'nome', 'carga', 'modulos'],
+    financeiro: ['id', 'escolaId', 'donoId', 'idCarne', 'idAluno', 'alunoNome', 'valor', 'vencimento', 'status', 'descricao', 'tipo', 'dataGeracao', 'pagamentoData', 'formaPagamento'],
+    eventos: ['id', 'escolaId', 'donoId', 'data', 'tipo', 'descricao', 'inicio', 'fim'],
+    chamadas: ['id', 'escolaId', 'donoId', 'data', 'turma', 'disciplina', 'alunos', 'obs'],
+    avaliacoes: ['id', 'escolaId', 'donoId', 'data', 'turma', 'disciplina', 'tipo', 'notas', 'obs'],
+    planejamentos: ['id', 'escolaId', 'donoId', 'semana', 'data', 'turma', 'disciplina', 'conteudo', 'metodologia', 'avaliacao', 'obs']
+};
+
+const purificarDados = (colecao, dadosBrutos) => {
+    const schema = SCHEMAS_PERMITIDOS[colecao];
+    if (!schema) return dadosBrutos; // Segurança de fallback se não encontrar o schema
+    
+    const dadosLimpos = {};
+    for (const campo of schema) {
+        if (dadosBrutos[campo] !== undefined) {
+            dadosLimpos[campo] = dadosBrutos[campo];
+        }
+    }
+    return dadosLimpos;
+};
+
+// =========================================================
 // 🚧 GUARDAS DE FRONTEIRA: ROTAS GENÉRICAS (DADOS DOS ALUNOS/FINANCEIRO)
 // =========================================================
 
@@ -511,10 +535,15 @@ app.get('/:collection/:id', validarColecao, async (req, res) => {
 
 app.post('/:collection', validarColecao, async (req, res) => {
     const database = await connectDB();
-    const body = { ...req.body };
+    let body = { ...req.body };
+    
     if (!body.id) body.id = Date.now().toString() + Math.floor(Math.random()*1000);
     if (req.escolaId) body.escolaId = req.escolaId; 
     else if (req.userId) body.donoId = req.userId;
+    
+    // 🛡️ APLICA O FILTRO DE QUALIDADE ANTES DE GUARDAR
+    body = purificarDados(req.params.collection, body);
+
     await database.collection(req.params.collection).insertOne(body);
     delete body._id;
     res.json(body);
@@ -522,13 +551,16 @@ app.post('/:collection', validarColecao, async (req, res) => {
 
 app.put('/:collection/:id', validarColecao, async (req, res) => {
     const database = await connectDB();
-    const body = { ...req.body };
+    let body = { ...req.body };
     delete body._id;
+    
     let query = { id: req.params.id };
     if (req.escolaId) query.escolaId = req.escolaId; 
     
-    // Filtro adicional de segurança: não deixar alterar o escolaId no PUT genérico
     if (body.escolaId && body.escolaId !== req.escolaId) delete body.escolaId;
+
+    // 🛡️ APLICA O FILTRO DE QUALIDADE ANTES DE ATUALIZAR
+    body = purificarDados(req.params.collection, body);
 
     await database.collection(req.params.collection).updateOne(query, { $set: body }, { upsert: true });
     res.json(body);
@@ -543,4 +575,4 @@ app.delete('/:collection/:id', validarColecao, async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => { console.log(`API Blindada SaaS (Rate Limit + Helmet + NoSQL Safe) rodando na porta ${PORT}!`); });
+app.listen(PORT, () => { console.log(`API Blindada SaaS (Rate Limit + Helmet + NoSQL Safe + Schema Validator) rodando na porta ${PORT}!`); });
