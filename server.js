@@ -64,10 +64,11 @@ async function connectDB() {
 }
 
 // =========================================================
-// MIDDLEWARE DE SEGURANÇA MÁXIMA (JWT)
+// MIDDLEWARE DE SEGURANÇA MÁXIMA E ISOLAMENTO (JWT)
 // =========================================================
 app.use((req, res, next) => {
-    if (req.path.startsWith('/auth/') || req.path.startsWith('/master/') || (req.path === '/escola' && req.method === 'GET')) return next();
+    // Apenas rotas públicas e master passam sem token
+    if (req.path.startsWith('/auth/') || req.path.startsWith('/master/')) return next();
 
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.status(403).json({ error: 'Acesso negado. Token não fornecido.' });
@@ -77,6 +78,7 @@ app.use((req, res, next) => {
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
         if (err) return res.status(401).json({ error: 'Sessão expirada ou token inválido.' });
         req.userId = decoded.id; 
+        req.escolaId = decoded.escolaId; // 🛡️ O SEGREDO DO SAAS: O ID DA ESCOLA
         next();
     });
 });
@@ -133,6 +135,7 @@ app.post('/auth/enviar-codigo', async (req, res) => {
     }
 });
 
+// 🚀 O NOVO MOTOR DE CRIAÇÃO ISOLADA DE ESCOLAS
 app.post('/auth/validar-cadastro', async (req, res) => {
     const { email, codigo, pin } = req.body;
 
@@ -157,18 +160,38 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     codigosAtivos.delete(email); 
 
     try {
+        // 1. Marca a ativação como feita
         await database.collection('ativacoes').updateOne(
             { email: email }, 
             { $set: { status: 'Verificado', pinAtivacao: 'USADO E QUEIMADO' } }
         );
         
-        const userExistente = await database.collection('usuarios').findOne({ login: "admin" });
+        // 2. GERA UM ID ÚNICO PARA A ESCOLA (O coração do SaaS)
+        const escolaId = 'ESC-' + Date.now().toString(36).toUpperCase();
+
+        // 3. Cria o Perfil da Escola isolado
+        await database.collection('escola').updateOne(
+            { email: email }, 
+            { $set: { escolaId: escolaId, email: email, plano: ativacao.plano || 'Profissional', pinUsado: pin } },
+            { upsert: true }
+        );
+
+        // 4. Cria o Utilizador Gestor (Login é o E-mail)
+        const userExistente = await database.collection('usuarios').findOne({ login: email });
         if (!userExistente) {
             const senhaCriptografada = await bcrypt.hash("123", 10);
-            const defaultAdmin = { id: Date.now().toString(), nome: "Gestor Principal", login: "admin", senha: senhaCriptografada, tipo: "Gestor", email: email };
-            await database.collection('usuarios').insertOne(defaultAdmin);
+            const novoGestor = { 
+                id: Date.now().toString(), 
+                escolaId: escolaId, 
+                nome: "Gestor Principal", 
+                login: email, 
+                senha: senhaCriptografada, 
+                tipo: "Gestor", 
+                email: email 
+            };
+            await database.collection('usuarios').insertOne(novoGestor);
         } else {
-            await database.collection('usuarios').updateOne({ login: "admin" }, { $set: { email: email } });
+            await database.collection('usuarios').updateOne({ login: email }, { $set: { escolaId: escolaId } });
         }
 
         res.json({ success: true, mensagem: 'Sistema ativado!' });
@@ -206,27 +229,81 @@ app.get('/master/ativacoes', masterAuth, async (req, res) => {
     res.json(lista);
 });
 
+// 🚀 O NOVO MOTOR DE GERAÇÃO E AUTO-SYNC
 app.post('/master/gerar-pin', masterAuth, async (req, res) => {
-    const { email } = req.body;
+    const { email, plano } = req.body;
     const database = await connectDB();
-    const novoPin = Math.random().toString(36).substring(2, 5).toUpperCase() + '-' + Math.random().toString(36).substring(2, 5).toUpperCase();
+    
+    let prefix = 'PRO';
+    if (plano === 'Premium') prefix = 'PRE';
+    if (plano === 'Essencial') prefix = 'ESS';
+    
+    const novoPin = prefix + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
     
     await database.collection('ativacoes').updateOne(
         { email: email },
-        { $set: { pinAtivacao: novoPin, status: 'Pendente' } }
+        { $set: { pinAtivacao: novoPin, status: 'Pendente', plano: plano || 'Profissional' } },
+        { upsert: true }
     );
+
+    // 🔄 A MÁGICA: Atualiza a escola certa baseando-se no E-mail!
+    await database.collection('escola').updateOne(
+        { email: email }, 
+        { $set: { plano: plano || 'Profissional' } }, 
+        { upsert: true }
+    );
+
     res.json({ success: true, pin: novoPin });
 });
 
 app.post('/master/bloquear', masterAuth, async (req, res) => {
     const { email } = req.body;
     const database = await connectDB();
+    
     await database.collection('ativacoes').updateOne(
         { email: email },
         { $set: { status: 'Bloqueado', pinAtivacao: 'BLOQUEADO' } }
     );
+    
+    await database.collection('escola').updateOne({ email: email }, { $set: { plano: 'Bloqueado' } }, { upsert: true });
+
     res.json({ success: true });
 });
+
+// =========================================================
+// ROTA DE VALIDAÇÃO DE PIN PELO CLIENTE (APP.JS)
+// =========================================================
+app.post('/escola/validar-pin', async (req, res) => {
+    const { pin } = req.body;
+    if (!pin) return res.status(400).json({ error: 'PIN não fornecido.' });
+
+    try {
+        const database = await connectDB();
+        const ativacao = await database.collection('ativacoes').findOne({ pinAtivacao: pin });
+
+        if (!ativacao) return res.status(404).json({ error: 'PIN inválido, expirado ou não encontrado no servidor.' });
+        if (ativacao.status === 'Bloqueado') return res.status(403).json({ error: 'Cadastro bloqueado pelo administrador.' });
+
+        const planoConfirmado = ativacao.plano || 'Profissional';
+
+        // Atualiza apenas a escola deste utilizador
+        await database.collection('escola').updateOne(
+            { escolaId: req.escolaId }, 
+            { $set: { plano: planoConfirmado, pinUsado: pin } }, 
+            { upsert: true }
+        );
+
+        await database.collection('ativacoes').updateOne(
+            { _id: ativacao._id },
+            { $set: { status: 'Verificado' } }
+        );
+
+        res.json({ success: true, plano: planoConfirmado });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao validar o PIN no servidor.' });
+    }
+});
+
 
 // =========================================================
 // ROTA SEGURA DE LOGIN E USUÁRIOS
@@ -258,7 +335,8 @@ app.post('/auth/login', async (req, res) => {
             delete usuario.senha;
             delete usuario._id;
             
-            const token = jwt.sign({ id: usuario.id, tipo: usuario.tipo }, JWT_SECRET, { expiresIn: '12h' });
+            // INJETA O ID DA ESCOLA NO TOKEN DO UTILIZADOR
+            const token = jwt.sign({ id: usuario.id, tipo: usuario.tipo, escolaId: usuario.escolaId }, JWT_SECRET, { expiresIn: '12h' });
             res.json({ success: true, usuario: usuario, token: token });
         } else {
             res.status(401).json({ error: 'Utilizador ou senha incorretos.' });
@@ -270,13 +348,9 @@ app.post('/auth/login', async (req, res) => {
 
 app.get('/usuarios', async (req, res) => {
     const database = await connectDB();
-    let data = await database.collection('usuarios').find({}).toArray();
-    if (data.length === 0) {
-        const hash = await bcrypt.hash("123", 10);
-        const defaultAdmin = { id: "1", nome: "Gestor Principal", login: "admin", senha: hash, tipo: "Gestor" };
-        await database.collection('usuarios').insertOne(defaultAdmin);
-        data = [defaultAdmin];
-    }
+    let query = {};
+    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    let data = await database.collection('usuarios').find(query).toArray();
     const formatted = data.map(item => { const { _id, senha, ...rest } = item; return rest; });
     res.json(formatted);
 });
@@ -285,6 +359,7 @@ app.post('/usuarios', async (req, res) => {
     const database = await connectDB();
     const body = { ...req.body };
     if (!body.id) body.id = Date.now().toString() + Math.floor(Math.random()*1000);
+    if (req.escolaId) body.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
     
     if (body.senha) {
         body.senha = await bcrypt.hash(body.senha, 10);
@@ -305,7 +380,10 @@ app.put('/usuarios/:id', async (req, res) => {
         body.senha = await bcrypt.hash(body.senha, 10);
     }
     
-    await database.collection('usuarios').updateOne({ id: req.params.id }, { $set: body }, { upsert: true });
+    let query = { id: req.params.id };
+    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+
+    await database.collection('usuarios').updateOne(query, { $set: body }, { upsert: true });
     res.json(body);
 });
 
@@ -351,7 +429,11 @@ app.put('/usuarios/atualizar-conta', async (req, res) => {
 
 app.get('/escola', async (req, res) => {
     const database = await connectDB();
-    const data = await database.collection('escola').findOne({}) || {};
+    let query = {};
+    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    else if (req.userId) query.donoId = req.userId; // Fallback para contas antigas
+    
+    const data = await database.collection('escola').findOne(query) || {};
     delete data._id;
     res.json(data);
 });
@@ -360,12 +442,17 @@ app.put('/escola', async (req, res) => {
     const database = await connectDB();
     const body = { ...req.body };
     delete body._id;
-    await database.collection('escola').updateOne({}, { $set: body }, { upsert: true });
+
+    let query = {};
+    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    else if (req.userId) query.donoId = req.userId;
+
+    await database.collection('escola').updateOne(query, { $set: body }, { upsert: true });
     res.json(body);
 });
 
 // =========================================================
-// 🚧 GUARDAS DE FRONTEIRA: ROTAS GENÉRICAS
+// 🚧 GUARDAS DE FRONTEIRA: ROTAS GENÉRICAS (DADOS DOS ALUNOS/FINANCEIRO)
 // =========================================================
 
 // Apenas estas coleções podem ser lidas ou gravadas pelas rotas genéricas
@@ -382,7 +469,8 @@ const validarColecao = (req, res, next) => {
 app.get('/:collection', validarColecao, async (req, res) => {
     const database = await connectDB();
     let query = {};
-    if (req.userId) query.donoId = req.userId;
+    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO TOTAL
+    else if (req.userId) query.donoId = req.userId; // Fallback
     const data = await database.collection(req.params.collection).find(query).toArray();
     const formatted = data.map(item => { const { _id, ...rest } = item; return rest; });
     res.json(formatted);
@@ -390,7 +478,9 @@ app.get('/:collection', validarColecao, async (req, res) => {
 
 app.get('/:collection/:id', validarColecao, async (req, res) => {
     const database = await connectDB();
-    const data = await database.collection(req.params.collection).findOne({ id: req.params.id });
+    let query = { id: req.params.id };
+    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    const data = await database.collection(req.params.collection).findOne(query);
     if(data) delete data._id;
     res.json(data || {});
 });
@@ -399,7 +489,8 @@ app.post('/:collection', validarColecao, async (req, res) => {
     const database = await connectDB();
     const body = { ...req.body };
     if (!body.id) body.id = Date.now().toString() + Math.floor(Math.random()*1000);
-    if (req.userId) body.donoId = req.userId;
+    if (req.escolaId) body.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    else if (req.userId) body.donoId = req.userId;
     await database.collection(req.params.collection).insertOne(body);
     delete body._id;
     res.json(body);
@@ -409,15 +500,19 @@ app.put('/:collection/:id', validarColecao, async (req, res) => {
     const database = await connectDB();
     const body = { ...req.body };
     delete body._id;
-    await database.collection(req.params.collection).updateOne({ id: req.params.id }, { $set: body }, { upsert: true });
+    let query = { id: req.params.id };
+    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    await database.collection(req.params.collection).updateOne(query, { $set: body }, { upsert: true });
     res.json(body);
 });
 
 app.delete('/:collection/:id', validarColecao, async (req, res) => {
     const database = await connectDB();
-    await database.collection(req.params.collection).deleteOne({ id: req.params.id });
+    let query = { id: req.params.id };
+    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    await database.collection(req.params.collection).deleteOne(query);
     res.json({ success: true });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => { console.log(`API Blindada (JWT, Bcrypt, XSS e Filtro de Tabelas) rodando na porta ${PORT}!`); });
+app.listen(PORT, () => { console.log(`API Blindada SaaS Multi-Tenant rodando na porta ${PORT}!`); });
