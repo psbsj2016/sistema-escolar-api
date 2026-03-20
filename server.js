@@ -119,8 +119,7 @@ app.use((req, res, next) => {
 // MOTOR DE E-MAILS (SAAS) E VALIDAÇÃO DE REGISTO
 // =========================================================
 const codigosAtivos = new Map();
-const SENHA_DONO = process.env.SENHA_DONO || "@Psbsj.2026@"; 
-
+ 
 app.post('/auth/enviar-codigo', async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'E-mail não fornecido' });
@@ -227,11 +226,19 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     }
 });
 
+const SENHA_DONO = process.env.SENHA_DONO; // Agora lê APENAS da nuvem (sem fallback)
+
 // =========================================================
 // 👑 ÁREA SECRETA DO DONO DO SISTEMA (MASTER)
 // =========================================================
 app.post('/master/login', (req, res) => {
     const { senha } = req.body;
+    
+    // Bloqueia imediatamente se a senha não estiver configurada no Render
+    if (!SENHA_DONO) {
+        return res.status(500).json({ error: 'Erro crítico: Senha Mestra não configurada no cofre do servidor!' });
+    }
+
     if (senha === SENHA_DONO) {
         const tokenMaster = jwt.sign({ master: true }, JWT_SECRET, { expiresIn: '2h' });
         res.json({ success: true, token: tokenMaster });
