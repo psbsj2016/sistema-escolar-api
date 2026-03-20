@@ -5,10 +5,18 @@ const { Resend } = require('resend');
 const jwt = require('jsonwebtoken'); 
 const bcrypt = require('bcrypt'); // Motor de Criptografia de Senhas
 
+// 🛡️ NOVOS ESCUDOS DE SEGURANÇA BANCÁRIA
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const mongoSanitize = require('express-mongo-sanitize');
+
 const app = express();
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const JWT_SECRET = process.env.JWT_SECRET || 'chave_super_secreta_gestao_escolar_777';
+
+// 🛡️ 1. CAPACETE HTTP: Protege contra vulnerabilidades comuns da web
+app.use(helmet());
 
 app.use(cors({
     origin: '*',
@@ -18,12 +26,38 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' })); 
 
+// 🛡️ 2. SANITIZAÇÃO NOSQL: Impede que hackers usem "$" ou "." para invadir a base de dados
+app.use(mongoSanitize());
+
+// 🛡️ 3. LIMITADOR GLOBAL (Anti-DDoS): Máximo de 800 requisições a cada 15 min por IP
+const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, 
+    max: 800, 
+    message: { error: 'Tráfego excessivo detetado. O seu IP foi temporariamente bloqueado por motivos de segurança.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use(globalLimiter);
+
+// 🛡️ 4. LIMITADOR DE FORÇA BRUTA (Anti-Hacker): Máximo de 15 tentativas para rotas sensíveis
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutos
+    max: 15, 
+    message: { error: 'Muitas tentativas falhadas. Sistema bloqueado para este IP por 15 minutos para proteger a conta.' },
+});
+
+// Aplica o bloqueio de força bruta apenas nas portas de entrada
+app.use('/auth/login', authLimiter);
+app.use('/auth/enviar-codigo', authLimiter);
+app.use('/master/login', authLimiter);
+app.use('/escola/validar-pin', authLimiter);
+
 // =========================================================
-// 🛡️ FILTRO PURIFICADOR ANTI-XSS (BARREIRA DE ENTRADA)
+// 🛡️ FILTRO PURIFICADOR ANTI-XSS (BARREIRA DE ENTRADA SECUNDÁRIA)
 // =========================================================
 const sanitizeString = (str) => {
     if (typeof str !== 'string') return str;
-    return str.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return str.replace(/</g, '&lt;').replace(/>/g, '&gt;'); // Transforma tags HTML em texto inofensivo
 };
 
 const sanitizeObject = (obj) => {
@@ -47,7 +81,7 @@ app.use((req, res, next) => {
 });
 
 // =========================================================
-// CONEXÃO COM O BANCO DE DADOS
+// CONEXÃO COM A BASE DE DADOS
 // =========================================================
 const uri = process.env.MONGODB_URI;
 let client;
@@ -67,7 +101,6 @@ async function connectDB() {
 // MIDDLEWARE DE SEGURANÇA MÁXIMA E ISOLAMENTO (JWT)
 // =========================================================
 app.use((req, res, next) => {
-    // Apenas rotas públicas e master passam sem token
     if (req.path.startsWith('/auth/') || req.path.startsWith('/master/')) return next();
 
     const authHeader = req.headers['authorization'];
@@ -160,23 +193,19 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     codigosAtivos.delete(email); 
 
     try {
-        // 1. Marca a ativação como feita
         await database.collection('ativacoes').updateOne(
             { email: email }, 
             { $set: { status: 'Verificado', pinAtivacao: 'USADO E QUEIMADO' } }
         );
         
-        // 2. GERA UM ID ÚNICO PARA A ESCOLA (O coração do SaaS)
         const escolaId = 'ESC-' + Date.now().toString(36).toUpperCase();
 
-        // 3. Cria o Perfil da Escola isolado
         await database.collection('escola').updateOne(
             { email: email }, 
             { $set: { escolaId: escolaId, email: email, plano: ativacao.plano || 'Profissional', pinUsado: pin } },
             { upsert: true }
         );
 
-        // 4. Cria o Utilizador Gestor (Login é o E-mail)
         const userExistente = await database.collection('usuarios').findOne({ login: email });
         if (!userExistente) {
             const senhaCriptografada = await bcrypt.hash("123", 10);
@@ -246,7 +275,6 @@ app.post('/master/gerar-pin', masterAuth, async (req, res) => {
         { upsert: true }
     );
 
-    // 🔄 A MÁGICA: Atualiza a escola certa baseando-se no E-mail!
     await database.collection('escola').updateOne(
         { email: email }, 
         { $set: { plano: plano || 'Profissional' } }, 
@@ -286,7 +314,6 @@ app.post('/escola/validar-pin', async (req, res) => {
 
         const planoConfirmado = ativacao.plano || 'Profissional';
 
-        // Atualiza apenas a escola deste utilizador
         await database.collection('escola').updateOne(
             { escolaId: req.escolaId }, 
             { $set: { plano: planoConfirmado, pinUsado: pin } }, 
@@ -335,7 +362,6 @@ app.post('/auth/login', async (req, res) => {
             delete usuario.senha;
             delete usuario._id;
             
-            // INJETA O ID DA ESCOLA NO TOKEN DO UTILIZADOR
             const token = jwt.sign({ id: usuario.id, tipo: usuario.tipo, escolaId: usuario.escolaId }, JWT_SECRET, { expiresIn: '12h' });
             res.json({ success: true, usuario: usuario, token: token });
         } else {
@@ -349,7 +375,7 @@ app.post('/auth/login', async (req, res) => {
 app.get('/usuarios', async (req, res) => {
     const database = await connectDB();
     let query = {};
-    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    if (req.escolaId) query.escolaId = req.escolaId; 
     let data = await database.collection('usuarios').find(query).toArray();
     const formatted = data.map(item => { const { _id, senha, ...rest } = item; return rest; });
     res.json(formatted);
@@ -359,7 +385,7 @@ app.post('/usuarios', async (req, res) => {
     const database = await connectDB();
     const body = { ...req.body };
     if (!body.id) body.id = Date.now().toString() + Math.floor(Math.random()*1000);
-    if (req.escolaId) body.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    if (req.escolaId) body.escolaId = req.escolaId; 
     
     if (body.senha) {
         body.senha = await bcrypt.hash(body.senha, 10);
@@ -381,7 +407,7 @@ app.put('/usuarios/:id', async (req, res) => {
     }
     
     let query = { id: req.params.id };
-    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    if (req.escolaId) query.escolaId = req.escolaId; 
 
     await database.collection('usuarios').updateOne(query, { $set: body }, { upsert: true });
     res.json(body);
@@ -430,8 +456,8 @@ app.put('/usuarios/atualizar-conta', async (req, res) => {
 app.get('/escola', async (req, res) => {
     const database = await connectDB();
     let query = {};
-    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
-    else if (req.userId) query.donoId = req.userId; // Fallback para contas antigas
+    if (req.escolaId) query.escolaId = req.escolaId; 
+    else if (req.userId) query.donoId = req.userId; 
     
     const data = await database.collection('escola').findOne(query) || {};
     delete data._id;
@@ -444,7 +470,7 @@ app.put('/escola', async (req, res) => {
     delete body._id;
 
     let query = {};
-    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    if (req.escolaId) query.escolaId = req.escolaId; 
     else if (req.userId) query.donoId = req.userId;
 
     await database.collection('escola').updateOne(query, { $set: body }, { upsert: true });
@@ -455,10 +481,8 @@ app.put('/escola', async (req, res) => {
 // 🚧 GUARDAS DE FRONTEIRA: ROTAS GENÉRICAS (DADOS DOS ALUNOS/FINANCEIRO)
 // =========================================================
 
-// Apenas estas coleções podem ser lidas ou gravadas pelas rotas genéricas
 const COLECOES_PERMITIDAS = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos'];
 
-// Segurança VIP
 const validarColecao = (req, res, next) => {
     if (!COLECOES_PERMITIDAS.includes(req.params.collection)) {
         return res.status(403).json({ error: 'Acesso bloqueado: Coleção não autorizada.' });
@@ -469,8 +493,8 @@ const validarColecao = (req, res, next) => {
 app.get('/:collection', validarColecao, async (req, res) => {
     const database = await connectDB();
     let query = {};
-    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO TOTAL
-    else if (req.userId) query.donoId = req.userId; // Fallback
+    if (req.escolaId) query.escolaId = req.escolaId; 
+    else if (req.userId) query.donoId = req.userId; 
     const data = await database.collection(req.params.collection).find(query).toArray();
     const formatted = data.map(item => { const { _id, ...rest } = item; return rest; });
     res.json(formatted);
@@ -479,7 +503,7 @@ app.get('/:collection', validarColecao, async (req, res) => {
 app.get('/:collection/:id', validarColecao, async (req, res) => {
     const database = await connectDB();
     let query = { id: req.params.id };
-    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    if (req.escolaId) query.escolaId = req.escolaId; 
     const data = await database.collection(req.params.collection).findOne(query);
     if(data) delete data._id;
     res.json(data || {});
@@ -489,7 +513,7 @@ app.post('/:collection', validarColecao, async (req, res) => {
     const database = await connectDB();
     const body = { ...req.body };
     if (!body.id) body.id = Date.now().toString() + Math.floor(Math.random()*1000);
-    if (req.escolaId) body.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    if (req.escolaId) body.escolaId = req.escolaId; 
     else if (req.userId) body.donoId = req.userId;
     await database.collection(req.params.collection).insertOne(body);
     delete body._id;
@@ -501,7 +525,11 @@ app.put('/:collection/:id', validarColecao, async (req, res) => {
     const body = { ...req.body };
     delete body._id;
     let query = { id: req.params.id };
-    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    if (req.escolaId) query.escolaId = req.escolaId; 
+    
+    // Filtro adicional de segurança: não deixar alterar o escolaId no PUT genérico
+    if (body.escolaId && body.escolaId !== req.escolaId) delete body.escolaId;
+
     await database.collection(req.params.collection).updateOne(query, { $set: body }, { upsert: true });
     res.json(body);
 });
@@ -509,10 +537,10 @@ app.put('/:collection/:id', validarColecao, async (req, res) => {
 app.delete('/:collection/:id', validarColecao, async (req, res) => {
     const database = await connectDB();
     let query = { id: req.params.id };
-    if (req.escolaId) query.escolaId = req.escolaId; // 🛡️ ISOLAMENTO
+    if (req.escolaId) query.escolaId = req.escolaId; 
     await database.collection(req.params.collection).deleteOne(query);
     res.json({ success: true });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => { console.log(`API Blindada SaaS Multi-Tenant rodando na porta ${PORT}!`); });
+app.listen(PORT, () => { console.log(`API Blindada SaaS (Rate Limit + Helmet + NoSQL Safe) rodando na porta ${PORT}!`); });
