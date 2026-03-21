@@ -3,9 +3,8 @@ const cors = require('cors');
 const { MongoClient } = require('mongodb');
 const { Resend } = require('resend');
 const jwt = require('jsonwebtoken'); 
-const bcrypt = require('bcrypt'); // Motor de Criptografia de Senhas
+const bcrypt = require('bcrypt');
 
-// 🛡️ NOVOS ESCUDOS DE SEGURANÇA BANCÁRIA
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const mongoSanitize = require('express-mongo-sanitize');
@@ -13,9 +12,13 @@ const mongoSanitize = require('express-mongo-sanitize');
 const app = express();
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const JWT_SECRET = process.env.JWT_SECRET || 'chave_super_secreta_gestao_escolar_777';
+// 🛡️ CORREÇÃO CRÍTICA: SEM CHAVE SEGURA, O SISTEMA RECUSA-SE A LIGAR!
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    console.error("🚨 ERRO FATAL DE SEGURANÇA: A variável JWT_SECRET não está definida no cofre!");
+    process.exit(1); 
+}
 
-// 🛡️ 1. CAPACETE HTTP: Protege contra vulnerabilidades comuns da web
 app.use(helmet());
 
 app.use(cors({
@@ -25,11 +28,8 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '10mb' })); 
-
-// 🛡️ 2. SANITIZAÇÃO NOSQL: Impede que hackers usem "$" ou "." para invadir a base de dados
 app.use(mongoSanitize());
 
-// 🛡️ 3. LIMITADOR GLOBAL (Anti-DDoS): Máximo de 800 requisições a cada 15 min por IP
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 800, 
@@ -39,7 +39,6 @@ const globalLimiter = rateLimit({
 });
 app.use(globalLimiter);
 
-// 🛡️ 4. LIMITADOR DE FORÇA BRUTA (Anti-Hacker): Máximo de 15 tentativas para rotas sensíveis
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 15, 
@@ -51,9 +50,6 @@ app.use('/auth/enviar-codigo', authLimiter);
 app.use('/master/login', authLimiter);
 app.use('/escola/validar-pin', authLimiter);
 
-// =========================================================
-// 🛡️ FILTRO PURIFICADOR ANTI-XSS (BARREIRA DE ENTRADA SECUNDÁRIA)
-// =========================================================
 const sanitizeString = (str) => {
     if (typeof str !== 'string') return str;
     return str.replace(/</g, '&lt;').replace(/>/g, '&gt;'); 
@@ -79,9 +75,6 @@ app.use((req, res, next) => {
     next();
 });
 
-// =========================================================
-// CONEXÃO COM A BASE DE DADOS
-// =========================================================
 const uri = process.env.MONGODB_URI;
 let client;
 let clientPromise;
@@ -96,9 +89,6 @@ async function connectDB() {
     return client.db('sistema-escolar');
 }
 
-// =========================================================
-// MIDDLEWARE DE SEGURANÇA MÁXIMA E ISOLAMENTO (JWT)
-// =========================================================
 app.use((req, res, next) => {
     if (req.path.startsWith('/auth/') || req.path.startsWith('/master/')) return next();
 
@@ -115,9 +105,6 @@ app.use((req, res, next) => {
     });
 });
 
-// =========================================================
-// MOTOR DE E-MAILS (SAAS) E VALIDAÇÃO DE REGISTO
-// =========================================================
 const codigosAtivos = new Map();
  
 app.post('/auth/enviar-codigo', async (req, res) => {
@@ -226,15 +213,11 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     }
 });
 
-const SENHA_DONO = process.env.SENHA_DONO; // Agora lê APENAS da nuvem (sem fallback)
+const SENHA_DONO = process.env.SENHA_DONO; 
 
-// =========================================================
-// 👑 ÁREA SECRETA DO DONO DO SISTEMA (MASTER)
-// =========================================================
 app.post('/master/login', (req, res) => {
     const { senha } = req.body;
     
-    // Bloqueia imediatamente se a senha não estiver configurada no Render
     if (!SENHA_DONO) {
         return res.status(500).json({ error: 'Erro crítico: Senha Mestra não configurada no cofre do servidor!' });
     }
@@ -302,9 +285,6 @@ app.post('/master/bloquear', masterAuth, async (req, res) => {
     res.json({ success: true });
 });
 
-// =========================================================
-// ROTA DE VALIDAÇÃO DE PIN PELO CLIENTE
-// =========================================================
 app.post('/escola/validar-pin', async (req, res) => {
     const { pin } = req.body;
     if (!pin) return res.status(400).json({ error: 'PIN não fornecido.' });
@@ -335,10 +315,6 @@ app.post('/escola/validar-pin', async (req, res) => {
     }
 });
 
-
-// =========================================================
-// ROTA SEGURA DE LOGIN E USUÁRIOS
-// =========================================================
 app.post('/auth/login', async (req, res) => {
     const { login, senha } = req.body;
     
@@ -481,16 +457,12 @@ app.put('/escola', async (req, res) => {
     res.json(body);
 });
 
-// =========================================================
-// 🛡️ FILTRO DE QUALIDADE DE DADOS (SCHEMA VALIDATOR ESTRITO)
-// =========================================================
 const SCHEMAS_PERMITIDOS = {
     alunos: ['id', 'escolaId', 'donoId', 'nome', 'nascimento', 'rg', 'cpf', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'estado', 'nomePai', 'nomeMae', 'telEmergencia', 'whatsapp', 'curso', 'turma', 'modulo', 'dataMatricula', 'diaVencimento', 'valorMensalidade', 'obs'],
     turmas: ['id', 'escolaId', 'donoId', 'nome', 'curso', 'dia', 'horario', 'professor', 'maxAlunos'],
     cursos: ['id', 'escolaId', 'donoId', 'nome', 'carga', 'modulos'],
     financeiro: ['id', 'escolaId', 'donoId', 'idCarne', 'idAluno', 'alunoNome', 'valor', 'vencimento', 'status', 'descricao', 'tipo', 'dataGeracao', 'pagamentoData', 'formaPagamento'],
     eventos: ['id', 'escolaId', 'donoId', 'data', 'tipo', 'descricao', 'inicio', 'fim'],
-    // 🚀 ATUALIZADO: O Servidor agora reconhece os dados do novo Módulo Pedagógico
     chamadas: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'data', 'status', 'duracao'],
     avaliacoes: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'disciplina', 'data', 'tipo', 'valorMax', 'nota', 'bimestre', 'dataLancamento'],
     planejamentos: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'curso', 'aulas']
@@ -498,7 +470,7 @@ const SCHEMAS_PERMITIDOS = {
 
 const purificarDados = (colecao, dadosBrutos) => {
     const schema = SCHEMAS_PERMITIDOS[colecao];
-    if (!schema) return dadosBrutos; // Segurança de fallback se não encontrar o schema
+    if (!schema) return dadosBrutos; 
     
     const dadosLimpos = {};
     for (const campo of schema) {
@@ -508,10 +480,6 @@ const purificarDados = (colecao, dadosBrutos) => {
     }
     return dadosLimpos;
 };
-
-// =========================================================
-// 🚧 GUARDAS DE FRONTEIRA: ROTAS GENÉRICAS (DADOS DOS ALUNOS/FINANCEIRO)
-// =========================================================
 
 const COLECOES_PERMITIDAS = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos'];
 
@@ -549,7 +517,6 @@ app.post('/:collection', validarColecao, async (req, res) => {
     if (req.escolaId) body.escolaId = req.escolaId; 
     else if (req.userId) body.donoId = req.userId;
     
-    // 🛡️ APLICA O FILTRO DE QUALIDADE ANTES DE GUARDAR
     body = purificarDados(req.params.collection, body);
 
     await database.collection(req.params.collection).insertOne(body);
@@ -567,7 +534,6 @@ app.put('/:collection/:id', validarColecao, async (req, res) => {
     
     if (body.escolaId && body.escolaId !== req.escolaId) delete body.escolaId;
 
-    // 🛡️ APLICA O FILTRO DE QUALIDADE ANTES DE ATUALIZAR
     body = purificarDados(req.params.collection, body);
 
     await database.collection(req.params.collection).updateOne(query, { $set: body }, { upsert: true });
