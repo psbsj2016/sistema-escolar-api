@@ -494,7 +494,8 @@ const SCHEMAS_PERMITIDOS = {
     eventos: ['id', 'escolaId', 'donoId', 'data', 'tipo', 'descricao', 'inicio', 'fim'],
     chamadas: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'data', 'status', 'duracao'],
     avaliacoes: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'disciplina', 'data', 'tipo', 'valorMax', 'nota', 'bimestre', 'dataLancamento'],
-    planejamentos: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'curso', 'aulas']
+    planejamentos: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'curso', 'aulas'],
+    estoque: ['id', 'escolaId', 'donoId', 'nome', 'codigo', 'quantidade', 'quantidadeMinima', 'valor', 'obs']
 };
 
 const purificarDados = (colecao, dadosBrutos) => {
@@ -514,7 +515,7 @@ const purificarDados = (colecao, dadosBrutos) => {
 // 🚧 GUARDAS DE FRONTEIRA: ROTAS GENÉRICAS (DADOS DOS ALUNOS/FINANCEIRO)
 // =========================================================
 
-const COLECOES_PERMITIDAS = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos'];
+const COLECOES_PERMITIDAS = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoque'];
 
 const validarColecao = (req, res, next) => {
     if (!COLECOES_PERMITIDAS.includes(req.params.collection)) {
