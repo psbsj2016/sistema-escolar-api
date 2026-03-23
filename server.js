@@ -486,7 +486,7 @@ app.put('/escola', async (req, res) => {
 // 🛡️ FILTRO DE QUALIDADE DE DADOS (SCHEMA VALIDATOR ESTRITO)
 // =========================================================
 const SCHEMAS_PERMITIDOS = {
-    alunos: ['id', 'escolaId', 'donoId', 'nome', 'nascimento', 'rg', 'cpf', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'estado', 'nomePai', 'nomeMae', 'telEmergencia', 'whatsapp', 'curso', 'turma', 'modulo', 'dataMatricula', 'diaVencimento', 'valorMensalidade', 'obs'],
+    alunos: ['id', 'escolaId', 'donoId', 'nome', 'nascimento', 'rg', 'cpf', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'estado', 'nomePai', 'nomeMae', 'telEmergencia', 'whatsapp', 'curso', 'turma', 'modulo', 'dataMatricula', 'diaVencimento', 'valorMensalidade', 'obs', 'sexo', 'profissao', 'pais', 'resp_nome', 'resp_cpf', 'resp_zap'],
     turmas: ['id', 'escolaId', 'donoId', 'nome', 'curso', 'dia', 'horario', 'professor', 'maxAlunos'],
     cursos: ['id', 'escolaId', 'donoId', 'nome', 'carga', 'modulos'],
     // 🚀 ATUALIZADO: Incluímos os novos campos de pagamento dividido, whatsapp e etc.!
