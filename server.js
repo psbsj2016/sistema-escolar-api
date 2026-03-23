@@ -400,23 +400,7 @@ app.post('/usuarios', async (req, res) => {
     res.json(body);
 });
 
-app.put('/usuarios/:id', async (req, res) => {
-    if(req.params.id === 'atualizar-conta' || req.params.id === 'mudar-senha') return; 
-    const database = await connectDB();
-    const body = { ...req.body };
-    delete body._id;
-    
-    if (body.senha) {
-        body.senha = await bcrypt.hash(body.senha, 10);
-    }
-    
-    let query = { id: req.params.id };
-    if (req.escolaId) query.escolaId = req.escolaId; 
-
-    await database.collection('usuarios').updateOne(query, { $set: body }, { upsert: true });
-    res.json(body);
-});
-
+// 🚀 AQUI ESTÁ A CORREÇÃO DA ORDEM (A ROTA ESPECÍFICA VEM PRIMEIRO!)
 app.put('/usuarios/atualizar-conta', async (req, res) => {
     const { novoLogin, novoEmail, senhaAtual, novaSenha } = req.body;
     const userId = req.userId;
@@ -457,6 +441,23 @@ app.put('/usuarios/atualizar-conta', async (req, res) => {
     }
 });
 
+// A ROTA GENÉRICA VEM AGORA POR BAIXO
+app.put('/usuarios/:id', async (req, res) => {
+    const database = await connectDB();
+    const body = { ...req.body };
+    delete body._id;
+    
+    if (body.senha) {
+        body.senha = await bcrypt.hash(body.senha, 10);
+    }
+    
+    let query = { id: req.params.id };
+    if (req.escolaId) query.escolaId = req.escolaId; 
+
+    await database.collection('usuarios').updateOne(query, { $set: body }, { upsert: true });
+    res.json(body);
+});
+
 app.get('/escola', async (req, res) => {
     const database = await connectDB();
     let query = {};
@@ -488,9 +489,9 @@ const SCHEMAS_PERMITIDOS = {
     alunos: ['id', 'escolaId', 'donoId', 'nome', 'nascimento', 'rg', 'cpf', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'estado', 'nomePai', 'nomeMae', 'telEmergencia', 'whatsapp', 'curso', 'turma', 'modulo', 'dataMatricula', 'diaVencimento', 'valorMensalidade', 'obs'],
     turmas: ['id', 'escolaId', 'donoId', 'nome', 'curso', 'dia', 'horario', 'professor', 'maxAlunos'],
     cursos: ['id', 'escolaId', 'donoId', 'nome', 'carga', 'modulos'],
-    financeiro: ['id', 'escolaId', 'donoId', 'idCarne', 'idAluno', 'alunoNome', 'valor', 'vencimento', 'status', 'descricao', 'tipo', 'dataGeracao', 'pagamentoData', 'formaPagamento'],
+    // 🚀 ATUALIZADO: Incluímos os novos campos de pagamento dividido, whatsapp e etc.!
+    financeiro: ['id', 'escolaId', 'donoId', 'idCarne', 'idAluno', 'alunoNome', 'valor', 'vencimento', 'status', 'descricao', 'tipo', 'dataGeracao', 'dataPagamento', 'formaPagamento', 'formaPagamento2', 'valorPago1', 'valorPago2', 'cobradoZap'],
     eventos: ['id', 'escolaId', 'donoId', 'data', 'tipo', 'descricao', 'inicio', 'fim'],
-    // 🚀 ATUALIZADO: O Servidor agora reconhece os dados do novo Módulo Pedagógico
     chamadas: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'data', 'status', 'duracao'],
     avaliacoes: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'disciplina', 'data', 'tipo', 'valorMax', 'nota', 'bimestre', 'dataLancamento'],
     planejamentos: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'curso', 'aulas']
