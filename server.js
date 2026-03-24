@@ -18,18 +18,35 @@ const JWT_SECRET = process.env.JWT_SECRET || 'chave_super_secreta_gestao_escolar
 // 🛡️ 1. CAPACETE HTTP: Protege contra vulnerabilidades comuns da web
 app.use(helmet());
 
+// =========================================================
+// 🚀 2. CORS RESTRITO: Só o seu domínio pode acessar a API
+// =========================================================
+const dominiosPermitidos = [
+    'https://www.sistemaptt.com.br',
+    'https://sistemaptt.com.br',
+    'http://localhost:3000',
+    'http://127.0.0.1:5500'
+];
+
 app.use(cors({
-    origin: '*',
+    origin: function (origin, callback) {
+        // Permite requisições sem origem (como ferramentas de API no backend) ou domínios da lista
+        if (!origin || dominiosPermitidos.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Acesso bloqueado pelo CORS. Domínio não autorizado.'));
+        }
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-User-ID'] 
 }));
 
 app.use(express.json({ limit: '10mb' })); 
 
-// 🛡️ 2. SANITIZAÇÃO NOSQL: Impede que hackers usem "$" ou "." para invadir a base de dados
+// 🛡️ 3. SANITIZAÇÃO NOSQL: Impede que hackers usem "$" ou "." para invadir a base de dados
 app.use(mongoSanitize());
 
-// 🛡️ 3. LIMITADOR GLOBAL (Anti-DDoS): Máximo de 800 requisições a cada 15 min por IP
+// 🛡️ 4. LIMITADOR GLOBAL (Anti-DDoS): Máximo de 800 requisições a cada 15 min por IP
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 800, 
@@ -39,7 +56,7 @@ const globalLimiter = rateLimit({
 });
 app.use(globalLimiter);
 
-// 🛡️ 4. LIMITADOR DE FORÇA BRUTA (Anti-Hacker): Máximo de 15 tentativas para rotas sensíveis
+// 🛡️ 5. LIMITADOR DE FORÇA BRUTA (Anti-Hacker): Máximo de 15 tentativas para rotas sensíveis
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 15, 
@@ -80,20 +97,25 @@ app.use((req, res, next) => {
 });
 
 // =========================================================
-// CONEXÃO COM A BASE DE DADOS
+// 🚀 CONEXÃO COM A BASE DE DADOS OTIMIZADA (POOL DE CONEXÕES)
 // =========================================================
 const uri = process.env.MONGODB_URI;
-let client;
-let clientPromise;
+let dbInstance = null; // Variável que segura a conexão ativa
 
 async function connectDB() {
-    if (!clientPromise) {
-        client = new MongoClient(uri);
-        clientPromise = client.connect();
-        console.log("Iniciando conexão com o Banco de Dados Permanente...");
+    // Se já estiver conectado, reutiliza a conexão imediatamente
+    if (dbInstance) return dbInstance;
+    
+    try {
+        const client = new MongoClient(uri);
+        await client.connect();
+        dbInstance = client.db('sistema-escolar');
+        console.log("📦 Conectado ao MongoDB com sucesso! (Pool de Conexões Ativo)");
+        return dbInstance;
+    } catch (error) {
+        console.error("❌ Erro fatal ao conectar ao MongoDB:", error);
+        throw error;
     }
-    await clientPromise;
-    return client.db('sistema-escolar');
 }
 
 // =========================================================
@@ -226,7 +248,7 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     }
 });
 
-const SENHA_DONO = process.env.SENHA_DONO; // Agora lê APENAS da nuvem (sem fallback)
+const SENHA_DONO = process.env.SENHA_DONO; // Lê APENAS da nuvem
 
 // =========================================================
 // 👑 ÁREA SECRETA DO DONO DO SISTEMA (MASTER)
@@ -234,7 +256,6 @@ const SENHA_DONO = process.env.SENHA_DONO; // Agora lê APENAS da nuvem (sem fal
 app.post('/master/login', (req, res) => {
     const { senha } = req.body;
     
-    // Bloqueia imediatamente se a senha não estiver configurada no Render
     if (!SENHA_DONO) {
         return res.status(500).json({ error: 'Erro crítico: Senha Mestra não configurada no cofre do servidor!' });
     }
@@ -400,7 +421,6 @@ app.post('/usuarios', async (req, res) => {
     res.json(body);
 });
 
-// 🚀 AQUI ESTÁ A CORREÇÃO DA ORDEM (A ROTA ESPECÍFICA VEM PRIMEIRO!)
 app.put('/usuarios/atualizar-conta', async (req, res) => {
     const { novoLogin, novoEmail, senhaAtual, novaSenha } = req.body;
     const userId = req.userId;
@@ -441,7 +461,6 @@ app.put('/usuarios/atualizar-conta', async (req, res) => {
     }
 });
 
-// A ROTA GENÉRICA VEM AGORA POR BAIXO
 app.put('/usuarios/:id', async (req, res) => {
     const database = await connectDB();
     const body = { ...req.body };
@@ -489,7 +508,6 @@ const SCHEMAS_PERMITIDOS = {
     alunos: ['id', 'escolaId', 'donoId', 'nome', 'nascimento', 'rg', 'cpf', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'estado', 'nomePai', 'nomeMae', 'telEmergencia', 'whatsapp', 'curso', 'turma', 'modulo', 'dataMatricula', 'diaVencimento', 'valorMensalidade', 'obs', 'sexo', 'profissao', 'pais', 'resp_nome', 'resp_cpf', 'resp_zap'],
     turmas: ['id', 'escolaId', 'donoId', 'nome', 'curso', 'dia', 'horario', 'professor', 'maxAlunos'],
     cursos: ['id', 'escolaId', 'donoId', 'nome', 'carga', 'modulos'],
-    // 🚀 ATUALIZADO: Incluímos os novos campos de pagamento dividido, whatsapp e etc.!
     financeiro: ['id', 'escolaId', 'donoId', 'idCarne', 'idAluno', 'alunoNome', 'valor', 'vencimento', 'status', 'descricao', 'tipo', 'dataGeracao', 'dataPagamento', 'formaPagamento', 'formaPagamento2', 'valorPago1', 'valorPago2', 'cobradoZap'],
     eventos: ['id', 'escolaId', 'donoId', 'data', 'tipo', 'descricao', 'inicio', 'fim'],
     chamadas: ['id', 'escolaId', 'donoId', 'idAluno', 'nomeAluno', 'data', 'status', 'duracao'],
@@ -500,7 +518,7 @@ const SCHEMAS_PERMITIDOS = {
 
 const purificarDados = (colecao, dadosBrutos) => {
     const schema = SCHEMAS_PERMITIDOS[colecao];
-    if (!schema) return dadosBrutos; // Segurança de fallback se não encontrar o schema
+    if (!schema) return dadosBrutos; // Segurança de fallback
     
     const dadosLimpos = {};
     for (const campo of schema) {
@@ -512,7 +530,7 @@ const purificarDados = (colecao, dadosBrutos) => {
 };
 
 // =========================================================
-// 🚧 GUARDAS DE FRONTEIRA: ROTAS GENÉRICAS (DADOS DOS ALUNOS/FINANCEIRO)
+// 🚧 GUARDAS DE FRONTEIRA: ROTAS GENÉRICAS
 // =========================================================
 
 const COLECOES_PERMITIDAS = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoques'];
@@ -583,6 +601,9 @@ app.delete('/:collection/:id', validarColecao, async (req, res) => {
     await database.collection(req.params.collection).deleteOne(query);
     res.json({ success: true });
 });
+
+// 🚀 Iniciar a conexão do banco de forma antecipada para agilizar a primeira requisição
+connectDB().catch(console.error);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => { console.log(`API Blindada SaaS (Rate Limit + Helmet + NoSQL Safe + Schema Validator) rodando na porta ${PORT}!`); });
