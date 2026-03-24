@@ -3,9 +3,8 @@ const cors = require('cors');
 const { MongoClient } = require('mongodb');
 const { Resend } = require('resend');
 const jwt = require('jsonwebtoken'); 
-const bcrypt = require('bcrypt'); // Motor de Criptografia de Senhas
+const bcrypt = require('bcrypt');
 
-// 🛡️ NOVOS ESCUDOS DE SEGURANÇA BANCÁRIA
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const mongoSanitize = require('express-mongo-sanitize');
@@ -15,12 +14,8 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const JWT_SECRET = process.env.JWT_SECRET || 'chave_super_secreta_gestao_escolar_777';
 
-// 🛡️ 1. CAPACETE HTTP: Protege contra vulnerabilidades comuns da web
 app.use(helmet());
 
-// =========================================================
-// 🚀 2. CORS RESTRITO: Só o seu domínio pode acessar a API
-// =========================================================
 const dominiosPermitidos = [
     'https://www.sistemaptt.com.br',
     'https://sistemaptt.com.br',
@@ -41,11 +36,8 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '10mb' })); 
-
-// 🛡️ 3. SANITIZAÇÃO NOSQL: Impede que hackers usem "$" ou "." para invadir a base de dados
 app.use(mongoSanitize());
 
-// 🛡️ 4. LIMITADOR GLOBAL (Anti-DDoS): Máximo de 800 requisições a cada 15 min por IP
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 800, 
@@ -55,7 +47,6 @@ const globalLimiter = rateLimit({
 });
 app.use(globalLimiter);
 
-// 🛡️ 5. LIMITADOR DE FORÇA BRUTA (Anti-Hacker): Máximo de 15 tentativas para rotas sensíveis
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 15, 
@@ -67,9 +58,6 @@ app.use('/auth/enviar-codigo', authLimiter);
 app.use('/master/login', authLimiter);
 app.use('/escola/validar-pin', authLimiter);
 
-// =========================================================
-// 🛡️ FILTRO PURIFICADOR ANTI-XSS (BARREIRA DE ENTRADA SECUNDÁRIA)
-// =========================================================
 const sanitizeString = (str) => {
     if (typeof str !== 'string') return str;
     return str.replace(/</g, '&lt;').replace(/>/g, '&gt;'); 
@@ -95,9 +83,6 @@ app.use((req, res, next) => {
     next();
 });
 
-// =========================================================
-// 🚀 CONEXÃO COM A BASE DE DADOS OTIMIZADA (POOL DE CONEXÕES)
-// =========================================================
 const uri = process.env.MONGODB_URI;
 let dbInstance = null;
 
@@ -115,9 +100,6 @@ async function connectDB() {
     }
 }
 
-// =========================================================
-// MIDDLEWARE DE SEGURANÇA MÁXIMA E ISOLAMENTO (JWT)
-// =========================================================
 app.use((req, res, next) => {
     if (req.path.startsWith('/auth/') || req.path.startsWith('/master/')) return next();
 
@@ -134,9 +116,6 @@ app.use((req, res, next) => {
     });
 });
 
-// =========================================================
-// MOTOR DE E-MAILS E VALIDAÇÃO DE REGISTO
-// =========================================================
 const codigosAtivos = new Map();
  
 app.post('/auth/enviar-codigo', async (req, res) => {
@@ -232,11 +211,12 @@ app.post('/auth/validar-cadastro', async (req, res) => {
                 login: email, 
                 senha: senhaCriptografada, 
                 tipo: "Gestor", 
-                email: email 
+                email: email,
+                isDono: true // 👑 A MARCA DO DONO INTOCÁVEL
             };
             await database.collection('usuarios').insertOne(novoGestor);
         } else {
-            await database.collection('usuarios').updateOne({ login: email }, { $set: { escolaId: escolaId } });
+            await database.collection('usuarios').updateOne({ login: email }, { $set: { escolaId: escolaId, isDono: true } });
         }
 
         res.json({ success: true, mensagem: 'Sistema ativado!' });
@@ -247,15 +227,9 @@ app.post('/auth/validar-cadastro', async (req, res) => {
 
 const SENHA_DONO = process.env.SENHA_DONO;
 
-// =========================================================
-// 👑 ÁREA SECRETA DO DONO DO SISTEMA (MASTER)
-// =========================================================
 app.post('/master/login', (req, res) => {
     const { senha } = req.body;
-    
-    if (!SENHA_DONO) {
-        return res.status(500).json({ error: 'Erro crítico: Senha Mestra não configurada no cofre do servidor!' });
-    }
+    if (!SENHA_DONO) return res.status(500).json({ error: 'Erro crítico: Senha Mestra não configurada no cofre do servidor!' });
 
     if (senha === SENHA_DONO) {
         const tokenMaster = jwt.sign({ master: true }, JWT_SECRET, { expiresIn: '2h' });
@@ -317,13 +291,9 @@ app.post('/master/bloquear', masterAuth, async (req, res) => {
     );
     
     await database.collection('escola').updateOne({ email: email }, { $set: { plano: 'Bloqueado' } }, { upsert: true });
-
     res.json({ success: true });
 });
 
-// =========================================================
-// ROTA DE VALIDAÇÃO DE PIN PELO CLIENTE
-// =========================================================
 app.post('/escola/validar-pin', async (req, res) => {
     const { pin } = req.body;
     if (!pin) return res.status(400).json({ error: 'PIN não fornecido.' });
@@ -356,18 +326,17 @@ app.post('/escola/validar-pin', async (req, res) => {
 
 
 // =========================================================
-// 🚀 ROTA SEGURA DE LOGIN (ANTI-PIRATARIA 1 LOGIN = 1 APARELHO)
+// 🚀 ROTA SEGURA DE LOGIN E CONTROLE DE APARELHOS
 // =========================================================
 app.post('/auth/login', async (req, res) => {
     let { login, senha, deviceId } = req.body;
     
     if (!login || !senha) return res.status(400).json({ error: 'Login e senha são obrigatórios.' });
 
-    // 🛡️ TRUQUE MÁGICO DO FRONT-END: Forçar saída de outros dispositivos
     let forcarSaida = false;
     if (login.endsWith('*FORCAR')) {
         forcarSaida = true;
-        login = login.replace('*FORCAR', ''); // Limpa a palavra para achar no banco
+        login = login.replace('*FORCAR', ''); 
     }
 
     try {
@@ -389,12 +358,11 @@ app.post('/auth/login', async (req, res) => {
         }
 
         if (senhaCorreta) {
-            // 🛡️ CÃO DE GUARDA ANTI-PIRATARIA
+            // 🛡️ ANTI-PIRATARIA (EXCETO PREMIUM)
             const escola = await database.collection('escola').findOne({ escolaId: usuario.escolaId });
             const plano = escola ? (escola.plano || 'Teste') : 'Teste';
 
-            // Planos Premium e Teste não têm limite de telas simultâneas
-            if (plano !== 'Premium' && plano !== 'Teste') {
+            if (plano !== 'Premium') {
                 if (usuario.deviceId && usuario.deviceId !== deviceId && !forcarSaida) {
                     return res.status(403).json({ 
                         error: '🚫 Sessão ativa noutro aparelho! Para derrubar a outra conexão, adicione *FORCAR no final do seu login e tente novamente.' 
@@ -402,7 +370,6 @@ app.post('/auth/login', async (req, res) => {
                 }
             }
 
-            // Carimba a nova impressão digital do aparelho na base de dados
             await database.collection('usuarios').updateOne(
                 { id: usuario.id }, 
                 { $set: { deviceId: deviceId || 'desconhecido' } }
@@ -525,9 +492,6 @@ app.put('/escola', async (req, res) => {
     res.json(body);
 });
 
-// =========================================================
-// 🛡️ FILTRO DE QUALIDADE DE DADOS (SCHEMA VALIDATOR ESTRITO)
-// =========================================================
 const SCHEMAS_PERMITIDOS = {
     alunos: ['id', 'escolaId', 'donoId', 'nome', 'nascimento', 'rg', 'cpf', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'estado', 'nomePai', 'nomeMae', 'telEmergencia', 'whatsapp', 'curso', 'turma', 'modulo', 'dataMatricula', 'diaVencimento', 'valorMensalidade', 'obs', 'sexo', 'profissao', 'pais', 'resp_nome', 'resp_cpf', 'resp_zap'],
     turmas: ['id', 'escolaId', 'donoId', 'nome', 'curso', 'dia', 'horario', 'professor', 'maxAlunos'],
@@ -552,10 +516,6 @@ const purificarDados = (colecao, dadosBrutos) => {
     }
     return dadosLimpos;
 };
-
-// =========================================================
-// 🚧 GUARDAS DE FRONTEIRA: ROTAS GENÉRICAS
-// =========================================================
 
 const COLECOES_PERMITIDAS = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoques'];
 
@@ -593,7 +553,6 @@ app.post('/:collection', validarColecao, async (req, res) => {
     if (req.escolaId) body.escolaId = req.escolaId; 
     else if (req.userId) body.donoId = req.userId;
     
-    // 🛡️ APLICA O FILTRO DE QUALIDADE ANTES DE GUARDAR
     body = purificarDados(req.params.collection, body);
 
     await database.collection(req.params.collection).insertOne(body);
@@ -611,7 +570,6 @@ app.put('/:collection/:id', validarColecao, async (req, res) => {
     
     if (body.escolaId && body.escolaId !== req.escolaId) delete body.escolaId;
 
-    // 🛡️ APLICA O FILTRO DE QUALIDADE ANTES DE ATUALIZAR
     body = purificarDados(req.params.collection, body);
 
     await database.collection(req.params.collection).updateOne(query, { $set: body }, { upsert: true });
@@ -622,11 +580,19 @@ app.delete('/:collection/:id', validarColecao, async (req, res) => {
     const database = await connectDB();
     let query = { id: req.params.id };
     if (req.escolaId) query.escolaId = req.escolaId; 
+
+    // 🛡️ O DONO NUNCA PODE SER EXCLUÍDO
+    if (req.params.collection === 'usuarios') {
+        const userToDelete = await database.collection('usuarios').findOne(query);
+        if (userToDelete && userToDelete.isDono) {
+            return res.status(403).json({ error: 'O Dono da conta principal não pode ser excluído.' });
+        }
+    }
+
     await database.collection(req.params.collection).deleteOne(query);
     res.json({ success: true });
 });
 
-// 🚀 Iniciar a conexão do banco de forma antecipada para agilizar a primeira requisição
 connectDB().catch(console.error);
 
 const PORT = process.env.PORT || 3000;
