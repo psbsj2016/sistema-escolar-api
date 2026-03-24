@@ -30,7 +30,6 @@ const dominiosPermitidos = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Permite requisições sem origem (como ferramentas de API no backend) ou domínios da lista
         if (!origin || dominiosPermitidos.includes(origin)) {
             callback(null, true);
         } else {
@@ -100,12 +99,10 @@ app.use((req, res, next) => {
 // 🚀 CONEXÃO COM A BASE DE DADOS OTIMIZADA (POOL DE CONEXÕES)
 // =========================================================
 const uri = process.env.MONGODB_URI;
-let dbInstance = null; // Variável que segura a conexão ativa
+let dbInstance = null;
 
 async function connectDB() {
-    // Se já estiver conectado, reutiliza a conexão imediatamente
     if (dbInstance) return dbInstance;
-    
     try {
         const client = new MongoClient(uri);
         await client.connect();
@@ -138,7 +135,7 @@ app.use((req, res, next) => {
 });
 
 // =========================================================
-// MOTOR DE E-MAILS (SAAS) E VALIDAÇÃO DE REGISTO
+// MOTOR DE E-MAILS E VALIDAÇÃO DE REGISTO
 // =========================================================
 const codigosAtivos = new Map();
  
@@ -221,7 +218,7 @@ app.post('/auth/validar-cadastro', async (req, res) => {
 
         await database.collection('escola').updateOne(
             { email: email }, 
-            { $set: { escolaId: escolaId, email: email, plano: ativacao.plano || 'Profissional', pinUsado: pin } },
+            { $set: { escolaId: escolaId, email: email, plano: ativacao.plano || 'Profissional', pinUsado: pin, dataCriacao: new Date().toISOString() } },
             { upsert: true }
         );
 
@@ -248,7 +245,7 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     }
 });
 
-const SENHA_DONO = process.env.SENHA_DONO; // Lê APENAS da nuvem
+const SENHA_DONO = process.env.SENHA_DONO;
 
 // =========================================================
 // 👑 ÁREA SECRETA DO DONO DO SISTEMA (MASTER)
@@ -291,6 +288,7 @@ app.post('/master/gerar-pin', masterAuth, async (req, res) => {
     let prefix = 'PRO';
     if (plano === 'Premium') prefix = 'PRE';
     if (plano === 'Essencial') prefix = 'ESS';
+    if (plano === 'Teste') prefix = 'TST';
     
     const novoPin = prefix + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
     
@@ -358,12 +356,19 @@ app.post('/escola/validar-pin', async (req, res) => {
 
 
 // =========================================================
-// ROTA SEGURA DE LOGIN E USUÁRIOS
+// 🚀 ROTA SEGURA DE LOGIN (ANTI-PIRATARIA 1 LOGIN = 1 APARELHO)
 // =========================================================
 app.post('/auth/login', async (req, res) => {
-    const { login, senha } = req.body;
+    let { login, senha, deviceId } = req.body;
     
     if (!login || !senha) return res.status(400).json({ error: 'Login e senha são obrigatórios.' });
+
+    // 🛡️ TRUQUE MÁGICO DO FRONT-END: Forçar saída de outros dispositivos
+    let forcarSaida = false;
+    if (login.endsWith('*FORCAR')) {
+        forcarSaida = true;
+        login = login.replace('*FORCAR', ''); // Limpa a palavra para achar no banco
+    }
 
     try {
         const database = await connectDB();
@@ -384,6 +389,25 @@ app.post('/auth/login', async (req, res) => {
         }
 
         if (senhaCorreta) {
+            // 🛡️ CÃO DE GUARDA ANTI-PIRATARIA
+            const escola = await database.collection('escola').findOne({ escolaId: usuario.escolaId });
+            const plano = escola ? (escola.plano || 'Teste') : 'Teste';
+
+            // Planos Premium e Teste não têm limite de telas simultâneas
+            if (plano !== 'Premium' && plano !== 'Teste') {
+                if (usuario.deviceId && usuario.deviceId !== deviceId && !forcarSaida) {
+                    return res.status(403).json({ 
+                        error: '🚫 Sessão ativa noutro aparelho! Para derrubar a outra conexão, adicione *FORCAR no final do seu login e tente novamente.' 
+                    });
+                }
+            }
+
+            // Carimba a nova impressão digital do aparelho na base de dados
+            await database.collection('usuarios').updateOne(
+                { id: usuario.id }, 
+                { $set: { deviceId: deviceId || 'desconhecido' } }
+            );
+
             delete usuario.senha;
             delete usuario._id;
             
@@ -518,7 +542,7 @@ const SCHEMAS_PERMITIDOS = {
 
 const purificarDados = (colecao, dadosBrutos) => {
     const schema = SCHEMAS_PERMITIDOS[colecao];
-    if (!schema) return dadosBrutos; // Segurança de fallback
+    if (!schema) return dadosBrutos; 
     
     const dadosLimpos = {};
     for (const campo of schema) {
