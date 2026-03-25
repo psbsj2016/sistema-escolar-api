@@ -13,6 +13,8 @@ const mongoSanitize = require('express-mongo-sanitize');
 const app = express();
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+app.set('trust proxy', 1);
+
 const JWT_SECRET = process.env.JWT_SECRET || 'chave_super_secreta_gestao_escolar_777';
 
 app.use(helmet());
