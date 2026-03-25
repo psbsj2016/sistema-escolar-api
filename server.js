@@ -16,7 +16,14 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // Ensina o Express a confiar no proxy do Render
 app.set('trust proxy', 1);
 
-const JWT_SECRET = process.env.JWT_SECRET || 'chave_super_secreta_gestao_escolar_777';
+// 🛡️ PROTEÇÃO MÁXIMA DO JWT (Sem Fallback)
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET) {
+    console.error("❌ ERRO FATAL DE SEGURANÇA: A variável JWT_SECRET não foi encontrada no ambiente!");
+    console.error("O servidor foi desligado para proteger os dados das escolas.");
+    process.exit(1); // Desliga o Node.js imediatamente
+}
 
 app.use(helmet());
 
