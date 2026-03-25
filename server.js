@@ -13,6 +13,7 @@ const mongoSanitize = require('express-mongo-sanitize');
 const app = express();
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// Ensina o Express a confiar no proxy do Render
 app.set('trust proxy', 1);
 
 const JWT_SECRET = process.env.JWT_SECRET || 'chave_super_secreta_gestao_escolar_777';
@@ -102,7 +103,6 @@ app.use((req, res, next) => {
     next();
 });
 
-const uri = process.env.MONGODB_URI;
 let dbInstance = null;
 
 async function connectDB() {
