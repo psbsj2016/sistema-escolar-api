@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 
 const rateLimit = require('express-rate-limit');
+const MongoStore = require('rate-limit-mongo');
 const helmet = require('helmet');
 const mongoSanitize = require('express-mongo-sanitize');
 
@@ -38,7 +39,16 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' })); 
 app.use(mongoSanitize());
 
+// 🛡️ NOVO RATE LIMIT COM MONGODB
+const uri = process.env.MONGODB_URI; // Pega a sua variável de ambiente
+
 const globalLimiter = rateLimit({
+    store: new MongoStore({
+        uri: uri,
+        collectionName: 'rateLimitGlobal', // Cria uma coleção no Mongo para isto
+        expireTimeMs: 15 * 60 * 1000, // 15 minutos
+        errorHandler: console.error.bind(null, 'rate-limit-mongo')
+    }),
     windowMs: 15 * 60 * 1000, 
     max: 800, 
     message: { error: 'Tráfego excessivo detetado. O seu IP foi temporariamente bloqueado por motivos de segurança.' },
@@ -48,11 +58,18 @@ const globalLimiter = rateLimit({
 app.use(globalLimiter);
 
 const authLimiter = rateLimit({
+    store: new MongoStore({
+        uri: uri,
+        collectionName: 'rateLimitAuth',
+        expireTimeMs: 15 * 60 * 1000,
+        errorHandler: console.error.bind(null, 'rate-limit-mongo')
+    }),
     windowMs: 15 * 60 * 1000, 
     max: 15, 
     message: { error: 'Muitas tentativas falhadas. Sistema bloqueado para este IP por 15 minutos para proteger a conta.' },
 });
 
+// Aplica as regras de bloqueio severo nas rotas de autenticação
 app.use('/auth/login', authLimiter);
 app.use('/auth/enviar-codigo', authLimiter);
 app.use('/master/login', authLimiter);
