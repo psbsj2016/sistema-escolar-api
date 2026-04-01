@@ -16,12 +16,15 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // Ensina o Express a confiar no proxy do Render
 app.set('trust proxy', 1);
 
-// 🛡️ PROTEÇÃO MÁXIMA DO JWT (Sem Fallback)
+// =========================================================
+// 🛡️ PROTEÇÃO MÁXIMA DE VARIÁVEIS DE AMBIENTE (Sem Fallback)
+// =========================================================
 const JWT_SECRET = process.env.JWT_SECRET;
+const uri = process.env.MONGODB_URI; 
 
-if (!JWT_SECRET) {
-    console.error("❌ ERRO FATAL DE SEGURANÇA: A variável JWT_SECRET não foi encontrada no ambiente!");
-    console.error("O servidor foi desligado para proteger os dados das escolas.");
+if (!JWT_SECRET || !uri) {
+    console.error("❌ ERRO FATAL DE SEGURANÇA: JWT_SECRET ou MONGODB_URI não foram encontrados no ambiente!");
+    console.error("O servidor foi desligado para proteger os dados das escolas e evitar corrupção de base de dados.");
     process.exit(1); // Desliga o Node.js imediatamente
 }
 
@@ -49,14 +52,14 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' })); 
 app.use(mongoSanitize());
 
-// 🛡️ NOVO RATE LIMIT COM MONGODB
-const uri = process.env.MONGODB_URI; // Pega a sua variável de ambiente
-
+// =========================================================
+// 🛡️ RATE LIMIT COM MONGODB
+// =========================================================
 const globalLimiter = rateLimit({
     store: new MongoStore({
         uri: uri,
-        collectionName: 'rateLimitGlobal', // Cria uma coleção no Mongo para isto
-        expireTimeMs: 15 * 60 * 1000, // 15 minutos
+        collectionName: 'rateLimitGlobal', 
+        expireTimeMs: 15 * 60 * 1000, 
         errorHandler: console.error.bind(null, 'rate-limit-mongo')
     }),
     windowMs: 15 * 60 * 1000, 
@@ -85,6 +88,9 @@ app.use('/auth/enviar-codigo', authLimiter);
 app.use('/master/login', authLimiter);
 app.use('/escola/validar-pin', authLimiter);
 
+// =========================================================
+// 🧹 SANITIZAÇÃO DE DADOS (XSS)
+// =========================================================
 const sanitizeString = (str) => {
     if (typeof str !== 'string') return str;
     return str.replace(/</g, '&lt;').replace(/>/g, '&gt;'); 
@@ -110,6 +116,9 @@ app.use((req, res, next) => {
     next();
 });
 
+// =========================================================
+// 📦 CONEXÃO MONGODB (POOL)
+// =========================================================
 let dbInstance = null;
 
 async function connectDB() {
@@ -126,6 +135,9 @@ async function connectDB() {
     }
 }
 
+// =========================================================
+// 🔑 MIDDLEWARE JWT (AUTENTICAÇÃO PRINCIPAL)
+// =========================================================
 app.use((req, res, next) => {
     if (req.path.startsWith('/auth/') || req.path.startsWith('/master/')) return next();
 
@@ -142,6 +154,9 @@ app.use((req, res, next) => {
     });
 });
 
+// =========================================================
+// 📩 SISTEMA DE CADASTRO E ATIVAÇÃO
+// =========================================================
 const codigosAtivos = new Map();
  
 app.post('/auth/enviar-codigo', async (req, res) => {
@@ -251,6 +266,9 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     }
 });
 
+// =========================================================
+// 👑 ROTAS MASTER (ADMINISTRADOR DO SISTEMA)
+// =========================================================
 const SENHA_DONO = process.env.SENHA_DONO;
 
 app.post('/master/login', (req, res) => {
@@ -414,6 +432,9 @@ app.post('/auth/login', async (req, res) => {
     }
 });
 
+// =========================================================
+// 👥 GESTÃO DE UTILIZADORES
+// =========================================================
 app.get('/usuarios', async (req, res) => {
     const database = await connectDB();
     let query = {};
@@ -494,6 +515,9 @@ app.put('/usuarios/:id', async (req, res) => {
     res.json(body);
 });
 
+// =========================================================
+// 🏫 GESTÃO DA ESCOLA
+// =========================================================
 app.get('/escola', async (req, res) => {
     const database = await connectDB();
     let query = {};
@@ -518,6 +542,9 @@ app.put('/escola', async (req, res) => {
     res.json(body);
 });
 
+// =========================================================
+// 🔄 MOTOR CRUD DINÂMICO E VALIDADO (NoSQL SAFE)
+// =========================================================
 const SCHEMAS_PERMITIDOS = {
     alunos: ['id', 'status', 'escolaId', 'donoId', 'nome', 'nascimento', 'rg', 'cpf', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'estado', 'nomePai', 'nomeMae', 'telEmergencia', 'whatsapp', 'curso', 'turma', 'modulo', 'dataMatricula', 'diaVencimento', 'valorMensalidade', 'obs', 'sexo', 'profissao', 'pais', 'resp_nome', 'resp_cpf', 'resp_zap'],
     turmas: ['id', 'escolaId', 'donoId', 'nome', 'curso', 'dia', 'horario', 'professor', 'maxAlunos'],
@@ -619,7 +646,12 @@ app.delete('/:collection/:id', validarColecao, async (req, res) => {
     res.json({ success: true });
 });
 
+// =========================================================
+// 🚀 ARRANQUE DO SERVIDOR
+// =========================================================
 connectDB().catch(console.error);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => { console.log(`API Blindada SaaS (Rate Limit + Helmet + NoSQL Safe + Schema Validator) rodando na porta ${PORT}!`); });
+app.listen(PORT, () => { 
+    console.log(`🚀 API Blindada SaaS (Rate Limit + Helmet + NoSQL Safe + Schema Validator) a rodar perfeitamente na porta ${PORT}!`); 
+});
