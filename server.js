@@ -25,7 +25,7 @@ const uri = process.env.MONGODB_URI;
 if (!JWT_SECRET || !uri) {
     console.error("❌ ERRO FATAL DE SEGURANÇA: JWT_SECRET ou MONGODB_URI não foram encontrados no ambiente!");
     console.error("O servidor foi desligado para proteger os dados das escolas e evitar corrupção de base de dados.");
-    process.exit(1); // Desliga o Node.js imediatamente
+    process.exit(1); 
 }
 
 app.use(helmet());
@@ -155,13 +155,14 @@ app.use((req, res, next) => {
 });
 
 // =========================================================
-// 📩 SISTEMA DE CADASTRO E ATIVAÇÃO
+// 📩 SISTEMA DE CADASTRO E ATIVAÇÃO (COM 30 DIAS)
 // =========================================================
 const codigosAtivos = new Map();
  
 app.post('/auth/enviar-codigo', async (req, res) => {
-    const { email } = req.body;
+    let { email } = req.body;
     if (!email) return res.status(400).json({ error: 'E-mail não fornecido' });
+    email = email.toLowerCase().trim(); // BLINDAGEM CASE INSENSITIVE
 
     const codigoGerado = Math.floor(100000 + Math.random() * 900000).toString();
 
@@ -187,7 +188,7 @@ app.post('/auth/enviar-codigo', async (req, res) => {
         setTimeout(() => codigosAtivos.delete(email), 10 * 60 * 1000);
 
         const database = await connectDB();
-        const ativacao = await database.collection('ativacoes').findOne({ email: email });
+        const ativacao = await database.collection('ativacoes').findOne({ email: new RegExp(`^${email}$`, 'i') });
         
         if (!ativacao) {
             await database.collection('ativacoes').insertOne({
@@ -206,18 +207,20 @@ app.post('/auth/enviar-codigo', async (req, res) => {
 });
 
 app.post('/auth/validar-cadastro', async (req, res) => {
-    const { email, codigo, pin } = req.body;
+    let { email, codigo, pin } = req.body;
 
     if (!email || !codigo || !pin) return res.status(400).json({ error: 'Dados incompletos.' });
+    email = email.toLowerCase().trim();
 
     const database = await connectDB();
-    const ativacao = await database.collection('ativacoes').findOne({ email: email });
+    const ativacao = await database.collection('ativacoes').findOne({ email: new RegExp(`^${email}$`, 'i') });
 
     if (!ativacao) return res.status(400).json({ error: 'E-mail não encontrado nas solicitações.' });
     if (ativacao.status === 'Verificado') return res.status(400).json({ error: 'Esta conta já está ativada e em uso!' });
     if (ativacao.status === 'Bloqueado') return res.status(403).json({ error: 'Cadastro bloqueado pelo administrador.' });
 
-    if (!ativacao.pinAtivacao || ativacao.pinAtivacao !== pin) {
+    // Permite uso de PIN insensível a maiúsculas
+    if (!ativacao.pinAtivacao || ativacao.pinAtivacao.toUpperCase() !== pin.toUpperCase()) {
         return res.status(401).json({ error: 'O PIN Único está incorreto ou ainda não foi liberado pelo Dono.' });
     }
 
@@ -230,19 +233,32 @@ app.post('/auth/validar-cadastro', async (req, res) => {
 
     try {
         await database.collection('ativacoes').updateOne(
-            { email: email }, 
+            { _id: ativacao._id }, 
             { $set: { status: 'Verificado', pinAtivacao: 'USADO E QUEIMADO' } }
         );
         
-        const escolaId = 'ESC-' + Date.now().toString(36).toUpperCase();
+        // Mantém a escolaId se a escola já existir (caso o cliente esteja a tentar recriar a conta)
+        const escolaExistente = await database.collection('escola').findOne({ email: new RegExp(`^${email}$`, 'i') });
+        const escolaId = (escolaExistente && escolaExistente.escolaId) ? escolaExistente.escolaId : 'ESC-' + Date.now().toString(36).toUpperCase();
+
+        // 🚀 GERA 30 DIAS DE ACESSO INICIAIS
+        const dataVencimento = new Date();
+        dataVencimento.setDate(dataVencimento.getDate() + 30);
 
         await database.collection('escola').updateOne(
-            { email: email }, 
-            { $set: { escolaId: escolaId, email: email, plano: ativacao.plano || 'Profissional', pinUsado: pin, dataCriacao: new Date().toISOString() } },
+            { email: new RegExp(`^${email}$`, 'i') }, 
+            { $set: { 
+                escolaId: escolaId, 
+                email: email, 
+                plano: ativacao.plano || 'Profissional', 
+                pinUsado: pin.toUpperCase(), 
+                dataCriacao: (escolaExistente && escolaExistente.dataCriacao) ? escolaExistente.dataCriacao : new Date().toISOString(),
+                dataExpiracao: dataVencimento.toISOString() // Ciclo de 30 dias inserido!
+            } },
             { upsert: true }
         );
 
-        const userExistente = await database.collection('usuarios').findOne({ login: email });
+        const userExistente = await database.collection('usuarios').findOne({ login: new RegExp(`^${email}$`, 'i') });
         if (!userExistente) {
             const senhaCriptografada = await bcrypt.hash("123", 10);
             const novoGestor = { 
@@ -257,17 +273,17 @@ app.post('/auth/validar-cadastro', async (req, res) => {
             };
             await database.collection('usuarios').insertOne(novoGestor);
         } else {
-            await database.collection('usuarios').updateOne({ login: email }, { $set: { escolaId: escolaId, isDono: true } });
+            await database.collection('usuarios').updateOne({ _id: userExistente._id }, { $set: { escolaId: escolaId, isDono: true } });
         }
 
-        res.json({ success: true, mensagem: 'Sistema ativado!' });
+        res.json({ success: true, mensagem: 'Sistema ativado e 30 dias gerados com sucesso!' });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao configurar a conta.' });
     }
 });
 
 // =========================================================
-// 👑 ROTAS MASTER (ADMINISTRADOR DO SISTEMA)
+// 👑 ROTAS MASTER (DESBLOQUEIO IMEDIATO)
 // =========================================================
 const SENHA_DONO = process.env.SENHA_DONO;
 
@@ -299,8 +315,11 @@ app.get('/master/ativacoes', masterAuth, async (req, res) => {
     res.json(lista);
 });
 
+// 🚀 O CORAÇÃO DA MUDANÇA: ATUALIZAÇÃO E DESBLOQUEIO IMEDIATO!
 app.post('/master/gerar-pin', masterAuth, async (req, res) => {
-    const { email, plano } = req.body;
+    let { email, plano } = req.body;
+    email = email.toLowerCase().trim(); // Garante compatibilidade universal
+
     const database = await connectDB();
     
     let prefix = 'PRO';
@@ -310,15 +329,24 @@ app.post('/master/gerar-pin', masterAuth, async (req, res) => {
     
     const novoPin = prefix + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
     
+    // Calcula o ciclo exato de 30 dias
+    const dataVencimento = new Date();
+    dataVencimento.setDate(dataVencimento.getDate() + 30);
+    
     await database.collection('ativacoes').updateOne(
-        { email: email },
-        { $set: { pinAtivacao: novoPin, status: 'Pendente', plano: plano || 'Profissional' } },
+        { email: new RegExp(`^${email}$`, 'i') },
+        { $set: { email: email, pinAtivacao: novoPin, status: 'Pendente', plano: plano || 'Profissional' } },
         { upsert: true }
     );
 
+    // INJEÇÃO DIRETA NA ESCOLA: O desbloqueio acontece no segundo em que clica!
     await database.collection('escola').updateOne(
-        { email: email }, 
-        { $set: { plano: plano || 'Profissional' } }, 
+        { email: new RegExp(`^${email}$`, 'i') }, 
+        { $set: { 
+            email: email, 
+            plano: plano || 'Profissional',
+            dataExpiracao: dataVencimento.toISOString() // Aplica a mensalidade de 30 dias
+        } }, 
         { upsert: true }
     );
 
@@ -326,34 +354,45 @@ app.post('/master/gerar-pin', masterAuth, async (req, res) => {
 });
 
 app.post('/master/bloquear', masterAuth, async (req, res) => {
-    const { email } = req.body;
+    let { email } = req.body;
+    email = email.toLowerCase().trim();
     const database = await connectDB();
     
     await database.collection('ativacoes').updateOne(
-        { email: email },
+        { email: new RegExp(`^${email}$`, 'i') },
         { $set: { status: 'Bloqueado', pinAtivacao: 'BLOQUEADO' } }
     );
     
-    await database.collection('escola').updateOne({ email: email }, { $set: { plano: 'Bloqueado' } }, { upsert: true });
+    // Mata a data de expiração instantaneamente
+    await database.collection('escola').updateOne(
+        { email: new RegExp(`^${email}$`, 'i') }, 
+        { $set: { plano: 'Bloqueado', dataExpiracao: new Date().toISOString() } }, 
+        { upsert: true }
+    );
     res.json({ success: true });
 });
 
+// Validação manual de PIN pela própria escola no ecrã "Meu Plano"
 app.post('/escola/validar-pin', async (req, res) => {
     const { pin } = req.body;
     if (!pin) return res.status(400).json({ error: 'PIN não fornecido.' });
 
     try {
         const database = await connectDB();
-        const ativacao = await database.collection('ativacoes').findOne({ pinAtivacao: pin });
+        const ativacao = await database.collection('ativacoes').findOne({ pinAtivacao: new RegExp(`^${pin}$`, 'i') });
 
         if (!ativacao) return res.status(404).json({ error: 'PIN inválido, expirado ou não encontrado no servidor.' });
         if (ativacao.status === 'Bloqueado') return res.status(403).json({ error: 'Cadastro bloqueado pelo administrador.' });
 
         const planoConfirmado = ativacao.plano || 'Profissional';
 
+        // O cliente validou o PIN manualmente: Renova 30 dias
+        const dataVencimento = new Date();
+        dataVencimento.setDate(dataVencimento.getDate() + 30);
+
         await database.collection('escola').updateOne(
             { escolaId: req.escolaId }, 
-            { $set: { plano: planoConfirmado, pinUsado: pin } }, 
+            { $set: { plano: planoConfirmado, pinUsado: pin.toUpperCase(), dataExpiracao: dataVencimento.toISOString() } }, 
             { upsert: true }
         );
 
@@ -367,7 +406,6 @@ app.post('/escola/validar-pin', async (req, res) => {
         res.status(500).json({ error: 'Erro ao validar o PIN no servidor.' });
     }
 });
-
 
 // =========================================================
 // 🚀 ROTA SEGURA DE LOGIN E CONTROLE DE APARELHOS
@@ -385,7 +423,8 @@ app.post('/auth/login', async (req, res) => {
 
     try {
         const database = await connectDB();
-        const usuario = await database.collection('usuarios').findOne({ login: login });
+        // 🛡️ Busca Case-Insensitive para evitar erros de digitação
+        const usuario = await database.collection('usuarios').findOne({ login: new RegExp(`^${login}$`, 'i') });
 
         if (!usuario) return res.status(401).json({ error: 'Utilizador ou senha incorretos.' });
 
@@ -402,11 +441,11 @@ app.post('/auth/login', async (req, res) => {
         }
 
         if (senhaCorreta) {
-            // 🛡️ ANTI-PIRATARIA (EXCETO PREMIUM)
+            // 🛡️ ANTI-PIRATARIA (EXCETO PREMIUM E LIBERADO)
             const escola = await database.collection('escola').findOne({ escolaId: usuario.escolaId });
             const plano = escola ? (escola.plano || 'Teste') : 'Teste';
 
-            if (plano !== 'Premium') {
+            if (plano !== 'Premium' && plano !== 'Liberado') {
                 if (usuario.deviceId && usuario.deviceId !== deviceId && !forcarSaida) {
                     return res.status(403).json({ 
                         error: '🚫 Sessão ativa noutro aparelho! Para derrubar a outra conexão, adicione *FORCAR no final do seu login e tente novamente.' 
@@ -454,13 +493,17 @@ app.post('/usuarios', async (req, res) => {
         body.senha = await bcrypt.hash(body.senha, 10);
     }
     
+    // Converte e-mail/login para minúsculas ao criar
+    if(body.login) body.login = body.login.toLowerCase().trim();
+    if(body.email) body.email = body.email.toLowerCase().trim();
+
     await database.collection('usuarios').insertOne(body);
     delete body._id;
     res.json(body);
 });
 
 app.put('/usuarios/atualizar-conta', async (req, res) => {
-    const { novoLogin, novoEmail, senhaAtual, novaSenha } = req.body;
+    let { novoLogin, novoEmail, senhaAtual, novaSenha } = req.body;
     const userId = req.userId;
 
     if (!senhaAtual) return res.status(400).json({ error: 'A senha atual é obrigatória.' });
@@ -482,12 +525,15 @@ app.put('/usuarios/atualizar-conta', async (req, res) => {
 
         const atualizacoes = {};
         if (novaSenha) atualizacoes.senha = await bcrypt.hash(novaSenha, 10); 
-        if (novoEmail) atualizacoes.email = novoEmail; 
+        if (novoEmail) atualizacoes.email = novoEmail.toLowerCase().trim(); 
         
-        if (novoLogin && novoLogin !== usuario.login) {
-            const loginExistente = await database.collection('usuarios').findOne({ login: novoLogin, id: { $ne: userId } });
-            if (loginExistente) return res.status(400).json({ error: 'Este login já está em uso.' });
-            atualizacoes.login = novoLogin;
+        if (novoLogin) {
+            novoLogin = novoLogin.toLowerCase().trim();
+            if (novoLogin !== usuario.login) {
+                const loginExistente = await database.collection('usuarios').findOne({ login: novoLogin, id: { $ne: userId } });
+                if (loginExistente) return res.status(400).json({ error: 'Este login já está em uso.' });
+                atualizacoes.login = novoLogin;
+            }
         }
 
         if (Object.keys(atualizacoes).length === 0) return res.status(400).json({ error: 'Nenhuma alteração solicitada.' });
@@ -508,6 +554,9 @@ app.put('/usuarios/:id', async (req, res) => {
         body.senha = await bcrypt.hash(body.senha, 10);
     }
     
+    if(body.login) body.login = body.login.toLowerCase().trim();
+    if(body.email) body.email = body.email.toLowerCase().trim();
+
     let query = { id: req.params.id };
     if (req.escolaId) query.escolaId = req.escolaId; 
 
