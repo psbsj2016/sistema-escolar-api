@@ -472,6 +472,60 @@ app.post('/auth/login', async (req, res) => {
 });
 
 // =========================================================
+// ✉️ ROTA DE RECUPERAÇÃO DE SENHA (ENVIO SEGURO VIA RESEND)
+// =========================================================
+app.post('/auth/recuperar-senha', async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'O E-mail é obrigatório.' });
+
+    try {
+        const database = await connectDB();
+        
+        // 1. Procura o utilizador pelo e-mail ignorando maiúsculas/minúsculas
+        const user = await database.collection('usuarios').findOne({ email: new RegExp(`^${email}$`, 'i') });
+
+        if (!user) {
+            return res.status(404).json({ error: 'E-mail não encontrado na nossa base de dados.' });
+        }
+
+        // 2. Gera uma senha temporária forte (8 caracteres)
+        const novaSenha = Math.random().toString(36).slice(-8) + Math.floor(Math.random() * 10);
+        
+        // 3. Criptografa a nova senha antes de guardar
+        const salt = await bcrypt.genSalt(10);
+        const hash = await bcrypt.hash(novaSenha, salt);
+
+        // 4. Atualiza a senha no banco de dados
+        await database.collection('usuarios').updateOne({ _id: user._id }, { $set: { senha: hash } });
+
+        // 5. Envia o e-mail utilizando o Resend
+        await resend.emails.send({
+            from: 'Suporte Sistema PTT <nao-responda@sistemaptt.com.br>', // Altere se tiver outro domínio validado no Resend
+            to: email,
+            subject: '🔑 Recuperação de Senha - Acesso ao Sistema',
+            html: `
+                <div style="font-family: Arial, sans-serif; padding: 30px; color: #333; max-width: 500px; margin: 0 auto; border: 1px solid #eee; border-radius: 10px;">
+                    <h2 style="color: #2c3e50;">Olá, ${user.nome}!</h2>
+                    <p>Foi solicitada a recuperação de senha para a sua conta no nosso sistema.</p>
+                    <div style="background: #f8f9fa; padding: 20px; text-align: center; border-radius: 8px; margin: 25px 0;">
+                        <span style="font-size: 14px; color: #666;">A sua nova senha temporária é:</span><br>
+                        <strong style="font-size: 26px; color: #3498db; letter-spacing: 2px;">${novaSenha}</strong>
+                    </div>
+                    <p style="font-size: 13px; color: #666;"><strong>Atenção:</strong> Recomendamos que aceda ao sistema o mais rapidamente possível e altere esta senha no menu <b>"Gestão de Utilizadores"</b> por motivos de segurança.</p>
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 25px 0;">
+                    <p style="font-size: 11px; color: #aaa; text-align: center;">Se não foi você que fez este pedido, por favor ignore este e-mail.</p>
+                </div>
+            `
+        });
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Erro ao recuperar senha:', error);
+        res.status(500).json({ error: 'Erro interno ao tentar recuperar a senha.' });
+    }
+});
+
+// =========================================================
 // 👥 GESTÃO DE UTILIZADORES
 // =========================================================
 app.get('/usuarios', async (req, res) => {
