@@ -649,7 +649,7 @@ app.put('/escola', async (req, res) => {
 // 🔄 MOTOR CRUD DINÂMICO E VALIDADO (NoSQL SAFE)
 // =========================================================
 const SCHEMAS_PERMITIDOS = {
-    alunos: ['id', 'status', 'escolaId', 'donoId', 'nome', 'nascimento', 'rg', 'cpf', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'estado', 'nomePai', 'nomeMae', 'telEmergencia', 'whatsapp', 'curso', 'turma', 'modulo', 'dataMatricula', 'diaVencimento', 'valorMensalidade', 'obs', 'sexo', 'profissao', 'pais', 'resp_nome', 'resp_cpf', 'resp_zap'],
+    alunos: ['id', 'status', 'escolaId', 'donoId', 'nome', 'nascimento', 'rg', 'cpf', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'estado', 'nomePai', 'nomeMae', 'telEmergencia', 'whatsapp', 'curso', 'turma', 'modulo', 'dataMatricula', 'diaVencimento', 'valorMensalidade', 'obs', 'sexo', 'profissao', 'pais', 'resp_nome', 'resp_parentesco', 'resp_cpf', 'resp_zap'],
     turmas: ['id', 'escolaId', 'donoId', 'nome', 'curso', 'dia', 'horario', 'professor', 'maxAlunos'],
     cursos: ['id', 'escolaId', 'donoId', 'nome', 'carga', 'modulos'],
     financeiro: ['id', 'escolaId', 'donoId', 'idCarne', 'idAluno', 'alunoNome', 'valor', 'vencimento', 'status', 'descricao', 'tipo', 'dataGeracao', 'dataPagamento', 'formaPagamento', 'formaPagamento2', 'valorPago1', 'valorPago2', 'cobradoZap'],
