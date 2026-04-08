@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "start": "node server.js"
+    "build": "javascript-obfuscator ./js_src --output ./js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
@@ -16,5 +17,8 @@
     "nodemailer": "^6.9.11",
     "rate-limit-mongo": "^2.3.2",
     "resend": "^6.9.3"
+  }
+"devDependencies": {
+    "javascript-obfuscator": "^4.1.0"
   }
 }
