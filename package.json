@@ -17,8 +17,8 @@
     "nodemailer": "^6.9.11",
     "rate-limit-mongo": "^2.3.2",
     "resend": "^6.9.3"
-  }
-"devDependencies": {
+  },
+  "devDependencies": {
     "javascript-obfuscator": "^4.1.0"
   }
 }
