@@ -6,7 +6,6 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 
 const rateLimit = require('express-rate-limit');
-const MongoStore = require('rate-limit-mongo');
 const helmet = require('helmet');
 const mongoSanitize = require('express-mongo-sanitize');
 
@@ -17,18 +16,18 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 app.set('trust proxy', 1);
 
 // =========================================================
-// 🛡️ PROTEÇÃO MÁXIMA DE VARIÁVEIS DE AMBIENTE (Sem Fallback)
+// 🛡️ PROTEÇÃO MÁXIMA DE VARIÁVEIS DE AMBIENTE
 // =========================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 const uri = process.env.MONGODB_URI; 
 
 if (!JWT_SECRET || !uri) {
-    console.error("❌ ERRO FATAL DE SEGURANÇA: JWT_SECRET ou MONGODB_URI não foram encontrados no ambiente!");
-    console.error("O servidor foi desligado para proteger os dados das escolas e evitar corrupção de base de dados.");
+    console.error("❌ ERRO FATAL DE SEGURANÇA: JWT_SECRET ou MONGODB_URI ausentes!");
     process.exit(1); 
 }
 
-app.use(helmet());
+// 1. HELMET: Desbloqueia recursos para o Front-end Externo
+app.use(helmet({ crossOriginResourcePolicy: false }));
 
 const dominiosPermitidos = [
     'https://www.sistemaptt.com.br',
@@ -37,58 +36,46 @@ const dominiosPermitidos = [
     'http://127.0.0.1:5500'
 ];
 
-app.use(cors({
-    origin: function (origin, callback) {
-        if (!origin || dominiosPermitidos.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Acesso bloqueado pelo CORS. Domínio não autorizado.'));
-        }
-    },
+// 2. CORS SEGURO E DIRETO (Resolve o Preflight)
+const corsOptions = {
+    origin: dominiosPermitidos,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-ID'] 
-}));
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-ID'],
+    credentials: true
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Responde imediatamente aos pedidos fantasma do navegador
 
 app.use(express.json({ limit: '10mb' })); 
 app.use(mongoSanitize());
 
 // =========================================================
-// 🛡️ RATE LIMIT COM MONGODB
+// 🛡️ RATE LIMIT NA MEMÓRIA (Ultra rápido e não quebra o Mongo)
 // =========================================================
 const globalLimiter = rateLimit({
-    store: new MongoStore({
-        uri: uri,
-        collectionName: 'rateLimitGlobal', 
-        expireTimeMs: 15 * 60 * 1000, 
-        errorHandler: console.error.bind(null, 'rate-limit-mongo')
-    }),
     windowMs: 15 * 60 * 1000, 
     max: 800, 
-    message: { error: 'Tráfego excessivo detetado. O seu IP foi temporariamente bloqueado por motivos de segurança.' },
+    message: { error: 'Tráfego excessivo. O seu IP foi temporariamente bloqueado.' },
     standardHeaders: true,
     legacyHeaders: false,
 });
+
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, 
+    max: 15, 
+    message: { error: 'Muitas tentativas falhadas. Sistema bloqueado por 15 minutos.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// Aplica as regras de bloqueio (Sem dar erro de doubleCount)
 app.use((req, res, next) => {
-    // Pula o limitador global se for uma rota de autenticação (evita o double-count)
     if (req.path.startsWith('/auth/') || req.path.startsWith('/master/') || req.path.startsWith('/escola/')) {
         return next();
     }
     return globalLimiter(req, res, next);
 });
 
-const authLimiter = rateLimit({
-    store: new MongoStore({
-        uri: uri,
-        collectionName: 'rateLimitAuth',
-        expireTimeMs: 15 * 60 * 1000,
-        errorHandler: console.error.bind(null, 'rate-limit-mongo')
-    }),
-    windowMs: 15 * 60 * 1000, 
-    max: 15, 
-    message: { error: 'Muitas tentativas falhadas. Sistema bloqueado para este IP por 15 minutos para proteger a conta.' },
-});
-
-// Aplica as regras de bloqueio severo nas rotas de autenticação
 app.use('/auth/login', authLimiter);
 app.use('/auth/enviar-codigo', authLimiter);
 app.use('/master/login', authLimiter);
