@@ -67,9 +67,14 @@ const globalLimiter = rateLimit({
     message: { error: 'Tráfego excessivo detetado. O seu IP foi temporariamente bloqueado por motivos de segurança.' },
     standardHeaders: true,
     legacyHeaders: false,
-    validations: { doubleCount: false },
 });
-app.use(globalLimiter);
+app.use((req, res, next) => {
+    // Pula o limitador global se for uma rota de autenticação (evita o double-count)
+    if (req.path.startsWith('/auth/') || req.path.startsWith('/master/') || req.path.startsWith('/escola/')) {
+        return next();
+    }
+    return globalLimiter(req, res, next);
+});
 
 const authLimiter = rateLimit({
     store: new MongoStore({
@@ -81,7 +86,6 @@ const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 15, 
     message: { error: 'Muitas tentativas falhadas. Sistema bloqueado para este IP por 15 minutos para proteger a conta.' },
-    validations: { doubleCount: false }, // <--- ESTA É A LINHA MÁGICA QUE RESOLVE O ERRO
 });
 
 // Aplica as regras de bloqueio severo nas rotas de autenticação
