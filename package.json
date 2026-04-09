@@ -2,7 +2,7 @@
   "name": "sistema-escolar-api",
   "version": "1.0.0",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
     "build": "javascript-obfuscator ./js_src --output ./js"
   },
   "dependencies": {
