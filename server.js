@@ -67,6 +67,7 @@ const globalLimiter = rateLimit({
     message: { error: 'Tráfego excessivo detetado. O seu IP foi temporariamente bloqueado por motivos de segurança.' },
     standardHeaders: true,
     legacyHeaders: false,
+    validations: { doubleCount: false },
 });
 app.use(globalLimiter);
 
@@ -80,6 +81,7 @@ const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 15, 
     message: { error: 'Muitas tentativas falhadas. Sistema bloqueado para este IP por 15 minutos para proteger a conta.' },
+    validations: { doubleCount: false }, // <--- ESTA É A LINHA MÁGICA QUE RESOLVE O ERRO
 });
 
 // Aplica as regras de bloqueio severo nas rotas de autenticação
