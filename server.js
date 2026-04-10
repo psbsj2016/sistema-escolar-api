@@ -29,22 +29,12 @@ if (!JWT_SECRET || !uri) {
 // 1. HELMET: Desbloqueia recursos para o Front-end Externo
 app.use(helmet({ crossOriginResourcePolicy: false }));
 
-const dominiosPermitidos = [
-    'https://www.sistemaptt.com.br',
-    'https://sistemaptt.com.br',
-    'http://localhost:3000',
-    'http://127.0.0.1:5500'
-];
-
-// 2. CORS SEGURO E DIRETO (Resolve o Preflight)
-const corsOptions = {
-    origin: dominiosPermitidos,
+// 2. CORS UNIVERSAL (A segurança real é feita pelo Token JWT)
+app.use(cors({
+    origin: '*', 
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-ID'],
-    credentials: true
-};
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Responde imediatamente aos pedidos fantasma do navegador
+    allowedHeaders: '*'
+}));
 
 app.use(express.json({ limit: '10mb' })); 
 app.use(mongoSanitize());
