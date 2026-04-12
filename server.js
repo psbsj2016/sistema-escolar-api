@@ -133,6 +133,7 @@ app.use((req, res, next) => {
         if (err) return res.status(401).json({ error: 'Sessão expirada ou token inválido.' });
         req.userId = decoded.id; 
         req.escolaId = decoded.escolaId; 
+        req.userTipo = decoded.tipo; // 🚀 NOVO: Agora o backend sabe qual é o cargo do utilizador!
         next();
     });
 });
@@ -665,7 +666,44 @@ const validarColecao = (req, res, next) => {
     next();
 };
 
-app.get('/:collection', validarColecao, async (req, res) => {
+// =========================================================
+// 🛡️ MIDDLEWARE DE AUTORIZAÇÃO (CONTROLE DE ACESSO POR CARGO)
+// =========================================================
+const validarPermissoes = (req, res, next) => {
+    const colecao = req.params.collection;
+    const tipoUsuario = req.userTipo || 'Gestor'; // Assume Gestor se houver alguma anomalia
+
+    // 1. Regras para Professores
+    if (tipoUsuario === 'Professor') {
+        const colecoesProibidas = ['financeiro', 'usuarios', 'escola', 'estoques'];
+        if (colecoesProibidas.includes(colecao)) {
+            return res.status(403).json({ error: 'Acesso negado: Perfil de Professor não tem permissão para aceder a esta área.' });
+        }
+    }
+
+    // 2. Regras para a Secretaria
+    if (tipoUsuario === 'Secretaria') {
+        const colecoesProibidas = ['usuarios', 'escola'];
+        
+        // Bloqueia acesso total a áreas administrativas
+        if (colecoesProibidas.includes(colecao)) {
+            return res.status(403).json({ error: 'Acesso negado: Nível de acesso insuficiente para área administrativa.' });
+        }
+        
+        // Exemplo extra de segurança: A secretaria pode ver e criar mensalidades, mas não pode apagá-las!
+        if (colecao === 'financeiro' && req.method === 'DELETE') {
+            return res.status(403).json({ error: 'Acesso negado: A Secretaria não tem permissão para apagar registos financeiros.' });
+        }
+    }
+
+    // Se chegou até aqui, tem autorização para prosseguir!
+    next(); 
+};
+
+// 🚀 APLICAÇÃO DOS MIDDLEWARES NAS ROTAS CRUD
+// Repara que agora inserimos o 'validarPermissoes' antes de executar a função do banco de dados
+
+app.get('/:collection', validarColecao, validarPermissoes, async (req, res) => {
     const database = await connectDB();
     let query = {};
     if (req.escolaId) query.escolaId = req.escolaId; 
@@ -675,7 +713,7 @@ app.get('/:collection', validarColecao, async (req, res) => {
     res.json(formatted);
 });
 
-app.get('/:collection/:id', validarColecao, async (req, res) => {
+app.get('/:collection/:id', validarColecao, validarPermissoes, async (req, res) => {
     const database = await connectDB();
     let query = { id: req.params.id };
     if (req.escolaId) query.escolaId = req.escolaId; 
@@ -684,7 +722,7 @@ app.get('/:collection/:id', validarColecao, async (req, res) => {
     res.json(data || {});
 });
 
-app.post('/:collection', validarColecao, async (req, res) => {
+app.post('/:collection', validarColecao, validarPermissoes, async (req, res) => {
     const database = await connectDB();
     let body = { ...req.body };
     
@@ -699,7 +737,7 @@ app.post('/:collection', validarColecao, async (req, res) => {
     res.json(body);
 });
 
-app.put('/:collection/:id', validarColecao, async (req, res) => {
+app.put('/:collection/:id', validarColecao, validarPermissoes, async (req, res) => {
     const database = await connectDB();
     let body = { ...req.body };
     delete body._id;
@@ -715,7 +753,7 @@ app.put('/:collection/:id', validarColecao, async (req, res) => {
     res.json(body);
 });
 
-app.delete('/:collection/:id', validarColecao, async (req, res) => {
+app.delete('/:collection/:id', validarColecao, validarPermissoes, async (req, res) => {
     const database = await connectDB();
     let query = { id: req.params.id };
     if (req.escolaId) query.escolaId = req.escolaId; 
