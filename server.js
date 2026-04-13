@@ -700,74 +700,100 @@ const validarPermissoes = (req, res, next) => {
     next(); 
 };
 
-// 🚀 APLICAÇÃO DOS MIDDLEWARES NAS ROTAS CRUD
-// Repara que agora inserimos o 'validarPermissoes' antes de executar a função do banco de dados
+// 🚀 APLICAÇÃO DOS MIDDLEWARES NAS ROTAS CRUD COM CINTOS DE SEGURANÇA (TRY/CATCH)
 
 app.get('/:collection', validarColecao, validarPermissoes, async (req, res) => {
-    const database = await connectDB();
-    let query = {};
-    if (req.escolaId) query.escolaId = req.escolaId; 
-    else if (req.userId) query.donoId = req.userId; 
-    const data = await database.collection(req.params.collection).find(query).toArray();
-    const formatted = data.map(item => { const { _id, ...rest } = item; return rest; });
-    res.json(formatted);
+    try {
+        const database = await connectDB();
+        let query = {};
+        if (req.escolaId) query.escolaId = req.escolaId; 
+        else if (req.userId) query.donoId = req.userId; 
+        
+        const data = await database.collection(req.params.collection).find(query).toArray();
+        const formatted = data.map(item => { const { _id, ...rest } = item; return rest; });
+        res.json(formatted);
+    } catch (error) {
+        console.error(`❌ Erro ao buscar lista de ${req.params.collection}:`, error);
+        res.status(500).json({ error: 'Erro interno ao consultar base de dados. Tente novamente.' });
+    }
 });
 
 app.get('/:collection/:id', validarColecao, validarPermissoes, async (req, res) => {
-    const database = await connectDB();
-    let query = { id: req.params.id };
-    if (req.escolaId) query.escolaId = req.escolaId; 
-    const data = await database.collection(req.params.collection).findOne(query);
-    if(data) delete data._id;
-    res.json(data || {});
+    try {
+        const database = await connectDB();
+        let query = { id: req.params.id };
+        if (req.escolaId) query.escolaId = req.escolaId; 
+        
+        const data = await database.collection(req.params.collection).findOne(query);
+        if(data) delete data._id;
+        res.json(data || {});
+    } catch (error) {
+        console.error(`❌ Erro ao buscar item em ${req.params.collection}:`, error);
+        res.status(500).json({ error: 'Erro interno ao consultar base de dados.' });
+    }
 });
 
 app.post('/:collection', validarColecao, validarPermissoes, async (req, res) => {
-    const database = await connectDB();
-    let body = { ...req.body };
-    
-    if (!body.id) body.id = Date.now().toString() + Math.floor(Math.random()*1000);
-    if (req.escolaId) body.escolaId = req.escolaId; 
-    else if (req.userId) body.donoId = req.userId;
-    
-    body = purificarDados(req.params.collection, body);
+    try {
+        const database = await connectDB();
+        let body = { ...req.body };
+        
+        if (!body.id) body.id = Date.now().toString() + Math.floor(Math.random()*1000);
+        if (req.escolaId) body.escolaId = req.escolaId; 
+        else if (req.userId) body.donoId = req.userId;
+        
+        body = purificarDados(req.params.collection, body);
 
-    await database.collection(req.params.collection).insertOne(body);
-    delete body._id;
-    res.json(body);
+        await database.collection(req.params.collection).insertOne(body);
+        delete body._id;
+        res.json(body);
+    } catch (error) {
+        console.error(`❌ Erro ao criar em ${req.params.collection}:`, error);
+        res.status(500).json({ error: 'Erro interno ao salvar na base de dados.' });
+    }
 });
 
 app.put('/:collection/:id', validarColecao, validarPermissoes, async (req, res) => {
-    const database = await connectDB();
-    let body = { ...req.body };
-    delete body._id;
-    
-    let query = { id: req.params.id };
-    if (req.escolaId) query.escolaId = req.escolaId; 
-    
-    if (body.escolaId && body.escolaId !== req.escolaId) delete body.escolaId;
+    try {
+        const database = await connectDB();
+        let body = { ...req.body };
+        delete body._id;
+        
+        let query = { id: req.params.id };
+        if (req.escolaId) query.escolaId = req.escolaId; 
+        
+        if (body.escolaId && body.escolaId !== req.escolaId) delete body.escolaId;
 
-    body = purificarDados(req.params.collection, body);
+        body = purificarDados(req.params.collection, body);
 
-    await database.collection(req.params.collection).updateOne(query, { $set: body }, { upsert: true });
-    res.json(body);
+        await database.collection(req.params.collection).updateOne(query, { $set: body }, { upsert: true });
+        res.json(body);
+    } catch (error) {
+        console.error(`❌ Erro ao atualizar em ${req.params.collection}:`, error);
+        res.status(500).json({ error: 'Erro interno ao atualizar base de dados.' });
+    }
 });
 
 app.delete('/:collection/:id', validarColecao, validarPermissoes, async (req, res) => {
-    const database = await connectDB();
-    let query = { id: req.params.id };
-    if (req.escolaId) query.escolaId = req.escolaId; 
+    try {
+        const database = await connectDB();
+        let query = { id: req.params.id };
+        if (req.escolaId) query.escolaId = req.escolaId; 
 
-    // 🛡️ O DONO NUNCA PODE SER EXCLUÍDO
-    if (req.params.collection === 'usuarios') {
-        const userToDelete = await database.collection('usuarios').findOne(query);
-        if (userToDelete && userToDelete.isDono) {
-            return res.status(403).json({ error: 'O Dono da conta principal não pode ser excluído.' });
+        // 🛡️ O DONO NUNCA PODE SER EXCLUÍDO
+        if (req.params.collection === 'usuarios') {
+            const userToDelete = await database.collection('usuarios').findOne(query);
+            if (userToDelete && userToDelete.isDono) {
+                return res.status(403).json({ error: 'O Dono da conta principal não pode ser excluído.' });
+            }
         }
-    }
 
-    await database.collection(req.params.collection).deleteOne(query);
-    res.json({ success: true });
+        await database.collection(req.params.collection).deleteOne(query);
+        res.json({ success: true });
+    } catch (error) {
+        console.error(`❌ Erro ao excluir em ${req.params.collection}:`, error);
+        res.status(500).json({ error: 'Erro interno ao excluir na base de dados.' });
+    }
 });
 
 // =========================================================
