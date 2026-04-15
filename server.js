@@ -57,10 +57,11 @@ app.use(cors({
 // 🛡️ REFORÇO MANUAL (Garante a entrega dos headers mesmo em caso de erro no pacote cors)
 app.use((req, res, next) => {
     const origin = req.headers.origin;
-    // Verifica se a origem está na lista antes de setar o header específico
+    
     if (origin && dominiosPermitidos.includes(origin)) {
         res.header("Access-Control-Allow-Origin", origin);
-    } else if (!origin) {
+    } else {
+        // 🚀 AJUSTE: Se não houver origin (caso do cron-job), permite para evitar 403
         res.header("Access-Control-Allow-Origin", "*");
     }
     
@@ -68,7 +69,6 @@ app.use((req, res, next) => {
     res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.header("Access-Control-Allow-Credentials", "true");
 
-    // Responde imediatamente a requisições preflight (OPTIONS)
     if (req.method === 'OPTIONS') {
         return res.sendStatus(200);
     }
@@ -162,7 +162,8 @@ async function connectDB() {
 // 🔑 MIDDLEWARE JWT (AUTENTICAÇÃO PRINCIPAL)
 // =========================================================
 app.use((req, res, next) => {
-    if (req.path.startsWith('/auth/') || req.path.startsWith('/master/')) return next();
+    // 🚀 ADICIONADO: req.path === '/' para permitir o ping do cron-job
+    if (req.path === '/' || req.path.startsWith('/auth/') || req.path.startsWith('/master/')) return next();
 
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.status(403).json({ error: 'Acesso negado. Token não fornecido.' });
@@ -173,8 +174,17 @@ app.use((req, res, next) => {
         if (err) return res.status(401).json({ error: 'Sessão expirada ou token inválido.' });
         req.userId = decoded.id; 
         req.escolaId = decoded.escolaId; 
-        req.userTipo = decoded.tipo; // 🚀 NOVO: Agora o backend sabe qual é o cargo do utilizador!
+        req.userTipo = decoded.tipo;
         next();
+    });
+});
+
+// 🚀 NOVA ROTA: Resposta para o Cron-job e verificação de status
+app.get('/', (req, res) => {
+    res.status(200).json({ 
+        status: "online", 
+        message: "API Sistema Escolar PTT ativa e operacional 🚀",
+        timestamp: new Date().toISOString()
     });
 });
 
@@ -844,4 +854,18 @@ connectDB().catch(console.error);
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => { 
     console.log(`🚀 API Blindada SaaS (Rate Limit + Helmet + NoSQL Safe + Schema Validator) a rodar perfeitamente na porta ${PORT}!`); 
+});
+
+const cron = require('node-cron');
+
+// Exemplo: Corre todos os dias à meia-noite (00:00)
+cron.schedule('0 0 * * *', async () => {
+    console.log("cron 🕒 Iniciando processamento diário automático...");
+    try {
+        const database = await connectDB();
+        // Aqui colocas a lógica, ex: marcar mensalidades como atrasadas
+        console.log("✅ Tarefas concluídas com sucesso.");
+    } catch (err) {
+        console.error("❌ Erro no Cron:", err);
+    }
 });
