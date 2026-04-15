@@ -50,8 +50,31 @@ app.use(cors({
         }
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'] // Restrito apenas aos cabeçalhos que realmente usas
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true 
 }));
+
+// 🛡️ REFORÇO MANUAL (Garante a entrega dos headers mesmo em caso de erro no pacote cors)
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    // Verifica se a origem está na lista antes de setar o header específico
+    if (origin && dominiosPermitidos.includes(origin)) {
+        res.header("Access-Control-Allow-Origin", origin);
+    } else if (!origin) {
+        res.header("Access-Control-Allow-Origin", "*");
+    }
+    
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.header("Access-Control-Allow-Credentials", "true");
+
+    // Responde imediatamente a requisições preflight (OPTIONS)
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    
+    next();
+});
 
 app.use(express.json({ limit: '10mb' })); 
 app.use(mongoSanitize());
