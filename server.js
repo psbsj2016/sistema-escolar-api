@@ -29,11 +29,28 @@ if (!JWT_SECRET || !uri) {
 // 1. HELMET: Desbloqueia recursos para o Front-end Externo
 app.use(helmet({ crossOriginResourcePolicy: false }));
 
-// 2. CORS UNIVERSAL (A segurança real é feita pelo Token JWT)
+// =========================================================
+// 2. 🛡️ CORS BLINDADO (Bloqueia sites não oficiais)
+// =========================================================
+const dominiosPermitidos = [
+    'https://www.sistemaptt.com.br',
+    'https://sistemaptt.com.br',
+    'http://localhost:3000',     // Para os teus testes locais
+    'http://127.0.0.1:5500'      // Para o teu Live Server local
+];
+
 app.use(cors({
-    origin: '*', 
+    origin: function (origin, callback) {
+        // O '!origin' permite ferramentas como o Postman ou chamadas do próprio servidor
+        if (!origin || dominiosPermitidos.includes(origin)) {
+            callback(null, true);
+        } else {
+            console.warn(`🛑 Tentativa de acesso bloqueada pelo CORS. Origem: ${origin}`);
+            callback(new Error('Acesso bloqueado por políticas de segurança (CORS).'));
+        }
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: '*'
+    allowedHeaders: ['Content-Type', 'Authorization'] // Restrito apenas aos cabeçalhos que realmente usas
 }));
 
 app.use(express.json({ limit: '10mb' })); 
