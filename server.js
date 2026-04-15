@@ -233,18 +233,33 @@ app.post('/master/gerar-pin', async (req, res) => {
 });
 
 // =========================================================
-// 🏫 ESCOLA & USUÁRIOS
+// 🏫 ESCOLA & USUÁRIOS (LEITURA E ESCRITA)
 // =========================================================
+
+// Rota para ler os dados da escola
 app.get('/escola', async (req, res) => {
     const database = await connectDB();
     const data = await database.collection('escola').findOne({ escolaId: req.escolaId });
+    if (data) delete data._id;
     res.json(data || {});
 });
 
-app.get('/usuarios', async (req, res) => {
-    const database = await connectDB();
-    const data = await database.collection('usuarios').find({ escolaId: req.escolaId }).toArray();
-    res.json(data.map(({senha, _id, ...rest}) => rest));
+// 🚀 ADICIONA ESTA ROTA: Para salvar os dados da escola (Resolve o 404)
+app.put('/escola', async (req, res) => {
+    try {
+        const database = await connectDB();
+        const { _id, ...body } = req.body; // Remove o _id do MongoDB para não dar erro no update
+        
+        await database.collection('escola').updateOne(
+            { escolaId: req.escolaId }, 
+            { $set: body }, 
+            { upsert: true }
+        );
+        
+        res.json({ success: true, ...body });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao salvar dados da escola.' });
+    }
 });
 
 // =========================================================
