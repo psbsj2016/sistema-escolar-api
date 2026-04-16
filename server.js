@@ -349,6 +349,14 @@ app.get('/:collection', async (req, res) => {
     res.json(data.map(({_id, ...rest}) => rest));
 });
 
+app.get('/:collection/:id', async (req, res) => {
+    if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
+    const database = await connectDB();
+    const data = await database.collection(req.params.collection).findOne({ id: req.params.id, escolaId: req.escolaId });
+    if (data) delete data._id;
+    res.json(data || {});
+});
+
 app.post('/:collection', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
     const database = await connectDB();
