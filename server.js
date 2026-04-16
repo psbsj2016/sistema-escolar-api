@@ -416,28 +416,33 @@ app.delete('/:collection/:id', async (req, res) => {
 });
 
 // =========================================================
-// 🚀 INICIALIZAÇÃO & REPARAÇÃO DE DADOS ANTIGOS
+// 🚀 REPARAÇÃO COMPLETA (Frequência, Notas e Eventos)
 // =========================================================
 
 async function repararDadosAntigos() {
     try {
         const database = await connectDB();
-        const colecoes = ['escola', 'usuarios', 'alunos', 'turmas', 'cursos', 'financeiro', 'planejamentos', 'estoques'];
+        // 📝 Adicionamos 'chamadas', 'avaliacoes' e 'eventos' à lista
+        const colecoes = [
+            'escola', 'usuarios', 'alunos', 'turmas', 'cursos', 
+            'financeiro', 'planejamentos', 'estoques', 
+            'chamadas', 'avaliacoes', 'eventos'
+        ];
         
-        console.log("🔍 Iniciando verificação de dados antigos...");
+        console.log("🔍 Iniciando reparação profunda de históricos...");
         
         for (const col of colecoes) {
             const result = await database.collection(col).updateMany(
-                { escolaId: { $exists: false } }, // Filtro: Registros que NÃO têm o ID
-                { $set: { escolaId: "ESC-PTTCURSOS" } } // Ação: Coloca o teu ID
+                { escolaId: { $exists: false } }, 
+                { $set: { escolaId: "ESC-PTTCURSOS" } } 
             );
             if (result.modifiedCount > 0) {
-                console.log(`✅ Reparação em [${col}]: ${result.modifiedCount} registros recuperados.`);
+                console.log(`✅ Recuperados ${result.modifiedCount} registos em [${col}].`);
             }
         }
-        console.log("✨ Verificação concluída. Tudo pronto!");
+        console.log("✨ Todos os históricos foram vinculados com sucesso!");
     } catch (err) {
-        console.error("❌ Erro na reparação automática:", err);
+        console.error("❌ Erro na reparação profunda:", err);
     }
 }
 
