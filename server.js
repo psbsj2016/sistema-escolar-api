@@ -149,7 +149,9 @@ app.get('/', (req, res) => {
 // 🔑 MIDDLEWARE JWT
 // =========================================================
 app.use((req, res, next) => {
-    if (req.path === '/' || req.path.startsWith('/auth/') || req.path.startsWith('/master/')) return next();
+    // Adicionamos a liberação para rotas que começam com '/public/'
+    if (req.path === '/' || req.path.startsWith('/auth/') || req.path.startsWith('/master/') || req.path.startsWith('/public/')) return next();
+    
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.status(403).json({ error: 'Token não fornecido.' });
     const token = authHeader.split(' ')[1]; 
@@ -160,6 +162,41 @@ app.use((req, res, next) => {
         req.userTipo = decoded.tipo;
         next();
     });
+});
+
+// =========================================================
+// 📄 ÁREA PÚBLICA (Matrículas Externas Automáticas)
+// =========================================================
+
+app.post('/public/receber-matricula', async (req, res) => {
+    try {
+        const { escolaId, ...dadosAluno } = req.body;
+
+        if (!escolaId) {
+            return res.status(400).json({ error: 'ID da escola não fornecido no formulário.' });
+        }
+
+        const database = await connectDB();
+
+        // 🧠 O SEGREDO AQUI: O payload já vem pronto do HTML igualzinho ao seu app.js
+        const novoAluno = {
+            ...dadosAluno,
+            id: Date.now().toString(),
+            escolaId: escolaId,
+            status: 'Ativo', // 🟢 Já entra "Ativo" para habilitar Carnês, Frequência e WhatsApp no painel!
+            dataMatricula: new Date().toISOString()
+        };
+
+        // Salva diretamente na coleção que o seu painel lê!
+        await database.collection('alunos').insertOne(novoAluno);
+
+        console.log(`✅ Novo aluno matriculado automaticamente: ${dadosAluno.nome} (Escola: ${escolaId})`);
+
+        res.status(200).json({ success: true, message: 'Matrícula ativada com sucesso!' });
+    } catch (error) {
+        console.error("❌ Erro ao salvar matrícula:", error);
+        res.status(500).json({ error: 'Erro interno ao processar a matrícula.' });
+    }
 });
 
 // =========================================================
