@@ -341,12 +341,6 @@ app.delete('/usuarios/:id', async (req, res) => {
 // 🔄 CRUD DINÂMICO (NoSQL SAFE)
 // =========================================================
 const COLECOES_OK = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoques'];
-// ... (O resto do seu CRUD continua aqui embaixo)
-
-// =========================================================
-// 🔄 CRUD DINÂMICO (NoSQL SAFE)
-// =========================================================
-const COLECOES_OK = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoques'];
 
 app.get('/:collection', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
