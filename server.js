@@ -415,36 +415,6 @@ app.delete('/:collection/:id', async (req, res) => {
     res.json({ success: true });
 });
 
-// =========================================================
-// 🚀 REPARAÇÃO COMPLETA (Frequência, Notas e Eventos)
-// =========================================================
-
-async function repararDadosAntigos() {
-    try {
-        const database = await connectDB();
-        // 📝 Adicionamos 'chamadas', 'avaliacoes' e 'eventos' à lista
-        const colecoes = [
-            'escola', 'usuarios', 'alunos', 'turmas', 'cursos', 
-            'financeiro', 'planejamentos', 'estoques', 
-            'chamadas', 'avaliacoes', 'eventos'
-        ];
-        
-        console.log("🔍 Iniciando reparação profunda de históricos...");
-        
-        for (const col of colecoes) {
-            const result = await database.collection(col).updateMany(
-                { escolaId: { $exists: false } }, 
-                { $set: { escolaId: "ESC-PTTCURSOS" } } 
-            );
-            if (result.modifiedCount > 0) {
-                console.log(`✅ Recuperados ${result.modifiedCount} registos em [${col}].`);
-            }
-        }
-        console.log("✨ Todos os históricos foram vinculados com sucesso!");
-    } catch (err) {
-        console.error("❌ Erro na reparação profunda:", err);
-    }
-}
 
 connectDB().then(async () => {
     // Roda a reparação assim que o banco conectar
