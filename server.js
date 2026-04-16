@@ -263,6 +263,87 @@ app.put('/escola', async (req, res) => {
 });
 
 // =========================================================
+// 👥 ROTAS EXCLUSIVAS DE USUÁRIOS E SEGURANÇA
+// =========================================================
+
+// 1. Atualizar a própria conta (PRECISA VIR ANTES DO CRUD DINÂMICO)
+app.put('/usuarios/atualizar-conta', async (req, res) => {
+    const { novoLogin, novoEmail, senhaAtual, novaSenha } = req.body;
+    const database = await connectDB();
+    
+    const user = await database.collection('usuarios').findOne({ id: req.userId, escolaId: req.escolaId });
+    if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    
+    // Verifica se a senha atual está correta antes de deixar alterar
+    const senhaValida = await bcrypt.compare(senhaAtual, user.senha);
+    if (!senhaValida) return res.status(401).json({ error: 'Senha atual incorreta.' });
+    
+    const updateData = { login: novoLogin };
+    if (novoEmail) updateData.email = novoEmail;
+    
+    // Se digitou uma nova senha, criptografa ela antes de salvar
+    if (novaSenha) {
+        updateData.senha = await bcrypt.hash(novaSenha, 10);
+    }
+    
+    await database.collection('usuarios').updateOne({ id: req.userId }, { $set: updateData });
+    res.json({ success: true });
+});
+
+// 2. Listar Usuários (Para preencher a tabela em "Minha Conta")
+app.get('/usuarios', async (req, res) => {
+    const database = await connectDB();
+    const data = await database.collection('usuarios').find({ escolaId: req.escolaId }).toArray();
+    
+    // Retorna a lista de usuários, mas REMOVE a hash da senha por segurança
+    res.json(data.map(({ _id, senha, ...rest }) => rest));
+});
+
+// 3. Criar Novo Usuário (Equipe)
+app.post('/usuarios', async (req, res) => {
+    const database = await connectDB();
+    const { senha, ...body } = req.body;
+    
+    const novoUsuario = { ...body, id: Date.now().toString(), escolaId: req.escolaId };
+    
+    // Criptografa a senha do novo membro da equipe
+    if (senha) {
+        novoUsuario.senha = await bcrypt.hash(senha, 10);
+    }
+    
+    await database.collection('usuarios').insertOne(novoUsuario);
+    delete novoUsuario.senha; 
+    res.json(novoUsuario);
+});
+
+// 4. Editar Usuário da Equipe
+app.put('/usuarios/:id', async (req, res) => {
+    const database = await connectDB();
+    const { _id, senha, ...body } = req.body;
+    
+    const updateData = { ...body };
+    if (senha) {
+        updateData.senha = await bcrypt.hash(senha, 10);
+    }
+    
+    await database.collection('usuarios').updateOne({ id: req.params.id, escolaId: req.escolaId }, { $set: updateData });
+    res.json({ success: true });
+});
+
+// 5. Excluir Usuário
+app.delete('/usuarios/:id', async (req, res) => {
+    const database = await connectDB();
+    await database.collection('usuarios').deleteOne({ id: req.params.id, escolaId: req.escolaId });
+    res.json({ success: true });
+});
+
+// =========================================================
+// 🔄 CRUD DINÂMICO (NoSQL SAFE)
+// =========================================================
+const COLECOES_OK = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoques'];
+// ... (O resto do seu CRUD continua aqui embaixo)
+
+// =========================================================
 // 🔄 CRUD DINÂMICO (NoSQL SAFE)
 // =========================================================
 const COLECOES_OK = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoques'];
