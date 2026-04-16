@@ -416,15 +416,35 @@ app.delete('/:collection/:id', async (req, res) => {
 });
 
 // =========================================================
-// 🚀 INICIALIZAÇÃO & CRON
+// 🚀 INICIALIZAÇÃO & REPARAÇÃO DE DADOS ANTIGOS
 // =========================================================
-connectDB().then(() => {
+
+async function repararDadosAntigos() {
+    try {
+        const database = await connectDB();
+        const colecoes = ['escola', 'usuarios', 'alunos', 'turmas', 'cursos', 'financeiro', 'planejamentos', 'estoques'];
+        
+        console.log("🔍 Iniciando verificação de dados antigos...");
+        
+        for (const col of colecoes) {
+            const result = await database.collection(col).updateMany(
+                { escolaId: { $exists: false } }, // Filtro: Registros que NÃO têm o ID
+                { $set: { escolaId: "ESC-PTTCURSOS" } } // Ação: Coloca o teu ID
+            );
+            if (result.modifiedCount > 0) {
+                console.log(`✅ Reparação em [${col}]: ${result.modifiedCount} registros recuperados.`);
+            }
+        }
+        console.log("✨ Verificação concluída. Tudo pronto!");
+    } catch (err) {
+        console.error("❌ Erro na reparação automática:", err);
+    }
+}
+
+connectDB().then(async () => {
+    // Roda a reparação assim que o banco conectar
+    await repararDadosAntigos();
+    
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => console.log(`🚀 API Sistema Escolar na porta ${PORT}`));
-});
-
-cron.schedule('0 0 * * *', async () => {
-    console.log("🕒 Cron Diário Iniciado...");
-    const database = await connectDB();
-    // Lógica diária aqui (ex: verificar vencimentos)
 });
