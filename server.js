@@ -417,10 +417,10 @@ app.delete('/:collection/:id', async (req, res) => {
 });
 
 
-connectDB().then(async () => {
-    // Roda a reparação assim que o banco conectar
-    await repararDadosAntigos();
-    
+// =========================================================
+// 🚀 INICIALIZAÇÃO & CRON
+// =========================================================
+connectDB().then(() => {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => console.log(`🚀 API Sistema Escolar na porta ${PORT}`));
 });
