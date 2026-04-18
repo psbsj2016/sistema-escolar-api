@@ -254,6 +254,18 @@ app.post('/auth/login', async (req, res) => {
 // =========================================================
 // 👑 MASTER
 // =========================================================
+
+// Middleware para verificar se é o Master
+const verifyMaster = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(403).json({ error: 'Token não fornecido.' });
+    const token = authHeader.split(' ')[1];
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err || !decoded.master) return res.status(401).json({ error: 'Acesso não autorizado.' });
+        next();
+    });
+};
+
 app.post('/master/login', (req, res) => {
     if (req.body.senha === SENHA_DONO) {
         const token = jwt.sign({ master: true }, JWT_SECRET, { expiresIn: '2h' });
@@ -262,12 +274,52 @@ app.post('/master/login', (req, res) => {
     res.status(401).json({ error: 'Senha incorreta.' });
 });
 
-app.post('/master/gerar-pin', async (req, res) => {
+app.post('/master/gerar-pin', verifyMaster, async (req, res) => {
     const { email, plano } = req.body;
     const pin = 'PRO-' + Math.random().toString(36).substring(2, 6).toUpperCase();
     const database = await connectDB();
     await database.collection('ativacoes').updateOne({ email: email.toLowerCase() }, { $set: { email: email.toLowerCase(), pinAtivacao: pin, status: 'Pendente', plano } }, { upsert: true });
     res.json({ success: true, pin });
+});
+
+// NOVA ROTA: Listar todas as ativações (Escolas)
+app.get('/master/ativacoes', verifyMaster, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const ativacoes = await database.collection('ativacoes').find({}).toArray();
+        // Remove object IDs to send clean JSON
+        res.json(ativacoes.map(({ _id, ...rest }) => rest));
+    } catch (error) {
+        console.error("Erro ao buscar ativações:", error);
+        res.status(500).json({ error: 'Erro interno no servidor' });
+    }
+});
+
+// NOVA ROTA: Bloquear uma escola
+app.post('/master/bloquear', verifyMaster, async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ error: 'E-mail é obrigatório' });
+
+        const database = await connectDB();
+        
+        // Atualiza a coleção 'ativacoes'
+        await database.collection('ativacoes').updateOne(
+            { email: email.toLowerCase() },
+            { $set: { status: 'Bloqueado' } }
+        );
+
+        // Opcional: Atualiza o status na coleção 'escola' também, se você usar isso lá
+        await database.collection('escola').updateOne(
+            { email: email.toLowerCase() },
+            { $set: { plano: 'Bloqueado' } }
+        );
+
+        res.json({ success: true, message: 'Conta bloqueada' });
+    } catch (error) {
+        console.error("Erro ao bloquear:", error);
+        res.status(500).json({ error: 'Erro interno no servidor' });
+    }
 });
 
 // =========================================================
