@@ -320,6 +320,41 @@ app.post('/master/bloquear', verifyMaster, async (req, res) => {
         console.error("Erro ao bloquear:", error);
         res.status(500).json({ error: 'Erro interno no servidor' });
     }
+     
+       // NOVA ROTA: Excluir DEFINITIVAMENTE uma conta e todos os seus dados
+app.post('/master/excluir-conta', verifyMaster, async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ error: 'E-mail é obrigatório' });
+
+        const targetEmail = email.toLowerCase();
+        const database = await connectDB();
+
+        // 1. Apagar todos os dados das coleções que pertencem a essa escola
+        // O sistema salva os dados relacionando-os pelo "escolaId" (que é o e-mail do dono)
+        const colecoesTenant = [
+            'alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 
+            'chamadas', 'avaliacoes', 'planejamentos', 'usuarios', 'estoques'
+        ];
+
+        for (const col of colecoesTenant) {
+            await database.collection(col).deleteMany({ escolaId: targetEmail });
+        }
+
+        // 2. Apagar o perfil principal da escola (caso exista)
+        await database.collection('escola').deleteOne({ email: targetEmail });
+        
+        // 3. Garantir que o usuário principal também seja apagado
+        await database.collection('usuarios').deleteMany({ email: targetEmail });
+
+        // 4. Por fim, apagar o registro de ativação/licença
+        await database.collection('ativacoes').deleteOne({ email: targetEmail });
+
+        res.json({ success: true, message: 'Conta e todos os dados foram totalmente excluídos.' });
+    } catch (error) {
+        console.error("Erro ao excluir conta:", error);
+        res.status(500).json({ error: 'Erro interno no servidor' });
+    }
 });
 
 // =========================================================
