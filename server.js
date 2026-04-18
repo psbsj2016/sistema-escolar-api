@@ -321,6 +321,7 @@ app.post('/master/bloquear', verifyMaster, async (req, res) => {
         res.status(500).json({ error: 'Erro interno no servidor' });
     }
      
+});
        // NOVA ROTA: Excluir DEFINITIVAMENTE uma conta e todos os seus dados
 app.post('/master/excluir-conta', verifyMaster, async (req, res) => {
     try {
