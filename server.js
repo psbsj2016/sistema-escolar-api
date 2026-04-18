@@ -282,15 +282,41 @@ app.post('/master/gerar-pin', verifyMaster, async (req, res) => {
     res.json({ success: true, pin });
 });
 
-// NOVA ROTA: Listar todas as ativações (Escolas)
+// =========================================================
+// ROTA: Listar TODAS as escolas (Ativas, Pendentes e Fantasmas)
+// =========================================================
 app.get('/master/ativacoes', verifyMaster, async (req, res) => {
     try {
         const database = await connectDB();
         const ativacoes = await database.collection('ativacoes').find({}).toArray();
-        // Remove object IDs to send clean JSON
-        res.json(ativacoes.map(({ _id, ...rest }) => rest));
+        const escolas = await database.collection('escola').find({}).toArray();
+        const usuarios = await database.collection('usuarios').find({ isDono: true }).toArray();
+
+        // Usamos um Mapa para juntar todo mundo e não repetir e-mails na sua tela
+        const mapaContas = new Map();
+
+        // 1. Pega quem tem licença
+        ativacoes.forEach(a => {
+            if(a.email) mapaContas.set(a.email.toLowerCase(), { ...a, _id: undefined });
+        });
+
+        // 2. Pega quem tem escola cadastrada (mas sumiu da licença)
+        escolas.forEach(e => {
+            if (e.email && !mapaContas.has(e.email.toLowerCase())) {
+                mapaContas.set(e.email.toLowerCase(), { email: e.email, plano: e.plano || 'Desconhecido', status: 'Desconectado', pinAtivacao: 'FANTASMA 👻' });
+            }
+        });
+
+        // 3. Pega quem fez usuário de login (mas sumiu do resto)
+        usuarios.forEach(u => {
+            if (u.login && !mapaContas.has(u.login.toLowerCase())) {
+                mapaContas.set(u.login.toLowerCase(), { email: u.login, plano: 'Desconhecido', status: 'Desconectado', pinAtivacao: 'FANTASMA 👻' });
+            }
+        });
+
+        res.json(Array.from(mapaContas.values()));
     } catch (error) {
-        console.error("Erro ao buscar ativações:", error);
+        console.error("Erro ao buscar escolas:", error);
         res.status(500).json({ error: 'Erro interno no servidor' });
     }
 });
@@ -322,36 +348,39 @@ app.post('/master/bloquear', verifyMaster, async (req, res) => {
     }
      
 });
-       // NOVA ROTA: Excluir DEFINITIVAMENTE uma conta e todos os seus dados
+ 
+// =========================================================
+// ROTA: Excluir DEFINITIVAMENTE uma conta e todos os seus dados
+// =========================================================
 app.post('/master/excluir-conta', verifyMaster, async (req, res) => {
     try {
         const { email } = req.body;
         if (!email) return res.status(400).json({ error: 'E-mail é obrigatório' });
 
-        const targetEmail = email.toLowerCase();
+        const targetEmail = email.toLowerCase().trim();
         const database = await connectDB();
 
-        // 1. Apagar todos os dados das coleções que pertencem a essa escola
-        // O sistema salva os dados relacionando-os pelo "escolaId" (que é o e-mail do dono)
-        const colecoesTenant = [
-            'alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 
-            'chamadas', 'avaliacoes', 'planejamentos', 'usuarios', 'estoques'
-        ];
+        // 1. Descobrir o ID real da escola (ex: ESC-1234)
+        const escola = await database.collection('escola').findOne({ email: targetEmail });
+        const usuario = await database.collection('usuarios').findOne({ login: targetEmail });
+        
+        const idParaApagar = (escola && escola.escolaId) ? escola.escolaId : ((usuario && usuario.escolaId) ? usuario.escolaId : null);
 
-        for (const col of colecoesTenant) {
-            await database.collection(col).deleteMany({ escolaId: targetEmail });
+        // 2. Apagar TODOS os dados de todas as abas do sistema
+        if (idParaApagar) {
+            const colecoesTenant = [ 'alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'usuarios', 'estoques' ];
+            for (const col of colecoesTenant) {
+                await database.collection(col).deleteMany({ escolaId: idParaApagar });
+            }
         }
 
-        // 2. Apagar o perfil principal da escola (caso exista)
-        await database.collection('escola').deleteOne({ email: targetEmail });
-        
-        // 3. Garantir que o usuário principal também seja apagado
+        // 3. Apagar tudo o que sobrou usando o e-mail
+        await database.collection('escola').deleteMany({ email: targetEmail });
+        await database.collection('usuarios').deleteMany({ login: targetEmail });
         await database.collection('usuarios').deleteMany({ email: targetEmail });
+        await database.collection('ativacoes').deleteMany({ email: targetEmail });
 
-        // 4. Por fim, apagar o registro de ativação/licença
-        await database.collection('ativacoes').deleteOne({ email: targetEmail });
-
-        res.json({ success: true, message: 'Conta e todos os dados foram totalmente excluídos.' });
+        res.json({ success: true, message: 'Conta obliterada do banco.' });
     } catch (error) {
         console.error("Erro ao excluir conta:", error);
         res.status(500).json({ error: 'Erro interno no servidor' });
@@ -385,6 +414,29 @@ app.put('/escola', async (req, res) => {
         res.json({ success: true, ...body });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao salvar dados da escola.' });
+    }
+});
+
+// Rota para validar o PIN de renovação de plano
+app.post('/escola/validar-pin', async (req, res) => {
+    try {
+        const { pin } = req.body;
+        if (!pin) return res.status(400).json({ error: 'PIN não informado.' });
+
+        const database = await connectDB();
+        
+        // Vai no banco de dados (coleção ativacoes) e procura se o PIN existe
+        const ativacao = await database.collection('ativacoes').findOne({ pinAtivacao: pin.toUpperCase() });
+
+        if (ativacao) {
+            // Sucesso! O PIN foi encontrado no banco de dados.
+            return res.json({ success: true, plano: ativacao.plano || 'Profissional' });
+        } else {
+            return res.status(404).json({ error: 'PIN não encontrado na base de dados.' });
+        }
+    } catch (error) {
+        console.error("Erro ao validar PIN:", error);
+        res.status(500).json({ error: 'Erro interno ao validar PIN.' });
     }
 });
 
