@@ -190,6 +190,22 @@ app.post('/public/receber-matricula', async (req, res) => {
 
         // Salva diretamente na coleção que o seu painel lê!
         await database.collection('alunos').insertOne(novoAluno);
+        
+        // =======================================================
+        // 🔒 INÍCIO DO COFRE DE CONTRATOS (ADICIONE ISTO)
+        // =======================================================
+        const carimboDeTempo = new Date().toISOString();
+        const novoContrato = {
+            id: "DOC_" + Date.now().toString(),
+            escolaId: escolaId,
+            idAluno: novoAluno.id,
+            nomeAluno: dadosAluno.nome || 'Nome não informado',
+            dadosCompletos: dadosAluno, // Guarda o formulário EXATO que ele preencheu
+            dataHoraRegistro: carimboDeTempo,
+            tipoDocumento: 'Termo de Matrícula Digital'
+        };
+        await database.collection('contratos').insertOne(novoContrato);
+        // =======================================================
 
         console.log(`✅ Novo aluno matriculado automaticamente: ${dadosAluno.nome} (Escola: ${escolaId})`);
 
@@ -518,7 +534,7 @@ app.delete('/usuarios/:id', async (req, res) => {
 // =========================================================
 // 🔄 CRUD DINÂMICO (NoSQL SAFE)
 // =========================================================
-const COLECOES_OK = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoques'];
+const COLECOES_OK = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoques', 'contratos'];
 
 app.get('/:collection', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
