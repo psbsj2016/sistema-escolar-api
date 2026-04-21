@@ -268,6 +268,86 @@ app.post('/auth/login', async (req, res) => {
 });
 
 // =========================================================
+// ROTA: Recuperação de Senha (Apenas usuários ativos)
+// =========================================================
+app.post('/auth/recuperar-senha', async (req, res) => {
+    try {
+        let { email } = req.body;
+        
+        if (!email) {
+            return res.status(400).json({ success: false, error: "Por favor, informe um e-mail válido." });
+        }
+        
+        email = email.toLowerCase().trim();
+        const database = await connectDB();
+
+        // 1. Busca o usuário pelo campo "login" (ou "email", por segurança)
+        const user = await database.collection('usuarios').findOne({ 
+            $or: [
+                { login: new RegExp(`^${email}$`, 'i') },
+                { email: new RegExp(`^${email}$`, 'i') }
+            ]
+        });
+
+        // 2. Se não existir na base de dados
+        if (!user) {
+            return res.status(404).json({ 
+                success: false, 
+                error: "Este e-mail não está cadastrado no sistema." 
+            });
+        }
+
+        // 3. Se existir, mas estiver Inativo
+        if (user.status && user.status.toLowerCase() === 'inativo') {
+            return res.status(403).json({ 
+                success: false, 
+                error: "Esta conta encontra-se inativa. Por favor, contacte a administração." 
+            });
+        }
+
+        // 4. Gera uma nova senha temporária de 6 dígitos numéricos
+        const novaSenhaTemp = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        // 5. Criptografa a nova senha para manter a segurança do banco
+        const senhaHash = await bcrypt.hash(novaSenhaTemp, 10);
+
+        // 6. Atualiza a senha do usuário no banco de dados
+        await database.collection('usuarios').updateOne(
+            { id: user.id }, 
+            { $set: { senha: senhaHash } }
+        );
+
+        // 7. Envia o e-mail utilizando o Resend (que já está configurado no seu server.js)
+        await resend.emails.send({
+            from: 'Sistema Escolar <nao-responda@sistemaptt.com.br>',
+            to: email,
+            subject: '🔐 Recuperação de Senha',
+            html: `
+                <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; color: #333;">
+                    <h2>Recuperação de Senha</h2>
+                    <p>Olá! Você solicitou a recuperação da sua senha no sistema da PTT Cursos.</p>
+                    <p>Sua nova senha temporária é:</p>
+                    <h1 style="color: #3498db; letter-spacing: 5px; background: #f4f6f7; padding: 15px; border-radius: 8px; display: inline-block;">${novaSenhaTemp}</h1>
+                    <p style="margin-top: 20px;">Recomendamos fortemente que você altere esta senha assim que fizer login no sistema, acessando a aba <strong>"Minha Conta"</strong>.</p>
+                </div>
+            `
+        });
+
+        return res.status(200).json({ 
+            success: true, 
+            message: "Uma nova senha temporária foi enviada para o seu e-mail com sucesso!" 
+        });
+
+    } catch (erro) {
+        console.error("Erro ao recuperar senha:", erro);
+        return res.status(500).json({ 
+            success: false, 
+            error: "Erro interno no servidor. Tente novamente mais tarde." 
+        });
+    }
+});
+
+// =========================================================
 // 👑 MASTER
 // =========================================================
 
