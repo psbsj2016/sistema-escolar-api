@@ -765,8 +765,16 @@ app.get('/:collection/:id', async (req, res) => {
 
 app.post('/:collection', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
+    
     const database = await connectDB();
-    const body = { ...req.body, id: crypto.randomUUID(), escolaId: req.escolaId }; 
+    
+    // A MÁGICA ACONTECE AQUI: req.body.id || crypto.randomUUID()
+    const body = { 
+        ...req.body, 
+        id: req.body.id || crypto.randomUUID(), 
+        escolaId: req.escolaId 
+    }; 
+    
     await database.collection(req.params.collection).insertOne(body);
     res.json(body);
 });
