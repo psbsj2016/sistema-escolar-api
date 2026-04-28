@@ -5,6 +5,7 @@ const { Resend } = require('resend');
 const jwt = require('jsonwebtoken'); 
 const bcrypt = require('bcrypt');
 const cron = require('node-cron'); // Importação essencial
+const crypto = require('crypto'); 
 
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
@@ -100,6 +101,7 @@ app.use((req, res, next) => {
 });
 
 app.use('/auth/login', authLimiter);
+app.use('/master/login', authLimiter); // 🛡️ ADICIONE ESTA LINHA! Agora robôs serão bloqueados no Master.
 
 // =========================================================
 // 🧹 SANITIZAÇÃO XSS
@@ -197,7 +199,7 @@ app.get('/public/escola/:id', async (req, res) => {
 
 app.post('/public/receber-matricula', async (req, res) => {
     try {
-        const { escolaId, ...dadosAluno } = req.body;
+        const { escolaId, ...dadosBrutos } = req.body;
 
         if (!escolaId) {
             return res.status(400).json({ error: 'ID da escola não fornecido no formulário.' });
@@ -205,35 +207,65 @@ app.post('/public/receber-matricula', async (req, res) => {
 
         const database = await connectDB();
 
-        // 🧠 O SEGREDO AQUI: O payload já vem pronto do HTML igualzinho ao seu app.js
+        // 🛡️ BLINDAGEM CONTRA INJEÇÃO DE DADOS (Mass Assignment)
+        // Extraímos e limpamos apenas os campos que o aluno tem permissão para enviar
+        const dadosPermitidos = {
+            nome: dadosBrutos.nome || '',
+            whatsapp: dadosBrutos.whatsapp || '',
+            email: dadosBrutos.email || '',
+            cpf: dadosBrutos.cpf || '',
+            rg: dadosBrutos.rg || '',
+            nascimento: dadosBrutos.nascimento || '',
+            sexo: dadosBrutos.sexo || '',
+            profissao: dadosBrutos.profissao || '',
+            rua: dadosBrutos.rua || '',
+            numero: dadosBrutos.numero || '',
+            bairro: dadosBrutos.bairro || '',
+            cidade: dadosBrutos.cidade || '',
+            planoCurso: dadosBrutos.planoCurso || '',
+            diaVencimento: dadosBrutos.diaVencimento || '',
+            estado: dadosBrutos.estado || 'BA',
+            pais: dadosBrutos.pais || 'Brasil',
+            curso: dadosBrutos.curso || 'A definir',
+            turma: dadosBrutos.turma || 'A definir',
+            
+            // Dados do responsável legal (se aplicável)
+            resp_nome: dadosBrutos.resp_nome || null,
+            resp_parentesco: dadosBrutos.resp_parentesco || null,
+            resp_cpf: dadosBrutos.resp_cpf || null,
+            resp_zap: dadosBrutos.resp_zap || null
+        };
+
+        const idAlunoGerado = crypto.randomUUID(); // Muito mais seguro que Date.now()
+
         const novoAluno = {
-            ...dadosAluno,
-            id: Date.now().toString(),
+            ...dadosPermitidos,
+            id: idAlunoGerado,
             escolaId: escolaId,
-            status: 'Ativo', // 🟢 Já entra "Ativo" para habilitar Carnês, Frequência e WhatsApp no painel!
+            status: 'Ativo', // 🟢 Já entra "Ativo"
             dataMatricula: new Date().toISOString()
         };
 
-        // Salva diretamente na coleção que o seu painel lê!
+        // Salva o aluno na base
         await database.collection('alunos').insertOne(novoAluno);
         
         // =======================================================
-        // 🔒 INÍCIO DO COFRE DE CONTRATOS (ADICIONE ISTO)
+        // 🔒 INÍCIO DO COFRE DE CONTRATOS
         // =======================================================
         const carimboDeTempo = new Date().toISOString();
         const novoContrato = {
-            id: "DOC_" + Date.now().toString(),
+            id: "DOC_" + crypto.randomUUID(),
             escolaId: escolaId,
-            idAluno: novoAluno.id,
-            nomeAluno: dadosAluno.nome || 'Nome não informado',
-            dadosCompletos: dadosAluno, // Guarda o formulário EXATO que ele preencheu
+            idAluno: idAlunoGerado,
+            nomeAluno: dadosPermitidos.nome || 'Nome não informado',
+            dadosCompletos: dadosPermitidos, // Agora guarda apenas os dados blindados
             dataHoraRegistro: carimboDeTempo,
             tipoDocumento: 'Termo de Matrícula Digital'
         };
         await database.collection('contratos').insertOne(novoContrato);
         // =======================================================
 
-        console.log(`✅ Novo aluno matriculado automaticamente: ${dadosAluno.nome} (Escola: ${escolaId})`);
+        console.log(`✅ Novo aluno matriculado: ${dadosPermitidos.nome} (Escola: ${escolaId})`);
 
         res.status(200).json({ success: true, message: 'Matrícula ativada com sucesso!' });
     } catch (error) {
@@ -245,41 +277,107 @@ app.post('/public/receber-matricula', async (req, res) => {
 // =========================================================
 // 📩 AUTH & CADASTRO
 // =========================================================
-const codigosAtivos = new Map();
+// Removemos o 'const codigosAtivos = new Map();'
 
 app.post('/auth/enviar-codigo', async (req, res) => {
     let { email } = req.body;
     if (!email) return res.status(400).json({ error: 'E-mail obrigatório' });
+    
     email = email.toLowerCase().trim();
     const codigoGerado = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Define a validade do código para 10 minutos a partir de agora
+    const validade = new Date();
+    validade.setMinutes(validade.getMinutes() + 10);
+
     try {
-        await resend.emails.send({
+        const { data, error } = await resend.emails.send({
             from: 'Sistema Escolar <nao-responda@sistemaptt.com.br>',
-            to: email, subject: '🔐 Seu Código',
-            html: `<div style="text-align:center;"><h2>Código: ${codigoGerado}</h2></div>`
+            to: email, 
+            subject: '🔐 Seu Código de Acesso',
+            html: `
+                <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
+                    <h2>Seu código de verificação é:</h2>
+                    <h1 style="color: #3498db; letter-spacing: 5px;">${codigoGerado}</h1>
+                    <p>Este código expira em 10 minutos.</p>
+                </div>
+            `
         });
-        codigosAtivos.set(email, codigoGerado);
-        setTimeout(() => codigosAtivos.delete(email), 600000);
+
+        // O Resend não joga um Catch automático se o erro for da API (ex: email rejeitado).
+        // Precisamos verificar a propriedade 'error' que ele retorna.
+        if (error) {
+            console.error("❌ Resend API Error:", error);
+            return res.status(400).json({ error: 'Falha ao enviar e-mail. Verifique o endereço.' });
+        }
+
         const database = await connectDB();
-        await database.collection('ativacoes').updateOne({ email }, { $set: { email, status: 'Pendente', dataRequisicao: new Date().toLocaleDateString('pt-BR') } }, { upsert: true });
+        await database.collection('ativacoes').updateOne(
+            { email }, 
+            { 
+                $set: { 
+                    email, 
+                    codigoValidacao: codigoGerado, // Salva no banco
+                    expiracaoCodigo: validade,     // Salva a expiração
+                    status: 'Pendente', 
+                    dataRequisicao: new Date().toISOString() 
+                } 
+            }, 
+            { upsert: true }
+        );
+        
         res.json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro no servidor' }); }
+    } catch (error) { 
+        console.error("❌ Erro grave ao processar envio de código:", error);
+        res.status(500).json({ error: 'Erro interno ao tentar enviar o código.' }); 
+    }
 });
 
 app.post('/auth/validar-cadastro', async (req, res) => {
     let { email, codigo, pin } = req.body;
     email = email.toLowerCase().trim();
+    
     const database = await connectDB();
     const ativacao = await database.collection('ativacoes').findOne({ email: new RegExp(`^${email}$`, 'i') });
-    if (!ativacao || ativacao.pinAtivacao?.toUpperCase() !== pin.toUpperCase()) return res.status(401).json({ error: 'PIN incorreto.' });
-    if (codigosAtivos.get(email) !== codigo) return res.status(401).json({ error: 'Código inválido.' });
+    
+    if (!ativacao) return res.status(404).json({ error: 'Nenhuma solicitação encontrada para este e-mail.' });
+    
+    // 1. Verifica o PIN
+    if (ativacao.pinAtivacao?.toUpperCase() !== pin.toUpperCase()) {
+        return res.status(401).json({ error: 'PIN incorreto.' });
+    }
+    
+    // 2. Verifica se o código bate com o do banco
+    if (ativacao.codigoValidacao !== codigo) {
+        return res.status(401).json({ error: 'Código inválido.' });
+    }
+    
+    // 3. Verifica se o código expirou
+    if (new Date() > new Date(ativacao.expiracaoCodigo)) {
+         return res.status(401).json({ error: 'O código de verificação expirou. Solicite um novo.' });
+    }
 
-    const escolaId = 'ESC-' + Date.now().toString(36).toUpperCase();
-    const dataVencimento = new Date(); dataVencimento.setDate(dataVencimento.getDate() + 30);
+    // Pega o primeiro bloco de letras/números do UUID
+    const escolaId = 'ESC-' + crypto.randomUUID().split('-')[0].toUpperCase();
+    const dataVencimento = new Date(); 
+    dataVencimento.setDate(dataVencimento.getDate() + 30);
 
-    await database.collection('escola').updateOne({ email }, { $set: { escolaId, email, plano: ativacao.plano || 'Profissional', dataExpiracao: dataVencimento.toISOString() } }, { upsert: true });
+    await database.collection('escola').updateOne(
+        { email }, 
+        { $set: { escolaId, email, plano: ativacao.plano || 'Profissional', dataExpiracao: dataVencimento.toISOString() } }, 
+        { upsert: true }
+    );
+    
     const senhaHash = await bcrypt.hash("123", 10);
-    await database.collection('usuarios').insertOne({ id: Date.now().toString(), escolaId, login: email, senha: senhaHash, tipo: "Gestor", isDono: true });
+    
+    // 4. Limpa o código do banco para que não possa ser reusado
+    await database.collection('ativacoes').updateOne(
+        { email }, 
+        { $unset: { codigoValidacao: "", expiracaoCodigo: "" } }
+    );
+
+    await database.collection('usuarios').insertOne({ id: crypto.randomUUID(), escolaId, login: email, senha: senhaHash, tipo: "Gestor", isDono: true });
+    
     res.json({ success: true });
 });
 
@@ -398,9 +496,17 @@ app.post('/master/login', (req, res) => {
 
 app.post('/master/gerar-pin', verifyMaster, async (req, res) => {
     const { email, plano } = req.body;
-    const pin = 'PRO-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+    
+    // Gera 3 bytes aleatórios seguros e os transforma em Hexadecimal (ex: A4F9C2)
+    const codigoSeguro = crypto.randomBytes(3).toString('hex').toUpperCase();
+    const pin = 'PRO-' + codigoSeguro;
+    
     const database = await connectDB();
-    await database.collection('ativacoes').updateOne({ email: email.toLowerCase() }, { $set: { email: email.toLowerCase(), pinAtivacao: pin, status: 'Pendente', plano } }, { upsert: true });
+    await database.collection('ativacoes').updateOne(
+        { email: email.toLowerCase() }, 
+        { $set: { email: email.toLowerCase(), pinAtivacao: pin, status: 'Pendente', plano } }, 
+        { upsert: true }
+    );
     res.json({ success: true, pin });
 });
 
@@ -604,7 +710,7 @@ app.post('/usuarios', async (req, res) => {
     const database = await connectDB();
     const { senha, ...body } = req.body;
     
-    const novoUsuario = { ...body, id: Date.now().toString(), escolaId: req.escolaId };
+    const novoUsuario = { ...body, id: crypto.randomUUID(), escolaId: req.escolaId };
     
     // Criptografa a senha do novo membro da equipe
     if (senha) {
@@ -660,7 +766,7 @@ app.get('/:collection/:id', async (req, res) => {
 app.post('/:collection', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
     const database = await connectDB();
-    const body = { ...req.body, id: Date.now().toString(), escolaId: req.escolaId };
+    const body = { ...req.body, id: crypto.randomUUID(), escolaId: req.escolaId }; 
     await database.collection(req.params.collection).insertOne(body);
     res.json(body);
 });
@@ -678,6 +784,26 @@ app.delete('/:collection/:id', async (req, res) => {
     res.json({ success: true });
 });
 
+// =========================================================
+// ⏰ CRON JOB: PREVENIR HIBERNAÇÃO (RENDER FREE TIER)
+// =========================================================
+// O Render "adormece" a API após 15 minutos. 
+// Este script faz uma chamada na rota raiz a cada 10 minutos para mantê-la acordada.
+
+cron.schedule('*/10 * * * *', async () => {
+    try {
+        // A URL raiz '/' que criamos lá em cima retorna { status: "online" }
+        const url = 'https://sistema-escolar-api-k3o8.onrender.com/'; 
+        
+        // Fazemos a requisição (usando o fetch nativo do Node 18+)
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        console.log(`⏰ [CRON] Ping automático: A API está ${data.status} às ${new Date().toLocaleTimeString('pt-BR')}`);
+    } catch (error) {
+        console.error("❌ [CRON] Erro no Ping automático:", error.message);
+    }
+});
 
 // =========================================================
 // 🚀 INICIALIZAÇÃO & CRON
