@@ -169,6 +169,32 @@ app.use((req, res, next) => {
 // 📄 ÁREA PÚBLICA (Matrículas Externas Automáticas)
 // =========================================================
 
+// 🚀 NOVA ROTA: Fornece o layout dinâmico para o matricula.html
+app.get('/public/escola/:id', async (req, res) => {
+    try {
+        const escolaId = req.params.id;
+        const database = await connectDB();
+        
+        // Busca a escola no banco
+        const escola = await database.collection('escola').findOne({ escolaId: escolaId });
+        
+        if (!escola) {
+            return res.status(404).json({ error: 'Escola não encontrada.' });
+        }
+
+        // 🛡️ SEGURANÇA: Retorna APENAS o objeto configMatricula
+        // Nunca envie o objeto 'escola' inteiro aqui, pois isso vazaria e-mails e planos!
+        res.status(200).json({
+            escolaId: escola.escolaId,
+            configMatricula: escola.configMatricula || null
+        });
+
+    } catch (error) {
+        console.error("❌ Erro ao buscar dados públicos da escola:", error);
+        res.status(500).json({ error: 'Erro interno ao carregar a página de matrícula.' });
+    }
+});
+
 app.post('/public/receber-matricula', async (req, res) => {
     try {
         const { escolaId, ...dadosAluno } = req.body;
