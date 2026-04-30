@@ -207,8 +207,7 @@ app.post('/public/receber-matricula', async (req, res) => {
 
         const database = await connectDB();
 
-        // 🛡️ BLINDAGEM CONTRA INJEÇÃO DE DADOS (Mass Assignment)
-        // Extraímos e limpamos apenas os campos que o aluno tem permissão para enviar
+       // 🛡️ BLINDAGEM CONTRA INJEÇÃO DE DADOS (Mass Assignment)
         const dadosPermitidos = {
             nome: dadosBrutos.nome || '',
             whatsapp: dadosBrutos.whatsapp || '',
@@ -228,6 +227,9 @@ app.post('/public/receber-matricula', async (req, res) => {
             pais: dadosBrutos.pais || 'Brasil',
             curso: dadosBrutos.curso || 'A definir',
             turma: dadosBrutos.turma || 'A definir',
+            
+            // 🪄 NOVA LINHA: O Radar de Campanhas (Guarda a origem do aluno)
+            refLink: dadosBrutos.refLink || 'Direto',
             
             // Dados do responsável legal (se aplicável)
             resp_nome: dadosBrutos.resp_nome || null,
