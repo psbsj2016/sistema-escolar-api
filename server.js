@@ -235,7 +235,7 @@ app.post('/public/receber-matricula', async (req, res) => {
             resp_nome: dadosBrutos.resp_nome || null,
             resp_parentesco: dadosBrutos.resp_parentesco || null,
             resp_cpf: dadosBrutos.resp_cpf || null,
-            resp_zap: dadosBrutos.resp_zap || null
+            resp_zap: dadosBrutos.resp_zap || null,
             conteudoHTML: dadosBrutos.conteudoHTML || '<p>Contrato não gerado.</p>'
         };
 
