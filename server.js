@@ -236,6 +236,7 @@ app.post('/public/receber-matricula', async (req, res) => {
             resp_parentesco: dadosBrutos.resp_parentesco || null,
             resp_cpf: dadosBrutos.resp_cpf || null,
             resp_zap: dadosBrutos.resp_zap || null
+            conteudoHTML: dadosBrutos.conteudoHTML || '<p>Contrato não gerado.</p>'
         };
 
         const idAlunoGerado = crypto.randomUUID(); // Muito mais seguro que Date.now()
@@ -260,7 +261,8 @@ app.post('/public/receber-matricula', async (req, res) => {
             escolaId: escolaId,
             idAluno: idAlunoGerado,
             nomeAluno: dadosPermitidos.nome || 'Nome não informado',
-            dadosCompletos: dadosPermitidos, // Agora guarda apenas os dados blindados
+            
+            conteudoHTML: dadosPermitidos.conteudoHTML,
             dataHoraRegistro: carimboDeTempo,
             tipoDocumento: 'Termo de Matrícula Digital'
         };
