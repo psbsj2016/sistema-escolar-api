@@ -107,21 +107,12 @@ app.use('/master/login', authLimiter); // 🛡️ ADICIONE ESTA LINHA! Agora rob
 // 🧹 SANITIZAÇÃO XSS
 // =========================================================
 const sanitizeString = (str) => (typeof str !== 'string' ? str : str.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
-// =========================================================
-// 🧹 SANITIZAÇÃO XSS
-// =========================================================
-const sanitizeString = (str) => (typeof str !== 'string' ? str : str.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
 const sanitizeObject = (obj) => {
     if (typeof obj !== 'object' || obj === null) return sanitizeString(obj);
     if (Array.isArray(obj)) return obj.map(sanitizeObject);
     const sanitized = {};
     for (const [key, value] of Object.entries(obj)) {
-        // 🛡️ EXCEÇÃO: Não sanitizar campos de senha ou o conteúdo HTML do contrato
-        if (['senha', 'pin', 'novaSenha', 'conteudoHTML'].includes(key)) {
-            sanitized[key] = value; 
-        } else {
-            sanitized[key] = sanitizeObject(value);
-        }
+        sanitized[key] = (['senha', 'pin', 'novaSenha'].includes(key)) ? value : sanitizeObject(value);
     }
     return sanitized;
 };
