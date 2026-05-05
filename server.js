@@ -269,12 +269,14 @@ app.post('/public/receber-matricula', async (req, res) => {
     cpf: dadosPermitidos.cpf || 'Não informado',
     rg: dadosPermitidos.rg || 'Não informado',
     nascimento: dadosPermitidos.nascimento || 'Não informado',
+    responsavel: dadosPermitidos.resp_nome || 'Não informado',
     whatsapp: dadosPermitidos.whatsapp || 'Não informado',
     email: dadosPermitidos.email || 'Não informado',
     planoCurso: dadosPermitidos.planoCurso || 'Não informado',
     diaVencimento: dadosPermitidos.diaVencimento || 'Não informado',
     enderecoCompleto: enderecoFormatado,
-    
+        
+
     conteudoHTML: dadosPermitidos.conteudoHTML,
     dataHoraRegistro: carimboDeTempo,
     tipoDocumento: 'Termo de Matrícula Digital'
