@@ -266,6 +266,7 @@ app.post('/public/receber-matricula', async (req, res) => {
     nomeAluno: dadosPermitidos.nome || 'Nome não informado',
     
     // CAMPOS QUE ESTAVAM EM FALTA:
+    cpf: dadosPermitidos.cpf || 'Não informado',
     rg: dadosPermitidos.rg || 'Não informado',
     nascimento: dadosPermitidos.nascimento || 'Não informado',
     whatsapp: dadosPermitidos.whatsapp || 'Não informado',
