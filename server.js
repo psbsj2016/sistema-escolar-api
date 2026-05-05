@@ -253,7 +253,7 @@ app.post('/public/receber-matricula', async (req, res) => {
         await database.collection('alunos').insertOne(novoAluno);
         
         // =======================================================
-        // 🔒 INÍCIO DO COFRE DE CONTRATOS
+        // 🔒 INÍCIO DO COFRE DE CONTRATOS (VERSÃO ENRIQUECIDA)
         // =======================================================
         const carimboDeTempo = new Date().toISOString();
         const novoContrato = {
@@ -262,10 +262,24 @@ app.post('/public/receber-matricula', async (req, res) => {
             idAluno: idAlunoGerado,
             nomeAluno: dadosPermitidos.nome || 'Nome não informado',
             
+            // 🚀 ESTES SÃO OS DADOS QUE O SEU HUB DE CONTRATOS PRECISA PARA NÃO EXIBIR "NÃO INFORMADO"
+            cpf: dadosPermitidos.cpf || 'Não informado',
+            whatsapp: dadosPermitidos.whatsapp || 'Não informado',
+            email: dadosPermitidos.email || 'Não informado',
+            curso: dadosPermitidos.curso || 'A definir',
+            turma: dadosPermitidos.turma || 'A definir',
+            planoCurso: dadosPermitidos.planoCurso || 'Não informado',
+            diaVencimento: dadosPermitidos.diaVencimento || 'Não informado',
+            
+            // Dados do responsável (para exibir na ficha caso o aluno seja menor)
+            resp_nome: dadosPermitidos.resp_nome || 'N/A',
+            resp_cpf: dadosPermitidos.resp_cpf || 'N/A',
+
             conteudoHTML: dadosPermitidos.conteudoHTML,
             dataHoraRegistro: carimboDeTempo,
             tipoDocumento: 'Termo de Matrícula Digital'
         };
+
         await database.collection('contratos').insertOne(novoContrato);
         // =======================================================
 
