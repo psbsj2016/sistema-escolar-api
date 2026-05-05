@@ -256,29 +256,28 @@ app.post('/public/receber-matricula', async (req, res) => {
         // 🔒 INÍCIO DO COFRE DE CONTRATOS (VERSÃO ENRIQUECIDA)
         // =======================================================
         const carimboDeTempo = new Date().toISOString();
-        const novoContrato = {
-            id: "DOC_" + crypto.randomUUID(),
-            escolaId: escolaId,
-            idAluno: idAlunoGerado,
-            nomeAluno: dadosPermitidos.nome || 'Nome não informado',
-            
-            // 🚀 ESTES SÃO OS DADOS QUE O SEU HUB DE CONTRATOS PRECISA PARA NÃO EXIBIR "NÃO INFORMADO"
-            cpf: dadosPermitidos.cpf || 'Não informado',
-            whatsapp: dadosPermitidos.whatsapp || 'Não informado',
-            email: dadosPermitidos.email || 'Não informado',
-            curso: dadosPermitidos.curso || 'A definir',
-            turma: dadosPermitidos.turma || 'A definir',
-            planoCurso: dadosPermitidos.planoCurso || 'Não informado',
-            diaVencimento: dadosPermitidos.diaVencimento || 'Não informado',
-            
-            // Dados do responsável (para exibir na ficha caso o aluno seja menor)
-            resp_nome: dadosPermitidos.resp_nome || 'N/A',
-            resp_cpf: dadosPermitidos.resp_cpf || 'N/A',
+        // --- SUBSTITUA O BLOCO 'const novoContrato = { ... }' POR ESTE ---
+        const enderecoFormatado = `${dadosPermitidos.rua || ''}, ${dadosPermitidos.numero || ''} - ${dadosPermitidos.bairro || ''}, ${dadosPermitidos.cidade || ''}`;
 
-            conteudoHTML: dadosPermitidos.conteudoHTML,
-            dataHoraRegistro: carimboDeTempo,
-            tipoDocumento: 'Termo de Matrícula Digital'
-        };
+    const novoContrato = {
+    id: "DOC_" + crypto.randomUUID(),
+    escolaId: escolaId,
+    idAluno: idAlunoGerado,
+    nomeAluno: dadosPermitidos.nome || 'Nome não informado',
+    
+    // CAMPOS QUE ESTAVAM EM FALTA:
+    rg: dadosPermitidos.rg || 'Não informado',
+    nascimento: dadosPermitidos.nascimento || 'Não informado',
+    whatsapp: dadosPermitidos.whatsapp || 'Não informado',
+    email: dadosPermitidos.email || 'Não informado',
+    planoCurso: dadosPermitidos.planoCurso || 'Não informado',
+    diaVencimento: dadosPermitidos.diaVencimento || 'Não informado',
+    enderecoCompleto: enderecoFormatado,
+    
+    conteudoHTML: dadosPermitidos.conteudoHTML,
+    dataHoraRegistro: carimboDeTempo,
+    tipoDocumento: 'Termo de Matrícula Digital'
+    };
 
         await database.collection('contratos').insertOne(novoContrato);
         // =======================================================
