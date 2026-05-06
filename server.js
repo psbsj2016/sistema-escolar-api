@@ -256,8 +256,8 @@ app.post('/public/receber-matricula', async (req, res) => {
         // 🔒 INÍCIO DO COFRE DE CONTRATOS (VERSÃO ENRIQUECIDA)
         // =======================================================
         const carimboDeTempo = new Date().toISOString();
-        // --- SUBSTITUA O BLOCO 'const novoContrato = { ... }' POR ESTE ---
-        const enderecoFormatado = `${dadosPermitidos.rua || ''}, ${dadosPermitidos.numero || ''} - ${dadosPermitidos.bairro || ''}, ${dadosPermitidos.cidade || ''}`;
+        // --- SUBSTITUA TODO O BLOCO const novoContrato = { ... }; POR ESTE ---
+        const enderecoFormatado = `${dadosPermitidos.rua || ''}, ${dadosPermitidos.numero || ''} - ${dadosPermitidos.bairro || ''}, ${dadosPermitidos.cidade || ''} - ${dadosPermitidos.estado || ''}, ${dadosPermitidos.pais || 'Brasil'}`;
 
     const novoContrato = {
     id: "DOC_" + crypto.randomUUID(),
@@ -265,25 +265,34 @@ app.post('/public/receber-matricula', async (req, res) => {
     idAluno: idAlunoGerado,
     nomeAluno: dadosPermitidos.nome || 'Nome não informado',
     
-    // CAMPOS QUE ESTAVAM EM FALTA:
+    // DADOS PESSOAIS
     cpf: dadosPermitidos.cpf || 'Não informado',
     rg: dadosPermitidos.rg || 'Não informado',
     nascimento: dadosPermitidos.nascimento || 'Não informado',
-    resp_nome: dadosPermitidos.resp_nome || 'Não informado',
+    sexo: dadosPermitidos.sexo || 'Não informado',
+    profissao: dadosPermitidos.profissao || 'Não informada',
+    
+    // CONTATOS E ENDEREÇO
+    whatsapp: dadosPermitidos.whatsapp || 'Não informado',
+    email: dadosPermitidos.email || 'Não informado',
+    enderecoCompleto: enderecoFormatado,
+    
+    // DADOS ACADÉMICOS E FINANCEIROS
+    curso: dadosPermitidos.curso || 'Não informado',
+    turma: dadosPermitidos.turma || 'Não informada',
+    planoCurso: dadosPermitidos.planoCurso || 'Não informado',
+    diaVencimento: dadosPermitidos.diaVencimento || 'Não informado',
+    
+    // DADOS DO RESPONSÁVEL
+    resp_nome: dadosPermitidos.resp_nome || 'O Próprio / Não informado',
     resp_parentesco: dadosPermitidos.resp_parentesco || 'Não informado',
     resp_cpf: dadosPermitidos.resp_cpf || 'Não informado',
     resp_zap: dadosPermitidos.resp_zap || 'Não informado',
-    whatsapp: dadosPermitidos.whatsapp || 'Não informado',
-    email: dadosPermitidos.email || 'Não informado',
-    planoCurso: dadosPermitidos.planoCurso || 'Não informado',
-    diaVencimento: dadosPermitidos.diaVencimento || 'Não informado',
-    enderecoCompleto: enderecoFormatado,
-        
 
     conteudoHTML: dadosPermitidos.conteudoHTML,
     dataHoraRegistro: carimboDeTempo,
     tipoDocumento: 'Termo de Matrícula Digital'
-    };
+  };
 
         await database.collection('contratos').insertOne(novoContrato);
         // =======================================================
