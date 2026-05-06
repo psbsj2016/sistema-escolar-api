@@ -324,7 +324,7 @@ app.post('/auth/enviar-codigo', async (req, res) => {
 
     try {
         const { data, error } = await resend.emails.send({
-            from: 'Sistema Escolar <nao-responda@sistemaptt.com.br>',
+            from: 'Sistema PTT <não responda @sistemaptt.com.br>',
             to: email, 
             subject: '🔐 Seu Código de Acesso',
             html: `
