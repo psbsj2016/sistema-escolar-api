@@ -23,6 +23,7 @@ app.set('trust proxy', 1);
 const JWT_SECRET = process.env.JWT_SECRET;
 const uri = process.env.MONGODB_URI; 
 const SENHA_DONO = process.env.SENHA_DONO;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://www.sistemaptt.com.br';
 
 if (!JWT_SECRET || !uri) {
     console.error("❌ ERRO FATAL DE SEGURANÇA: JWT_SECRET ou MONGODB_URI ausentes!");
@@ -424,81 +425,180 @@ app.post('/auth/login', async (req, res) => {
 });
 
 // =========================================================
-// ROTA: Recuperação de Senha (Apenas usuários ativos)
+// ROTA: Recuperação de Senha por Link Temporário
 // =========================================================
-app.post('/auth/recuperar-senha', async (req, res) => {
+app.post('/auth/recuperar-senha', authLimiter, async (req, res) => {
     try {
         let { email } = req.body;
-        
+
         if (!email) {
-            return res.status(400).json({ success: false, error: "Por favor, informe um e-mail válido." });
+            return res.status(400).json({
+                success: false,
+                error: "Por favor, informe um e-mail válido."
+            });
         }
-        
+
         email = email.toLowerCase().trim();
         const database = await connectDB();
 
-        // 1. Busca o usuário pelo campo "login" (ou "email", por segurança)
-        const user = await database.collection('usuarios').findOne({ 
+        const user = await database.collection('usuarios').findOne({
             $or: [
                 { login: new RegExp(`^${email}$`, 'i') },
                 { email: new RegExp(`^${email}$`, 'i') }
             ]
         });
 
-        // 2. Se não existir na base de dados
-        if (!user) {
-            return res.status(404).json({ 
-                success: false, 
-                error: "Este e-mail não está cadastrado no sistema." 
+        /*
+          Importante:
+          Mesmo se o e-mail não existir, respondemos sucesso.
+          Isso evita que alguém use a tela para descobrir quais e-mails existem no sistema.
+        */
+        if (!user || (user.status && user.status.toLowerCase() === 'inativo')) {
+            return res.status(200).json({
+                success: true,
+                message: "Se este e-mail estiver cadastrado, enviaremos um link de redefinição."
             });
         }
 
-        // 3. Se existir, mas estiver Inativo
-        if (user.status && user.status.toLowerCase() === 'inativo') {
-            return res.status(403).json({ 
-                success: false, 
-                error: "Esta conta encontra-se inativa. Por favor, contacte a administração." 
-            });
-        }
+        const tokenLimpo = crypto.randomBytes(32).toString('hex');
+        const tokenHash = crypto
+            .createHash('sha256')
+            .update(tokenLimpo)
+            .digest('hex');
 
-        // 4. Gera uma nova senha temporária de 6 dígitos numéricos
-        const novaSenhaTemp = Math.floor(100000 + Math.random() * 900000).toString();
-        
-        // 5. Criptografa a nova senha para manter a segurança do banco
-        const senhaHash = await bcrypt.hash(novaSenhaTemp, 10);
+        const expiraEm = new Date(Date.now() + 30 * 60 * 1000); // 30 minutos
 
-        // 6. Atualiza a senha do usuário no banco de dados
-        await database.collection('usuarios').updateOne(
-            { id: user.id }, 
-            { $set: { senha: senhaHash } }
-        );
+        await database.collection('password_resets').deleteMany({
+            userId: user.id
+        });
 
-        // 7. Envia o e-mail utilizando o Resend (que já está configurado no seu server.js)
-        await resend.emails.send({
+        await database.collection('password_resets').insertOne({
+            userId: user.id,
+            escolaId: user.escolaId,
+            email,
+            tokenHash,
+            expiraEm,
+            usado: false,
+            criadoEm: new Date()
+        });
+
+        const linkRedefinicao = `${FRONTEND_URL}/index.html?reset=${tokenLimpo}`;
+
+        const { error } = await resend.emails.send({
             from: 'Sistema Escolar <nao-responda@sistemaptt.com.br>',
             to: email,
-            subject: '🔐 Recuperação de Senha',
+            subject: '🔐 Redefinição de Senha',
             html: `
-                <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; color: #333;">
-                    <h2>Recuperação de Senha</h2>
-                    <p>Olá! Você solicitou a recuperação da sua senha no sistema da PTT Cursos.</p>
-                    <p>Sua nova senha temporária é:</p>
-                    <h1 style="color: #3498db; letter-spacing: 5px; background: #f4f6f7; padding: 15px; border-radius: 8px; display: inline-block;">${novaSenhaTemp}</h1>
-                    <p style="margin-top: 20px;">Recomendamos fortemente que você altere esta senha assim que fizer login no sistema, acessando a aba <strong>"Minha Conta"</strong>.</p>
+                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                    <h2>Redefinição de Senha</h2>
+                    <p>Recebemos uma solicitação para redefinir a sua senha.</p>
+                    <p>Clique no botão abaixo para criar uma nova senha. Este link expira em 30 minutos.</p>
+
+                    <p style="margin: 30px 0;">
+                        <a href="${linkRedefinicao}" style="background:#3498db; color:#ffffff; padding:14px 22px; border-radius:8px; text-decoration:none; font-weight:bold; display:inline-block;">
+                            Redefinir minha senha
+                        </a>
+                    </p>
+
+                    <p style="font-size:13px; color:#777;">
+                        Se você não solicitou esta alteração, ignore este e-mail.
+                    </p>
                 </div>
             `
         });
 
-        return res.status(200).json({ 
-            success: true, 
-            message: "Uma nova senha temporária foi enviada para o seu e-mail com sucesso!" 
+        if (error) {
+            console.error("Erro Resend recuperação:", error);
+            return res.status(500).json({
+                success: false,
+                error: "Erro ao enviar o e-mail de recuperação."
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Se este e-mail estiver cadastrado, enviaremos um link de redefinição."
         });
 
     } catch (erro) {
-        console.error("Erro ao recuperar senha:", erro);
-        return res.status(500).json({ 
-            success: false, 
-            error: "Erro interno no servidor. Tente novamente mais tarde." 
+        console.error("Erro ao solicitar recuperação:", erro);
+        return res.status(500).json({
+            success: false,
+            error: "Erro interno no servidor. Tente novamente mais tarde."
+        });
+    }
+});
+
+app.post('/auth/redefinir-senha', authLimiter, async (req, res) => {
+    try {
+        const { token, novaSenha } = req.body;
+
+        if (!token || !novaSenha) {
+            return res.status(400).json({
+                success: false,
+                error: "Token e nova senha são obrigatórios."
+            });
+        }
+
+        if (String(novaSenha).length < 6) {
+            return res.status(400).json({
+                success: false,
+                error: "A nova senha deve ter pelo menos 6 caracteres."
+            });
+        }
+
+        const tokenHash = crypto
+            .createHash('sha256')
+            .update(token)
+            .digest('hex');
+
+        const database = await connectDB();
+
+        const reset = await database.collection('password_resets').findOne({
+            tokenHash,
+            usado: false,
+            expiraEm: { $gt: new Date() }
+        });
+
+        if (!reset) {
+            return res.status(401).json({
+                success: false,
+                error: "Link inválido ou expirado. Solicite uma nova recuperação."
+            });
+        }
+
+        const senhaHash = await bcrypt.hash(novaSenha, 10);
+
+        await database.collection('usuarios').updateOne(
+            { id: reset.userId, escolaId: reset.escolaId },
+            { $set: { senha: senhaHash } }
+        );
+
+        await database.collection('password_resets').updateOne(
+            { _id: reset._id },
+            {
+                $set: {
+                    usado: true,
+                    usadoEm: new Date()
+                }
+            }
+        );
+
+        await database.collection('password_resets').deleteMany({
+            userId: reset.userId,
+            usado: false
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: "Senha redefinida com sucesso."
+        });
+
+    } catch (erro) {
+        console.error("Erro ao redefinir senha:", erro);
+        return res.status(500).json({
+            success: false,
+            error: "Erro interno ao redefinir senha."
         });
     }
 });
