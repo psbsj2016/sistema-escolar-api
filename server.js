@@ -107,7 +107,26 @@ app.use('/master/login', authLimiter); // 🛡️ ADICIONE ESTA LINHA! Agora rob
 // =========================================================
 // 🧹 SANITIZAÇÃO XSS
 // =========================================================
-const sanitizeString = (str) => (typeof str !== 'string' ? str : str.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+const sanitizeString = (str) => {
+    if (typeof str !== 'string') return str;
+
+    return str
+        .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+        .replace(/javascript:/gi, '')
+        .replace(/onerror\s*=/gi, '')
+        .replace(/onclick\s*=/gi, '')
+        .replace(/onload\s*=/gi, '')
+        .replace(/onmouseover\s*=/gi, '')
+        .replace(/<iframe[\s\S]*?>[\s\S]*?<\/iframe>/gi, '')
+        .replace(/<object[\s\S]*?>[\s\S]*?<\/object>/gi, '')
+        .replace(/<embed[\s\S]*?>[\s\S]*?<\/embed>/gi, '')
+        .replace(/<link[\s\S]*?>/gi, '')
+        .replace(/<meta[\s\S]*?>/gi, '')
+        .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
+        .replace(/expression\s*\(/gi, '')
+        .trim();
+};
+
 const sanitizeObject = (obj) => {
     if (typeof obj !== 'object' || obj === null) return sanitizeString(obj);
     if (Array.isArray(obj)) return obj.map(sanitizeObject);
@@ -237,7 +256,7 @@ app.post('/public/receber-matricula', async (req, res) => {
             resp_parentesco: dadosBrutos.resp_parentesco || null,
             resp_cpf: dadosBrutos.resp_cpf || null,
             resp_zap: dadosBrutos.resp_zap || null,
-            conteudoHTML: dadosBrutos.conteudoHTML || '<p>Contrato não gerado.</p>'
+            conteudoHTML: sanitizeString(dadosBrutos.conteudoHTML || '<p>Contrato não gerado.</p>')
         };
 
         const idAlunoGerado = crypto.randomUUID(); // Muito mais seguro que Date.now()
