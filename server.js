@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const mongoSanitize = require('express-mongo-sanitize');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -73,6 +74,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '10mb' })); 
+app.use(cookieParser());
 app.use(mongoSanitize());
 
 // =========================================================
@@ -175,9 +177,13 @@ app.use((req, res, next) => {
     // Adicionamos a liberação para rotas que começam com '/public/'
     if (req.path === '/' || req.path.startsWith('/auth/') || req.path.startsWith('/master/') || req.path.startsWith('/public/')) return next();
     
-    const authHeader = req.headers['authorization'];
-    if (!authHeader) return res.status(403).json({ error: 'Token não fornecido.' });
-    const token = authHeader.split(' ')[1]; 
+   const token = req.cookies.token_acesso;
+
+if (!token) {
+    return res.status(403).json({
+        error: 'Sessão não encontrada.'
+    });
+}
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
         if (err) return res.status(401).json({ error: 'Sessão expirada.' });
         req.userId = decoded.id; 
@@ -327,6 +333,23 @@ app.post('/public/receber-matricula', async (req, res) => {
 });
 
 // =========================================================
+// 🔓 LOGOUT SEGURO
+// =========================================================
+app.post('/auth/logout', (req, res) => {
+
+    res.clearCookie('token_acesso', {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'None',
+        path: '/'
+    });
+
+    res.json({
+        success: true
+    });
+});
+
+// =========================================================
 // 📩 AUTH & CADASTRO
 // =========================================================
 // Removemos o 'const codigosAtivos = new Map();'
@@ -439,9 +462,30 @@ app.post('/auth/login', async (req, res) => {
     const user = await database.collection('usuarios').findOne({ login: new RegExp(`^${login.replace('*FORCAR','')}$`, 'i') });
     if (!user || !(await bcrypt.compare(senha, user.senha))) return res.status(401).json({ error: 'Credenciais inválidas.' });
     
-    const token = jwt.sign({ id: user.id, tipo: user.tipo, escolaId: user.escolaId }, JWT_SECRET, { expiresIn: '12h' });
-    res.json({ success: true, usuario: user, token });
+    const token = jwt.sign(
+    {
+        id: user.id,
+        tipo: user.tipo,
+        escolaId: user.escolaId
+    },
+    JWT_SECRET,
+    { expiresIn: '12h' }
+);
+
+// 🍪 COOKIE HTTPONLY SUPER SEGURO
+res.cookie('token_acesso', token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'None',
+    maxAge: 12 * 60 * 60 * 1000, // 12 horas
+    path: '/'
 });
+
+res.json({
+    success: true,
+    usuario: user
+});
+
 
 // =========================================================
 // ROTA: Recuperação de Senha por Link Temporário
