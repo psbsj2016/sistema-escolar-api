@@ -485,7 +485,7 @@ res.json({
     success: true,
     usuario: user
 });
-
+});
 
 // =========================================================
 // ROTA: Recuperação de Senha por Link Temporário
