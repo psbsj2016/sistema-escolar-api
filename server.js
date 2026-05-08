@@ -340,7 +340,7 @@ app.post('/auth/logout', (req, res) => {
     res.clearCookie('token_acesso', {
         httpOnly: true,
         secure: true,
-        sameSite: 'None',
+        sameSite: 'Lax',
         path: '/'
     });
 
@@ -476,7 +476,8 @@ app.post('/auth/login', async (req, res) => {
 res.cookie('token_acesso', token, {
     httpOnly: true,
     secure: true,
-    sameSite: 'None',
+    sameSite: 'Lax',
+    domain: '.sistemaptt.com.br',
     maxAge: 12 * 60 * 60 * 1000, // 12 horas
     path: '/'
 });
