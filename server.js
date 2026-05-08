@@ -976,10 +976,28 @@ app.post('/:collection', async (req, res) => {
 });
 
 app.put('/:collection/:id', async (req, res) => {
+    if (!COLECOES_OK.includes(req.params.collection)) {
+        return res.status(403).json({ error: 'Coleção não permitida.' });
+    }
+
     const database = await connectDB();
-    const { _id, ...body } = req.body;
-    await database.collection(req.params.collection).updateOne({ id: req.params.id, escolaId: req.escolaId }, { $set: body });
-    res.json(body);
+    const { _id, escolaId, ...body } = req.body;
+
+    const resultado = await database.collection(req.params.collection).updateOne(
+        { id: req.params.id, escolaId: req.escolaId },
+        { $set: body }
+    );
+
+    if (resultado.matchedCount === 0) {
+        return res.status(404).json({ error: 'Registro não encontrado para atualização.' });
+    }
+
+    res.json({
+        success: true,
+        matchedCount: resultado.matchedCount,
+        modifiedCount: resultado.modifiedCount,
+        ...body
+    });
 });
 
 app.delete('/:collection/:id', async (req, res) => {
