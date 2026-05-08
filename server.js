@@ -321,11 +321,27 @@ app.post('/public/receber-matricula', async (req, res) => {
   };
 
         await database.collection('contratos').insertOne(novoContrato);
-        // =======================================================
 
-        console.log(`✅ Novo aluno matriculado: ${dadosPermitidos.nome} (Escola: ${escolaId})`);
+// =======================================================
+// 🔔 NOTIFICAÇÃO OFICIAL PARA O SININHO
+// =======================================================
+await database.collection('notificacoes').insertOne({
+    id: "NOTI_" + crypto.randomUUID(),
+    escolaId: escolaId,
+    tipo: "matricula_contrato",
+    titulo: "Nova matrícula recebida",
+    mensagem: `${dadosPermitidos.nome || 'Novo aluno'} enviou uma matrícula online e o contrato digital foi gerado.`,
+    nomeAluno: dadosPermitidos.nome || '',
+    idAluno: idAlunoGerado,
+    idContrato: novoContrato.id,
+    refLink: dadosPermitidos.refLink || 'Direto',
+    lida: false,
+    dataCriacao: new Date().toISOString()
+});
 
-        res.status(200).json({ success: true, message: 'Matrícula ativada com sucesso!' });
+console.log(`✅ Novo aluno matriculado: ${dadosPermitidos.nome} (Escola: ${escolaId})`);
+
+res.status(200).json({ success: true, message: 'Matrícula ativada com sucesso!' });
     } catch (error) {
         console.error("❌ Erro ao salvar matrícula:", error);
         res.status(500).json({ error: 'Erro interno ao processar a matrícula.' });
@@ -942,7 +958,19 @@ app.delete('/usuarios/:id', async (req, res) => {
 // =========================================================
 // 🔄 CRUD DINÂMICO (NoSQL SAFE)
 // =========================================================
-const COLECOES_OK = ['alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoques', 'contratos'];
+const COLECOES_OK = [
+    'alunos',
+    'turmas',
+    'cursos',
+    'financeiro',
+    'eventos',
+    'chamadas',
+    'avaliacoes',
+    'planejamentos',
+    'estoques',
+    'contratos',
+    'notificacoes'
+];
 
 app.get('/:collection', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
