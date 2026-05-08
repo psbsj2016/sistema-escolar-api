@@ -341,22 +341,7 @@ await database.collection('notificacoes').insertOne({
 
 console.log(`✅ Novo aluno matriculado: ${dadosPermitidos.nome} (Escola: ${escolaId})`);
 
-        // =======================================================
-        // 🔔 GERAR NOTIFICAÇÃO PARA O SININHO
-        // =======================================================
-        const novaNotificacao = {
-            id: "NOTIF_" + crypto.randomUUID(),
-            escolaId: escolaId,
-            titulo: '🎉 Nova Matrícula!',
-            mensagem: `${dadosPermitidos.nome} acabou de garantir uma vaga.`,
-            tipo: 'matricula',
-            lida: false,
-            dataCriacao: new Date().toISOString(),
-            idAlunoReferencia: idAlunoGerado
-        };
-        await database.collection('notificacoes').insertOne(novaNotificacao);
-        // =======================================================
-
+        
 res.status(200).json({ success: true, message: 'Matrícula ativada com sucesso!' });
     } catch (error) {
         console.error("❌ Erro ao salvar matrícula:", error);
