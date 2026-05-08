@@ -341,6 +341,22 @@ await database.collection('notificacoes').insertOne({
 
 console.log(`✅ Novo aluno matriculado: ${dadosPermitidos.nome} (Escola: ${escolaId})`);
 
+        // =======================================================
+        // 🔔 GERAR NOTIFICAÇÃO PARA O SININHO
+        // =======================================================
+        const novaNotificacao = {
+            id: "NOTIF_" + crypto.randomUUID(),
+            escolaId: escolaId,
+            titulo: '🎉 Nova Matrícula!',
+            mensagem: `${dadosPermitidos.nome} acabou de garantir uma vaga.`,
+            tipo: 'matricula',
+            lida: false,
+            dataCriacao: new Date().toISOString(),
+            idAlunoReferencia: idAlunoGerado
+        };
+        await database.collection('notificacoes').insertOne(novaNotificacao);
+        // =======================================================
+
 res.status(200).json({ success: true, message: 'Matrícula ativada com sucesso!' });
     } catch (error) {
         console.error("❌ Erro ao salvar matrícula:", error);
@@ -972,6 +988,39 @@ const COLECOES_OK = [
     'contratos',
     'notificacoes'
 ];
+
+// =========================================================
+// 🔔 ROTAS DO SININHO (NOTIFICAÇÕES EM TEMPO REAL)
+// =========================================================
+
+// 1. Buscar apenas as não lidas (Otimizado para o Polling)
+app.get('/sistema/notificacoes/nao-lidas', async (req, res) => {
+    try {
+        const database = await connectDB();
+        const notificacoes = await database.collection('notificacoes')
+            .find({ escolaId: req.escolaId, lida: false })
+            .sort({ dataCriacao: -1 }) // As mais recentes primeiro
+            .toArray();
+            
+        res.json(notificacoes.map(({_id, ...rest}) => rest));
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao buscar notificações.' });
+    }
+});
+
+// 2. Marcar uma notificação como lida ao clicar
+app.put('/sistema/notificacoes/lida/:id', async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('notificacoes').updateOne(
+            { id: req.params.id, escolaId: req.escolaId },
+            { $set: { lida: true } }
+        );
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao marcar como lida.' });
+    }
+});
 
 app.get('/:collection', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
