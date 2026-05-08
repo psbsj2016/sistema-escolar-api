@@ -357,6 +357,7 @@ app.post('/auth/logout', (req, res) => {
         httpOnly: true,
         secure: true,
         sameSite: 'Lax',
+        domain: '.sistemaptt.com.br',
         path: '/'
     });
 
@@ -1029,8 +1030,21 @@ app.put('/:collection/:id', async (req, res) => {
 });
 
 app.delete('/:collection/:id', async (req, res) => {
+    if (!COLECOES_OK.includes(req.params.collection)) {
+        return res.status(403).json({ error: 'Coleção não permitida.' });
+    }
+
     const database = await connectDB();
-    await database.collection(req.params.collection).deleteOne({ id: req.params.id, escolaId: req.escolaId });
+
+    const resultado = await database.collection(req.params.collection).deleteOne({
+        id: req.params.id,
+        escolaId: req.escolaId
+    });
+
+    if (resultado.deletedCount === 0) {
+        return res.status(404).json({ error: 'Registro não encontrado para exclusão.' });
+    }
+
     res.json({ success: true });
 });
 
