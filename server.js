@@ -342,7 +342,12 @@ await database.collection('notificacoes').insertOne({
 console.log(`✅ Novo aluno matriculado: ${dadosPermitidos.nome} (Escola: ${escolaId})`);
 
         
-res.status(200).json({ success: true, message: 'Matrícula ativada com sucesso!' });
+res.status(200).json({
+    success: true,
+    message: 'Matrícula ativada com sucesso!',
+    alunoId: idAlunoGerado,
+    contratoId: novoContrato.id
+});
     } catch (error) {
         console.error("❌ Erro ao salvar matrícula:", error);
         res.status(500).json({ error: 'Erro interno ao processar a matrícula.' });
