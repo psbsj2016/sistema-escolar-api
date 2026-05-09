@@ -493,10 +493,13 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     
     const senhaHash = await bcrypt.hash("123", 10);
     
-    // 4. Limpa o código do banco para que não possa ser reusado
+    // 4. Limpa o código do banco e altera o status para Verificado
     await database.collection('ativacoes').updateOne(
         { email }, 
-        { $unset: { codigoValidacao: "", expiracaoCodigo: "" } }
+        { 
+            $unset: { codigoValidacao: "", expiracaoCodigo: "" },
+            $set: { status: 'Verificado' } // 🚀 MUDA O STATUS AQUI
+        }
     );
 
     await database.collection('usuarios').insertOne({ id: crypto.randomUUID(), escolaId, login: email, senha: senhaHash, tipo: "Gestor", isDono: true });
@@ -764,7 +767,6 @@ app.get('/master/ativacoes', verifyMaster, async (req, res) => {
         const escolas = await database.collection('escola').find({}).toArray();
         const usuarios = await database.collection('usuarios').find({ isDono: true }).toArray();
 
-        // Usamos um Mapa para juntar todo mundo e não repetir e-mails na sua tela
         const mapaContas = new Map();
 
         // 1. Pega quem tem licença
@@ -772,17 +774,28 @@ app.get('/master/ativacoes', verifyMaster, async (req, res) => {
             if(a.email) mapaContas.set(a.email.toLowerCase(), { ...a, _id: undefined });
         });
 
-        // 2. Pega quem tem escola cadastrada (mas sumiu da licença)
+        // 2. Pega quem tem escola cadastrada (cruza os dados)
         escolas.forEach(e => {
-            if (e.email && !mapaContas.has(e.email.toLowerCase())) {
-                mapaContas.set(e.email.toLowerCase(), { email: e.email, plano: e.plano || 'Desconhecido', status: 'Desconectado', pinAtivacao: 'FANTASMA 👻' });
+            if (e.email) {
+                const emailLower = e.email.toLowerCase();
+                if (mapaContas.has(emailLower)) {
+                    // 🚀 Se a escola já existe no sistema, FORÇA o status para Verificado
+                    let conta = mapaContas.get(emailLower);
+                    if(conta.status !== 'Bloqueado') { 
+                        conta.status = 'Verificado'; 
+                    }
+                    conta.plano = e.plano || conta.plano; // Puxa o plano real
+                    mapaContas.set(emailLower, conta);
+                } else {
+                    mapaContas.set(emailLower, { email: e.email, plano: e.plano || 'Desconhecido', status: 'Verificado', pinAtivacao: 'FANTASMA 👻' });
+                }
             }
         });
 
-        // 3. Pega quem fez usuário de login (mas sumiu do resto)
+        // 3. Pega quem fez usuário de login
         usuarios.forEach(u => {
             if (u.login && !mapaContas.has(u.login.toLowerCase())) {
-                mapaContas.set(u.login.toLowerCase(), { email: u.login, plano: 'Desconhecido', status: 'Desconectado', pinAtivacao: 'FANTASMA 👻' });
+                mapaContas.set(u.login.toLowerCase(), { email: u.login, plano: 'Desconhecido', status: 'FANTASMA 👻', pinAtivacao: 'Sem Licença' });
             }
         });
 
@@ -897,14 +910,28 @@ app.post('/escola/validar-pin', async (req, res) => {
 
         const database = await connectDB();
         
-        // Vai no banco de dados (coleção ativacoes) e procura se o PIN existe
-        const ativacao = await database.collection('ativacoes').findOne({ pinAtivacao: pin.toUpperCase() });
+        // 🚀 SEGURANÇA: Procura o PIN e garante que ainda está Pendente
+        const ativacao = await database.collection('ativacoes').findOne({ 
+            pinAtivacao: pin.toUpperCase(),
+            status: 'Pendente' // Impede reuso de PINs antigos!
+        });
 
         if (ativacao) {
-            // Sucesso! O PIN foi encontrado no banco de dados.
+            // 1. Queima o PIN mudando o status para Verificado
+            await database.collection('ativacoes').updateOne(
+                { _id: ativacao._id },
+                { $set: { status: 'Verificado' } }
+            );
+
+            // 2. Já atualiza o plano da escola direto no banco
+            await database.collection('escola').updateOne(
+                { escolaId: req.escolaId },
+                { $set: { plano: ativacao.plano || 'Profissional' } }
+            );
+
             return res.json({ success: true, plano: ativacao.plano || 'Profissional' });
         } else {
-            return res.status(404).json({ error: 'PIN não encontrado na base de dados.' });
+            return res.status(404).json({ error: 'PIN inválido ou já utilizado.' });
         }
     } catch (error) {
         console.error("Erro ao validar PIN:", error);
