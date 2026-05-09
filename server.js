@@ -194,6 +194,30 @@ if (!token) {
 });
 
 // =========================================================
+// 🛡️ MIDDLEWARE DE AUTORIZAÇÃO POR CARGO (RBAC)
+// =========================================================
+const verificarCargo = (cargosPermitidos) => {
+    return (req, res, next) => {
+        // Usa o req.userTipo que vem do seu token JWT
+        if (!req.userTipo) {
+            return res.status(401).json({ 
+                success: false, 
+                error: 'Não autorizado: Perfil ausente.' 
+            });
+        }
+
+        if (!cargosPermitidos.includes(req.userTipo)) {
+            console.warn(`⚠️ Bloqueado: [${req.userTipo}] tentou aceder a uma rota restrita.`);
+            return res.status(403).json({ 
+                success: false, 
+                error: 'Acesso negado. O seu cargo não tem permissão para esta ação.' 
+            });
+        }
+        next();
+    };
+};
+
+// =========================================================
 // 📄 ÁREA PÚBLICA (Matrículas Externas Automáticas)
 // =========================================================
 
@@ -924,87 +948,82 @@ app.get('/usuarios', async (req, res) => {
     res.json(data.map(({ _id, senha, ...rest }) => rest));
 });
 
-// 3. Criar Novo Usuário (Equipe)
-app.post('/usuarios', async (req, res) => {
+// 3. Criar Novo Usuário (Equipe) - APENAS GESTOR
+app.post('/usuarios', verificarCargo(['Gestor']), async (req, res) => {
     const database = await connectDB();
     const { senha, ...body } = req.body;
     
     const novoUsuario = { ...body, id: crypto.randomUUID(), escolaId: req.escolaId };
-    
-    // Criptografa a senha do novo membro da equipe
-    if (senha) {
-        novoUsuario.senha = await bcrypt.hash(senha, 10);
-    }
+    if (senha) novoUsuario.senha = await bcrypt.hash(senha, 10);
     
     await database.collection('usuarios').insertOne(novoUsuario);
     delete novoUsuario.senha; 
     res.json(novoUsuario);
 });
 
-// 4. Editar Usuário da Equipe
-app.put('/usuarios/:id', async (req, res) => {
+// 4. Editar Usuário da Equipe - APENAS GESTOR
+app.put('/usuarios/:id', verificarCargo(['Gestor']), async (req, res) => {
     const database = await connectDB();
     const { _id, senha, ...body } = req.body;
     
     const updateData = { ...body };
-    if (senha) {
-        updateData.senha = await bcrypt.hash(senha, 10);
-    }
+    if (senha) updateData.senha = await bcrypt.hash(senha, 10);
     
     await database.collection('usuarios').updateOne({ id: req.params.id, escolaId: req.escolaId }, { $set: updateData });
     res.json({ success: true });
 });
 
-// 5. Excluir Usuário
-app.delete('/usuarios/:id', async (req, res) => {
+// 5. Excluir Usuário - APENAS GESTOR
+app.delete('/usuarios/:id', verificarCargo(['Gestor']), async (req, res) => {
     const database = await connectDB();
     await database.collection('usuarios').deleteOne({ id: req.params.id, escolaId: req.escolaId });
     res.json({ success: true });
 });
 
 // =========================================================
-// 🔄 CRUD DINÂMICO (NoSQL SAFE)
+// 🔄 CRUD DINÂMICO (NoSQL SAFE + RBAC)
 // =========================================================
 const COLECOES_OK = [
-    'alunos',
-    'turmas',
-    'cursos',
-    'financeiro',
-    'eventos',
-    'chamadas',
-    'avaliacoes',
-    'planejamentos',
-    'estoques',
-    'contratos',
-    'notificacoes'
+    'alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 
+    'chamadas', 'avaliacoes', 'planejamentos', 'estoques', 
+    'contratos', 'notificacoes'
 ];
+
+// 🛡️ Dicionário de quem pode mexer no quê
+const PERMISSOES = {
+    'financeiro': ['Gestor', 'Secretaria'],
+    'contratos': ['Gestor', 'Secretaria'],
+    'estoques': ['Gestor', 'Secretaria'],
+    'alunos': ['Gestor', 'Secretaria', 'Professor'], // Professor pode ler, mas gravamos restrição extra abaixo
+    'turmas': ['Gestor', 'Secretaria', 'Professor'],
+    'cursos': ['Gestor', 'Secretaria'],
+    'eventos': ['Gestor', 'Secretaria', 'Professor'],
+    'chamadas': ['Gestor', 'Secretaria', 'Professor'],
+    'avaliacoes': ['Gestor', 'Secretaria', 'Professor'],
+    'planejamentos': ['Gestor', 'Secretaria', 'Professor'],
+    'notificacoes': ['Gestor', 'Secretaria', 'Professor']
+};
 
 // =========================================================
 // 🔔 ROTAS DO SININHO (NOTIFICAÇÕES EM TEMPO REAL)
 // =========================================================
-
-// 1. Buscar apenas as não lidas (Otimizado para o Polling)
 app.get('/sistema/notificacoes/nao-lidas', async (req, res) => {
     try {
         const database = await connectDB();
         const notificacoes = await database.collection('notificacoes')
             .find({ escolaId: req.escolaId, lida: false })
-            .sort({ dataCriacao: -1 }) // As mais recentes primeiro
-            .toArray();
-            
+            .sort({ dataCriacao: -1 }).toArray();
         res.json(notificacoes.map(({_id, ...rest}) => rest));
     } catch (error) {
         res.status(500).json({ error: 'Erro ao buscar notificações.' });
     }
 });
 
-// 2. Marcar uma notificação como lida ao clicar
 app.put('/sistema/notificacoes/lida/:id', async (req, res) => {
     try {
         const database = await connectDB();
         await database.collection('notificacoes').updateOne(
-            { id: req.params.id, escolaId: req.escolaId },
-            { $set: { lida: true } }
+            { id: req.params.id, escolaId: req.escolaId }, { $set: { lida: true } }
         );
         res.json({ success: true });
     } catch (error) {
@@ -1012,78 +1031,97 @@ app.put('/sistema/notificacoes/lida/:id', async (req, res) => {
     }
 });
 
+// ---------------------------------------------------------
+// ROTAS DE COLEÇÃO GENÉRICA (CRUD) COM BLINDAGEM DE CARGO
+// ---------------------------------------------------------
+
 app.get('/:collection', async (req, res) => {
-    if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
+    const col = req.params.collection;
+    if (!COLECOES_OK.includes(col)) return res.status(403).send();
+    
+    // Verifica permissão de leitura
+    const permitidos = PERMISSOES[col] || ['Gestor'];
+    if (!permitidos.includes(req.userTipo)) return res.status(403).json({ error: 'Acesso negado.' });
+
     const database = await connectDB();
-    const data = await database.collection(req.params.collection).find({ escolaId: req.escolaId }).toArray();
+    const data = await database.collection(col).find({ escolaId: req.escolaId }).toArray();
     res.json(data.map(({_id, ...rest}) => rest));
 });
 
 app.get('/:collection/:id', async (req, res) => {
-    if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
+    const col = req.params.collection;
+    if (!COLECOES_OK.includes(col)) return res.status(403).send();
+    
+    const permitidos = PERMISSOES[col] || ['Gestor'];
+    if (!permitidos.includes(req.userTipo)) return res.status(403).json({ error: 'Acesso negado.' });
+
     const database = await connectDB();
-    const data = await database.collection(req.params.collection).findOne({ id: req.params.id, escolaId: req.escolaId });
+    const data = await database.collection(col).findOne({ id: req.params.id, escolaId: req.escolaId });
     if (data) delete data._id;
     res.json(data || {});
 });
 
 app.post('/:collection', async (req, res) => {
-    if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
+    const col = req.params.collection;
+    if (!COLECOES_OK.includes(col)) return res.status(403).send();
     
+    const permitidos = PERMISSOES[col] || ['Gestor'];
+    if (!permitidos.includes(req.userTipo)) return res.status(403).json({ error: 'Acesso negado (POST).' });
+
+    // Professor não pode CRIAR alunos nem cursos
+    if (req.userTipo === 'Professor' && ['alunos', 'cursos'].includes(col)) {
+        return res.status(403).json({ error: 'Professores não podem cadastrar alunos/cursos.' });
+    }
+
     const database = await connectDB();
-    
-    // A MÁGICA ACONTECE AQUI: req.body.id || crypto.randomUUID()
     const body = { 
         ...req.body, 
         id: req.body.id || crypto.randomUUID(), 
         escolaId: req.escolaId 
     }; 
-    
-    await database.collection(req.params.collection).insertOne(body);
+    await database.collection(col).insertOne(body);
     res.json(body);
 });
 
 app.put('/:collection/:id', async (req, res) => {
-    if (!COLECOES_OK.includes(req.params.collection)) {
-        return res.status(403).json({ error: 'Coleção não permitida.' });
+    const col = req.params.collection;
+    if (!COLECOES_OK.includes(col)) return res.status(403).json({ error: 'Coleção não permitida.' });
+
+    const permitidos = PERMISSOES[col] || ['Gestor'];
+    if (!permitidos.includes(req.userTipo)) return res.status(403).json({ error: 'Acesso negado (PUT).' });
+
+    // Professor não pode EDITAR alunos nem cursos
+    if (req.userTipo === 'Professor' && ['alunos', 'cursos'].includes(col)) {
+        return res.status(403).json({ error: 'Professores não podem editar alunos/cursos.' });
     }
 
     const database = await connectDB();
     const { _id, escolaId, ...body } = req.body;
 
-    const resultado = await database.collection(req.params.collection).updateOne(
-        { id: req.params.id, escolaId: req.escolaId },
-        { $set: body }
+    const resultado = await database.collection(col).updateOne(
+        { id: req.params.id, escolaId: req.escolaId }, { $set: body }
     );
 
-    if (resultado.matchedCount === 0) {
-        return res.status(404).json({ error: 'Registro não encontrado para atualização.' });
-    }
-
-    res.json({
-        success: true,
-        matchedCount: resultado.matchedCount,
-        modifiedCount: resultado.modifiedCount,
-        ...body
-    });
+    if (resultado.matchedCount === 0) return res.status(404).json({ error: 'Registro não encontrado.' });
+    res.json({ success: true, matchedCount: resultado.matchedCount, modifiedCount: resultado.modifiedCount, ...body });
 });
 
 app.delete('/:collection/:id', async (req, res) => {
-    if (!COLECOES_OK.includes(req.params.collection)) {
-        return res.status(403).json({ error: 'Coleção não permitida.' });
+    const col = req.params.collection;
+    if (!COLECOES_OK.includes(col)) return res.status(403).json({ error: 'Coleção não permitida.' });
+
+    const permitidos = PERMISSOES[col] || ['Gestor'];
+    if (!permitidos.includes(req.userTipo)) return res.status(403).json({ error: 'Acesso negado (DELETE).' });
+
+    // Apenas Gestor pode apagar Alunos e Dados Financeiros
+    if (['alunos', 'financeiro'].includes(col) && req.userTipo !== 'Gestor') {
+         return res.status(403).json({ error: 'Apenas Gestores podem excluir alunos e finanças.' });
     }
 
     const database = await connectDB();
+    const resultado = await database.collection(col).deleteOne({ id: req.params.id, escolaId: req.escolaId });
 
-    const resultado = await database.collection(req.params.collection).deleteOne({
-        id: req.params.id,
-        escolaId: req.escolaId
-    });
-
-    if (resultado.deletedCount === 0) {
-        return res.status(404).json({ error: 'Registro não encontrado para exclusão.' });
-    }
-
+    if (resultado.deletedCount === 0) return res.status(404).json({ error: 'Registro não encontrado para exclusão.' });
     res.json({ success: true });
 });
 
