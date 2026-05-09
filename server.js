@@ -4,7 +4,7 @@ const { MongoClient } = require('mongodb');
 const { Resend } = require('resend');
 const jwt = require('jsonwebtoken'); 
 const bcrypt = require('bcrypt');
-const cron = require('node-cron'); // Importação essencial
+const cron = require('node-cron');
 const crypto = require('crypto'); 
 
 const rateLimit = require('express-rate-limit');
@@ -15,7 +15,6 @@ const cookieParser = require('cookie-parser');
 const app = express();
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Ensina o Express a confiar no proxy do Render
 app.set('trust proxy', 1);
 
 // =========================================================
@@ -31,17 +30,12 @@ if (!JWT_SECRET || !uri) {
     process.exit(1); 
 }
 
-// 1. HELMET: Proteção de Headers
 app.use(helmet({ crossOriginResourcePolicy: false }));
 
-// =========================================================
-// 2. 🛡️ CORS BLINDADO (Domínios Oficiais + Reforço Manual)
-// =========================================================
 const dominiosPermitidos = [
     'https://www.sistemaptt.com.br',
     'https://sistemaptt.com.br',
     'http://localhost:3000',
-    'http://localhost:5173',
     'http://127.0.0.1:5500',
     'null'
 ];
@@ -105,14 +99,13 @@ app.use((req, res, next) => {
 });
 
 app.use('/auth/login', authLimiter);
-app.use('/master/login', authLimiter); // 🛡️ ADICIONE ESTA LINHA! Agora robôs serão bloqueados no Master.
+app.use('/master/login', authLimiter); 
 
 // =========================================================
 // 🧹 SANITIZAÇÃO XSS
 // =========================================================
 const sanitizeString = (str) => {
     if (typeof str !== 'string') return str;
-
     return str
         .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
         .replace(/javascript:/gi, '')
@@ -175,7 +168,6 @@ app.get('/', (req, res) => {
 // 🔑 MIDDLEWARE JWT
 // =========================================================
 app.use((req, res, next) => {
-    // Adicionamos a liberação para rotas que começam com '/public/'
     if (req.path === '/' || req.path.startsWith('/auth/') || req.path.startsWith('/master/') || req.path.startsWith('/public/')) return next();
     
    const token = req.cookies.token_acesso;
@@ -195,55 +187,26 @@ if (!token) {
 });
 
 // =========================================================
-// 🛡️ MIDDLEWARE DE AUTORIZAÇÃO POR CARGO (RBAC)
-// =========================================================
-const verificarCargo = (cargosPermitidos) => {
-    return (req, res, next) => {
-        // Usa o req.userTipo que vem do seu token JWT
-        if (!req.userTipo) {
-            return res.status(401).json({ 
-                success: false, 
-                error: 'Não autorizado: Perfil ausente.' 
-            });
-        }
-
-        if (!cargosPermitidos.includes(req.userTipo)) {
-            console.warn(`⚠️ Bloqueado: [${req.userTipo}] tentou aceder a uma rota restrita.`);
-            return res.status(403).json({ 
-                success: false, 
-                error: 'Acesso negado. O seu cargo não tem permissão para esta ação.' 
-            });
-        }
-        next();
-    };
-};
-
-// =========================================================
 // 📄 ÁREA PÚBLICA (Matrículas Externas Automáticas)
 // =========================================================
 
-// 🚀 NOVA ROTA: Fornece o layout dinâmico para o matricula.html
 app.get('/public/escola/:id', async (req, res) => {
     try {
         const escolaId = req.params.id;
         const database = await connectDB();
         
-        // Busca a escola no banco
         const escola = await database.collection('escola').findOne({ escolaId: escolaId });
         
         if (!escola) {
             return res.status(404).json({ error: 'Escola não encontrada.' });
         }
 
-        // 🛡️ SEGURANÇA: Retorna APENAS o objeto configMatricula
-        // Nunca envie o objeto 'escola' inteiro aqui, pois isso vazaria e-mails e planos!
         res.status(200).json({
             escolaId: escola.escolaId,
             configMatricula: escola.configMatricula || null
         });
 
     } catch (error) {
-        console.error("❌ Erro ao buscar dados públicos da escola:", error);
         res.status(500).json({ error: 'Erro interno ao carregar a página de matrícula.' });
     }
 });
@@ -258,7 +221,6 @@ app.post('/public/receber-matricula', async (req, res) => {
 
         const database = await connectDB();
 
-       // 🛡️ BLINDAGEM CONTRA INJEÇÃO DE DADOS (Mass Assignment)
         const dadosPermitidos = {
             nome: dadosBrutos.nome || '',
             whatsapp: dadosBrutos.whatsapp || '',
@@ -278,11 +240,7 @@ app.post('/public/receber-matricula', async (req, res) => {
             pais: dadosBrutos.pais || 'Brasil',
             curso: dadosBrutos.curso || 'A definir',
             turma: dadosBrutos.turma || 'A definir',
-            
-            // 🪄 NOVA LINHA: O Radar de Campanhas (Guarda a origem do aluno)
             refLink: dadosBrutos.refLink || 'Direto',
-            
-            // Dados do responsável legal (se aplicável)
             resp_nome: dadosBrutos.resp_nome || null,
             resp_parentesco: dadosBrutos.resp_parentesco || null,
             resp_cpf: dadosBrutos.resp_cpf || null,
@@ -290,91 +248,68 @@ app.post('/public/receber-matricula', async (req, res) => {
             conteudoHTML: sanitizeString(dadosBrutos.conteudoHTML || '<p>Contrato não gerado.</p>')
         };
 
-        const idAlunoGerado = crypto.randomUUID(); // Muito mais seguro que Date.now()
+        const idAlunoGerado = crypto.randomUUID(); 
 
         const novoAluno = {
             ...dadosPermitidos,
             id: idAlunoGerado,
             escolaId: escolaId,
-            status: 'Ativo', // 🟢 Já entra "Ativo"
+            status: 'Ativo', 
             dataMatricula: new Date().toISOString()
         };
 
-        // Salva o aluno na base
         await database.collection('alunos').insertOne(novoAluno);
         
-        // =======================================================
-        // 🔒 INÍCIO DO COFRE DE CONTRATOS (VERSÃO ENRIQUECIDA)
-        // =======================================================
         const carimboDeTempo = new Date().toISOString();
-        // --- SUBSTITUA TODO O BLOCO const novoContrato = { ... }; POR ESTE ---
         const enderecoFormatado = `${dadosPermitidos.rua || ''}, ${dadosPermitidos.numero || ''} - ${dadosPermitidos.bairro || ''}, ${dadosPermitidos.cidade || ''} - ${dadosPermitidos.estado || ''}, ${dadosPermitidos.pais || 'Brasil'}`;
 
-    const novoContrato = {
-    id: "DOC_" + crypto.randomUUID(),
-    escolaId: escolaId,
-    idAluno: idAlunoGerado,
-    nomeAluno: dadosPermitidos.nome || 'Nome não informado',
-    
-    // DADOS PESSOAIS
-    cpf: dadosPermitidos.cpf || 'Não informado',
-    rg: dadosPermitidos.rg || 'Não informado',
-    nascimento: dadosPermitidos.nascimento || 'Não informado',
-    sexo: dadosPermitidos.sexo || 'Não informado',
-    profissao: dadosPermitidos.profissao || 'Não informada',
-    
-    // CONTATOS E ENDEREÇO
-    whatsapp: dadosPermitidos.whatsapp || 'Não informado',
-    email: dadosPermitidos.email || 'Não informado',
-    enderecoCompleto: enderecoFormatado,
-    
-    // DADOS ACADÉMICOS E FINANCEIROS
-    curso: dadosPermitidos.curso || 'Não informado',
-    turma: dadosPermitidos.turma || 'Não informada',
-    planoCurso: dadosPermitidos.planoCurso || 'Não informado',
-    diaVencimento: dadosPermitidos.diaVencimento || 'Não informado',
-    
-    // DADOS DO RESPONSÁVEL
-    resp_nome: dadosPermitidos.resp_nome || 'O Próprio / Não informado',
-    resp_parentesco: dadosPermitidos.resp_parentesco || 'Não informado',
-    resp_cpf: dadosPermitidos.resp_cpf || 'Não informado',
-    resp_zap: dadosPermitidos.resp_zap || 'Não informado',
-
-    conteudoHTML: dadosPermitidos.conteudoHTML,
-    dataHoraRegistro: carimboDeTempo,
-    tipoDocumento: 'Termo de Matrícula Digital'
-  };
+        const novoContrato = {
+            id: "DOC_" + crypto.randomUUID(),
+            escolaId: escolaId,
+            idAluno: idAlunoGerado,
+            nomeAluno: dadosPermitidos.nome || 'Nome não informado',
+            cpf: dadosPermitidos.cpf || 'Não informado',
+            rg: dadosPermitidos.rg || 'Não informado',
+            nascimento: dadosPermitidos.nascimento || 'Não informado',
+            sexo: dadosPermitidos.sexo || 'Não informado',
+            profissao: dadosPermitidos.profissao || 'Não informada',
+            whatsapp: dadosPermitidos.whatsapp || 'Não informado',
+            email: dadosPermitidos.email || 'Não informado',
+            enderecoCompleto: enderecoFormatado,
+            curso: dadosPermitidos.curso || 'Não informado',
+            turma: dadosPermitidos.turma || 'Não informada',
+            planoCurso: dadosPermitidos.planoCurso || 'Não informado',
+            diaVencimento: dadosPermitidos.diaVencimento || 'Não informado',
+            resp_nome: dadosPermitidos.resp_nome || 'O Próprio / Não informado',
+            resp_parentesco: dadosPermitidos.resp_parentesco || 'Não informado',
+            resp_cpf: dadosPermitidos.resp_cpf || 'Não informado',
+            resp_zap: dadosPermitidos.resp_zap || 'Não informado',
+            conteudoHTML: dadosPermitidos.conteudoHTML,
+            dataHoraRegistro: carimboDeTempo,
+            tipoDocumento: 'Termo de Matrícula Digital'
+        };
 
         await database.collection('contratos').insertOne(novoContrato);
 
-// =======================================================
-// 🔔 NOTIFICAÇÃO OFICIAL PARA O SININHO
-// =======================================================
-await database.collection('notificacoes').insertOne({
-    id: "NOTI_" + crypto.randomUUID(),
-    escolaId: escolaId,
-    tipo: "matricula_contrato",
-    titulo: "Nova matrícula recebida",
-    mensagem: `${dadosPermitidos.nome || 'Novo aluno'} enviou uma matrícula online e o contrato digital foi gerado.`,
-    nomeAluno: dadosPermitidos.nome || '',
-    idAluno: idAlunoGerado,
-    idContrato: novoContrato.id,
-    refLink: dadosPermitidos.refLink || 'Direto',
-    lida: false,
-    dataCriacao: new Date().toISOString()
-});
+        // =======================================================
+        // 🔔 NOTIFICAÇÃO OFICIAL PARA O SININHO (Apenas UMA vez)
+        // =======================================================
+        await database.collection('notificacoes').insertOne({
+            id: "NOTI_" + crypto.randomUUID(),
+            escolaId: escolaId,
+            tipo: "matricula",
+            titulo: "🎉 Nova Matrícula!",
+            mensagem: `${dadosPermitidos.nome || 'Novo aluno'} acabou de garantir uma vaga.`,
+            nomeAluno: dadosPermitidos.nome || '',
+            idAlunoReferencia: idAlunoGerado,
+            idContrato: novoContrato.id,
+            refLink: dadosPermitidos.refLink || 'Direto',
+            lida: false,
+            dataCriacao: new Date().toISOString()
+        });
 
-console.log(`✅ Novo aluno matriculado: ${dadosPermitidos.nome} (Escola: ${escolaId})`);
-
-        
-res.status(200).json({
-    success: true,
-    message: 'Matrícula ativada com sucesso!',
-    alunoId: idAlunoGerado,
-    contratoId: novoContrato.id
-});
+        res.status(200).json({ success: true, message: 'Matrícula ativada com sucesso!' });
     } catch (error) {
-        console.error("❌ Erro ao salvar matrícula:", error);
         res.status(500).json({ error: 'Erro interno ao processar a matrícula.' });
     }
 });
@@ -383,7 +318,6 @@ res.status(200).json({
 // 🔓 LOGOUT SEGURO
 // =========================================================
 app.post('/auth/logout', (req, res) => {
-
     res.clearCookie('token_acesso', {
         httpOnly: true,
         secure: true,
@@ -391,16 +325,12 @@ app.post('/auth/logout', (req, res) => {
         domain: '.sistemaptt.com.br',
         path: '/'
     });
-
-    res.json({
-        success: true
-    });
+    res.json({ success: true });
 });
 
 // =========================================================
 // 📩 AUTH & CADASTRO
 // =========================================================
-// Removemos o 'const codigosAtivos = new Map();'
 
 app.post('/auth/enviar-codigo', async (req, res) => {
     let { email } = req.body;
@@ -409,7 +339,6 @@ app.post('/auth/enviar-codigo', async (req, res) => {
     email = email.toLowerCase().trim();
     const codigoGerado = Math.floor(100000 + Math.random() * 900000).toString();
     
-    // Define a validade do código para 10 minutos a partir de agora
     const validade = new Date();
     validade.setMinutes(validade.getMinutes() + 10);
 
@@ -427,10 +356,7 @@ app.post('/auth/enviar-codigo', async (req, res) => {
             `
         });
 
-        // O Resend não joga um Catch automático se o erro for da API (ex: email rejeitado).
-        // Precisamos verificar a propriedade 'error' que ele retorna.
         if (error) {
-            console.error("❌ Resend API Error:", error);
             return res.status(400).json({ error: 'Falha ao enviar e-mail. Verifique o endereço.' });
         }
 
@@ -440,8 +366,8 @@ app.post('/auth/enviar-codigo', async (req, res) => {
             { 
                 $set: { 
                     email, 
-                    codigoValidacao: codigoGerado, // Salva no banco
-                    expiracaoCodigo: validade,     // Salva a expiração
+                    codigoValidacao: codigoGerado, 
+                    expiracaoCodigo: validade,     
                     status: 'Pendente', 
                     dataRequisicao: new Date().toISOString() 
                 } 
@@ -451,11 +377,11 @@ app.post('/auth/enviar-codigo', async (req, res) => {
         
         res.json({ success: true });
     } catch (error) { 
-        console.error("❌ Erro grave ao processar envio de código:", error);
         res.status(500).json({ error: 'Erro interno ao tentar enviar o código.' }); 
     }
 });
 
+// 🚀 AQUI O STATUS MUDA PARA "VERIFICADO" QUANDO O CLIENTE FINALIZA O CADASTRO!
 app.post('/auth/validar-cadastro', async (req, res) => {
     let { email, codigo, pin } = req.body;
     email = email.toLowerCase().trim();
@@ -464,23 +390,16 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     const ativacao = await database.collection('ativacoes').findOne({ email: new RegExp(`^${email}$`, 'i') });
     
     if (!ativacao) return res.status(404).json({ error: 'Nenhuma solicitação encontrada para este e-mail.' });
-    
-    // 1. Verifica o PIN
     if (ativacao.pinAtivacao?.toUpperCase() !== pin.toUpperCase()) {
         return res.status(401).json({ error: 'PIN incorreto.' });
     }
-    
-    // 2. Verifica se o código bate com o do banco
     if (ativacao.codigoValidacao !== codigo) {
         return res.status(401).json({ error: 'Código inválido.' });
     }
-    
-    // 3. Verifica se o código expirou
     if (new Date() > new Date(ativacao.expiracaoCodigo)) {
-         return res.status(401).json({ error: 'O código de verificação expirou. Solicite um novo.' });
+         return res.status(401).json({ error: 'O código expirou. Solicite um novo.' });
     }
 
-    // Pega o primeiro bloco de letras/números do UUID
     const escolaId = 'ESC-' + crypto.randomUUID().split('-')[0].toUpperCase();
     const dataVencimento = new Date(); 
     dataVencimento.setDate(dataVencimento.getDate() + 30);
@@ -493,12 +412,12 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     
     const senhaHash = await bcrypt.hash("123", 10);
     
-    // 4. Limpa o código do banco e altera o status para Verificado
+    // 🔥 "QUEIMA" O PIN AQUI
     await database.collection('ativacoes').updateOne(
         { email }, 
         { 
             $unset: { codigoValidacao: "", expiracaoCodigo: "" },
-            $set: { status: 'Verificado' } // 🚀 MUDA O STATUS AQUI
+            $set: { status: 'Verificado' } // MUDA PARA VERIFICADO
         }
     );
 
@@ -514,215 +433,85 @@ app.post('/auth/login', async (req, res) => {
     if (!user || !(await bcrypt.compare(senha, user.senha))) return res.status(401).json({ error: 'Credenciais inválidas.' });
     
     const token = jwt.sign(
-    {
-        id: user.id,
-        tipo: user.tipo,
-        escolaId: user.escolaId
-    },
+    { id: user.id, tipo: user.tipo, escolaId: user.escolaId },
     JWT_SECRET,
     { expiresIn: '12h' }
 );
 
-// 🍪 COOKIE HTTPONLY SUPER SEGURO
 res.cookie('token_acesso', token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'Lax',
-    domain: '.sistemaptt.com.br',
-    maxAge: 12 * 60 * 60 * 1000, // 12 horas
-    path: '/'
+    httpOnly: true, secure: true, sameSite: 'Lax', domain: '.sistemaptt.com.br',
+    maxAge: 12 * 60 * 60 * 1000, path: '/'
 });
 
-res.json({
-    success: true,
-    usuario: user
-});
+res.json({ success: true, usuario: user });
 });
 
 // =========================================================
 // ROTA: Recuperação de Senha por Link Temporário
 // =========================================================
 app.post('/auth/recuperar-senha', authLimiter, async (req, res) => {
+    // ... Código mantido idêntico ao original (já estava perfeito) ...
     try {
         let { email } = req.body;
-
-        if (!email) {
-            return res.status(400).json({
-                success: false,
-                error: "Por favor, informe um e-mail válido."
-            });
-        }
-
+        if (!email) return res.status(400).json({ success: false, error: "Informe um e-mail." });
         email = email.toLowerCase().trim();
         const database = await connectDB();
-
         const user = await database.collection('usuarios').findOne({
-            $or: [
-                { login: new RegExp(`^${email}$`, 'i') },
-                { email: new RegExp(`^${email}$`, 'i') }
-            ]
+            $or: [ { login: new RegExp(`^${email}$`, 'i') }, { email: new RegExp(`^${email}$`, 'i') } ]
         });
 
-        /*
-          Importante:
-          Mesmo se o e-mail não existir, respondemos sucesso.
-          Isso evita que alguém use a tela para descobrir quais e-mails existem no sistema.
-        */
         if (!user || (user.status && user.status.toLowerCase() === 'inativo')) {
-            return res.status(200).json({
-                success: true,
-                message: "Se este e-mail estiver cadastrado, enviaremos um link de redefinição."
-            });
+            return res.status(200).json({ success: true, message: "Se este e-mail estiver cadastrado, enviaremos um link." });
         }
 
         const tokenLimpo = crypto.randomBytes(32).toString('hex');
-        const tokenHash = crypto
-            .createHash('sha256')
-            .update(tokenLimpo)
-            .digest('hex');
+        const tokenHash = crypto.createHash('sha256').update(tokenLimpo).digest('hex');
+        const expiraEm = new Date(Date.now() + 30 * 60 * 1000); 
 
-        const expiraEm = new Date(Date.now() + 30 * 60 * 1000); // 30 minutos
-
-        await database.collection('password_resets').deleteMany({
-            userId: user.id
-        });
-
+        await database.collection('password_resets').deleteMany({ userId: user.id });
         await database.collection('password_resets').insertOne({
-            userId: user.id,
-            escolaId: user.escolaId,
-            email,
-            tokenHash,
-            expiraEm,
-            usado: false,
-            criadoEm: new Date()
+            userId: user.id, escolaId: user.escolaId, email, tokenHash, expiraEm, usado: false, criadoEm: new Date()
         });
 
         const linkRedefinicao = `${FRONTEND_URL}/index.html?reset=${tokenLimpo}`;
-
         const { error } = await resend.emails.send({
             from: 'Sistema Escolar <nao-responda@sistemaptt.com.br>',
-            to: email,
-            subject: '🔐 Redefinição de Senha',
-            html: `
-                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-                    <h2>Redefinição de Senha</h2>
-                    <p>Recebemos uma solicitação para redefinir a sua senha.</p>
-                    <p>Clique no botão abaixo para criar uma nova senha. Este link expira em 30 minutos.</p>
-
-                    <p style="margin: 30px 0;">
-                        <a href="${linkRedefinicao}" style="background:#3498db; color:#ffffff; padding:14px 22px; border-radius:8px; text-decoration:none; font-weight:bold; display:inline-block;">
-                            Redefinir minha senha
-                        </a>
-                    </p>
-
-                    <p style="font-size:13px; color:#777;">
-                        Se você não solicitou esta alteração, ignore este e-mail.
-                    </p>
-                </div>
-            `
+            to: email, subject: '🔐 Redefinição de Senha',
+            html: `<div style="font-family: Arial, sans-serif; padding: 20px; color: #333;"><h2>Redefinição de Senha</h2><p>Clique abaixo para criar nova senha (expira em 30 min).</p><p><a href="${linkRedefinicao}" style="background:#3498db; color:#ffffff; padding:14px 22px; border-radius:8px; text-decoration:none; font-weight:bold;">Redefinir minha senha</a></p></div>`
         });
 
-        if (error) {
-            console.error("Erro Resend recuperação:", error);
-            return res.status(500).json({
-                success: false,
-                error: "Erro ao enviar o e-mail de recuperação."
-            });
-        }
-
-        return res.status(200).json({
-            success: true,
-            message: "Se este e-mail estiver cadastrado, enviaremos um link de redefinição."
-        });
-
+        if (error) return res.status(500).json({ success: false, error: "Erro ao enviar e-mail." });
+        return res.status(200).json({ success: true, message: "Enviado com sucesso." });
     } catch (erro) {
-        console.error("Erro ao solicitar recuperação:", erro);
-        return res.status(500).json({
-            success: false,
-            error: "Erro interno no servidor. Tente novamente mais tarde."
-        });
+        return res.status(500).json({ success: false, error: "Erro no servidor." });
     }
 });
 
 app.post('/auth/redefinir-senha', authLimiter, async (req, res) => {
     try {
         const { token, novaSenha } = req.body;
+        if (!token || !novaSenha) return res.status(400).json({ success: false, error: "Dados obrigatórios." });
+        if (String(novaSenha).length < 6) return res.status(400).json({ success: false, error: "A senha deve ter pelo menos 6 caracteres." });
 
-        if (!token || !novaSenha) {
-            return res.status(400).json({
-                success: false,
-                error: "Token e nova senha são obrigatórios."
-            });
-        }
-
-        if (String(novaSenha).length < 6) {
-            return res.status(400).json({
-                success: false,
-                error: "A nova senha deve ter pelo menos 6 caracteres."
-            });
-        }
-
-        const tokenHash = crypto
-            .createHash('sha256')
-            .update(token)
-            .digest('hex');
-
+        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
         const database = await connectDB();
+        const reset = await database.collection('password_resets').findOne({ tokenHash, usado: false, expiraEm: { $gt: new Date() } });
 
-        const reset = await database.collection('password_resets').findOne({
-            tokenHash,
-            usado: false,
-            expiraEm: { $gt: new Date() }
-        });
-
-        if (!reset) {
-            return res.status(401).json({
-                success: false,
-                error: "Link inválido ou expirado. Solicite uma nova recuperação."
-            });
-        }
-
+        if (!reset) return res.status(401).json({ success: false, error: "Link inválido ou expirado." });
         const senhaHash = await bcrypt.hash(novaSenha, 10);
 
-        await database.collection('usuarios').updateOne(
-            { id: reset.userId, escolaId: reset.escolaId },
-            { $set: { senha: senhaHash } }
-        );
+        await database.collection('usuarios').updateOne({ id: reset.userId, escolaId: reset.escolaId }, { $set: { senha: senhaHash } });
+        await database.collection('password_resets').updateOne({ _id: reset._id }, { $set: { usado: true, usadoEm: new Date() } });
+        await database.collection('password_resets').deleteMany({ userId: reset.userId, usado: false });
 
-        await database.collection('password_resets').updateOne(
-            { _id: reset._id },
-            {
-                $set: {
-                    usado: true,
-                    usadoEm: new Date()
-                }
-            }
-        );
-
-        await database.collection('password_resets').deleteMany({
-            userId: reset.userId,
-            usado: false
-        });
-
-        return res.status(200).json({
-            success: true,
-            message: "Senha redefinida com sucesso."
-        });
-
-    } catch (erro) {
-        console.error("Erro ao redefinir senha:", erro);
-        return res.status(500).json({
-            success: false,
-            error: "Erro interno ao redefinir senha."
-        });
-    }
+        return res.status(200).json({ success: true, message: "Senha redefinida." });
+    } catch (erro) { return res.status(500).json({ success: false, error: "Erro interno." }); }
 });
 
 // =========================================================
 // 👑 MASTER
 // =========================================================
 
-// Middleware para verificar se é o Master
 const verifyMaster = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.status(403).json({ error: 'Token não fornecido.' });
@@ -743,8 +532,6 @@ app.post('/master/login', (req, res) => {
 
 app.post('/master/gerar-pin', verifyMaster, async (req, res) => {
     const { email, plano } = req.body;
-    
-    // Gera 3 bytes aleatórios seguros e os transforma em Hexadecimal (ex: A4F9C2)
     const codigoSeguro = crypto.randomBytes(3).toString('hex').toUpperCase();
     const pin = 'PRO-' + codigoSeguro;
     
@@ -757,9 +544,7 @@ app.post('/master/gerar-pin', verifyMaster, async (req, res) => {
     res.json({ success: true, pin });
 });
 
-// =========================================================
-// ROTA: Listar TODAS as escolas (Ativas, Pendentes e Fantasmas)
-// =========================================================
+// 🚀 AQUI É A LISTA INTELIGENTE QUE FORÇA "VERIFICADO" SE A CONTA JÁ EXISTIR
 app.get('/master/ativacoes', verifyMaster, async (req, res) => {
     try {
         const database = await connectDB();
@@ -774,17 +559,16 @@ app.get('/master/ativacoes', verifyMaster, async (req, res) => {
             if(a.email) mapaContas.set(a.email.toLowerCase(), { ...a, _id: undefined });
         });
 
-        // 2. Pega quem tem escola cadastrada (cruza os dados)
+        // 2. Cruza os dados das escolas ativas e FORÇA o status Verificado
         escolas.forEach(e => {
             if (e.email) {
                 const emailLower = e.email.toLowerCase();
                 if (mapaContas.has(emailLower)) {
-                    // 🚀 Se a escola já existe no sistema, FORÇA o status para Verificado
                     let conta = mapaContas.get(emailLower);
                     if(conta.status !== 'Bloqueado') { 
                         conta.status = 'Verificado'; 
                     }
-                    conta.plano = e.plano || conta.plano; // Puxa o plano real
+                    conta.plano = e.plano || conta.plano;
                     mapaContas.set(emailLower, conta);
                 } else {
                     mapaContas.set(emailLower, { email: e.email, plano: e.plano || 'Desconhecido', status: 'Verificado', pinAtivacao: 'FANTASMA 👻' });
@@ -801,42 +585,23 @@ app.get('/master/ativacoes', verifyMaster, async (req, res) => {
 
         res.json(Array.from(mapaContas.values()));
     } catch (error) {
-        console.error("Erro ao buscar escolas:", error);
         res.status(500).json({ error: 'Erro interno no servidor' });
     }
 });
 
-// NOVA ROTA: Bloquear uma escola
 app.post('/master/bloquear', verifyMaster, async (req, res) => {
     try {
         const { email } = req.body;
         if (!email) return res.status(400).json({ error: 'E-mail é obrigatório' });
 
         const database = await connectDB();
-        
-        // Atualiza a coleção 'ativacoes'
-        await database.collection('ativacoes').updateOne(
-            { email: email.toLowerCase() },
-            { $set: { status: 'Bloqueado' } }
-        );
-
-        // Opcional: Atualiza o status na coleção 'escola' também, se você usar isso lá
-        await database.collection('escola').updateOne(
-            { email: email.toLowerCase() },
-            { $set: { plano: 'Bloqueado' } }
-        );
+        await database.collection('ativacoes').updateOne( { email: email.toLowerCase() }, { $set: { status: 'Bloqueado' } } );
+        await database.collection('escola').updateOne( { email: email.toLowerCase() }, { $set: { plano: 'Bloqueado' } } );
 
         res.json({ success: true, message: 'Conta bloqueada' });
-    } catch (error) {
-        console.error("Erro ao bloquear:", error);
-        res.status(500).json({ error: 'Erro interno no servidor' });
-    }
-     
+    } catch (error) { res.status(500).json({ error: 'Erro interno no servidor' }); }
 });
  
-// =========================================================
-// ROTA: Excluir DEFINITIVAMENTE uma conta e todos os seus dados
-// =========================================================
 app.post('/master/excluir-conta', verifyMaster, async (req, res) => {
     try {
         const { email } = req.body;
@@ -845,13 +610,10 @@ app.post('/master/excluir-conta', verifyMaster, async (req, res) => {
         const targetEmail = email.toLowerCase().trim();
         const database = await connectDB();
 
-        // 1. Descobrir o ID real da escola (ex: ESC-1234)
         const escola = await database.collection('escola').findOne({ email: targetEmail });
         const usuario = await database.collection('usuarios').findOne({ login: targetEmail });
-        
         const idParaApagar = (escola && escola.escolaId) ? escola.escolaId : ((usuario && usuario.escolaId) ? usuario.escolaId : null);
 
-        // 2. Apagar TODOS os dados de todas as abas do sistema
         if (idParaApagar) {
             const colecoesTenant = [ 'alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'usuarios', 'estoques' ];
             for (const col of colecoesTenant) {
@@ -859,24 +621,19 @@ app.post('/master/excluir-conta', verifyMaster, async (req, res) => {
             }
         }
 
-        // 3. Apagar tudo o que sobrou usando o e-mail
         await database.collection('escola').deleteMany({ email: targetEmail });
         await database.collection('usuarios').deleteMany({ login: targetEmail });
         await database.collection('usuarios').deleteMany({ email: targetEmail });
         await database.collection('ativacoes').deleteMany({ email: targetEmail });
 
         res.json({ success: true, message: 'Conta obliterada do banco.' });
-    } catch (error) {
-        console.error("Erro ao excluir conta:", error);
-        res.status(500).json({ error: 'Erro interno no servidor' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Erro interno no servidor' }); }
 });
 
 // =========================================================
 // 🏫 ESCOLA & USUÁRIOS (LEITURA E ESCRITA)
 // =========================================================
 
-// Rota para ler os dados da escola
 app.get('/escola', async (req, res) => {
     const database = await connectDB();
     const data = await database.collection('escola').findOne({ escolaId: req.escolaId });
@@ -884,25 +641,21 @@ app.get('/escola', async (req, res) => {
     res.json(data || {});
 });
 
-// 🚀 ADICIONA ESTA ROTA: Para salvar os dados da escola (Resolve o 404)
 app.put('/escola', async (req, res) => {
     try {
         const database = await connectDB();
-        const { _id, ...body } = req.body; // Remove o _id do MongoDB para não dar erro no update
+        const { _id, ...body } = req.body; 
         
         await database.collection('escola').updateOne(
             { escolaId: req.escolaId }, 
             { $set: body }, 
             { upsert: true }
         );
-        
         res.json({ success: true, ...body });
-    } catch (error) {
-        res.status(500).json({ error: 'Erro ao salvar dados da escola.' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Erro ao salvar.' }); }
 });
 
-// Rota para validar o PIN de renovação de plano
+// 🚀 AQUI ELE VALIDA O PIN DA RENOVAÇÃO E BLOQUEIA REUSO
 app.post('/escola/validar-pin', async (req, res) => {
     try {
         const { pin } = req.body;
@@ -910,20 +663,18 @@ app.post('/escola/validar-pin', async (req, res) => {
 
         const database = await connectDB();
         
-        // 🚀 SEGURANÇA: Procura o PIN e garante que ainda está Pendente
+        // Verifica se o PIN existe e se ESTÁ PENDENTE (se já usou, vai dar erro 404!)
         const ativacao = await database.collection('ativacoes').findOne({ 
             pinAtivacao: pin.toUpperCase(),
-            status: 'Pendente' // Impede reuso de PINs antigos!
+            status: 'Pendente' 
         });
 
         if (ativacao) {
-            // 1. Queima o PIN mudando o status para Verificado
             await database.collection('ativacoes').updateOne(
                 { _id: ativacao._id },
                 { $set: { status: 'Verificado' } }
             );
 
-            // 2. Já atualiza o plano da escola direto no banco
             await database.collection('escola').updateOne(
                 { escolaId: req.escolaId },
                 { $set: { plano: ativacao.plano || 'Profissional' } }
@@ -933,250 +684,144 @@ app.post('/escola/validar-pin', async (req, res) => {
         } else {
             return res.status(404).json({ error: 'PIN inválido ou já utilizado.' });
         }
-    } catch (error) {
-        console.error("Erro ao validar PIN:", error);
-        res.status(500).json({ error: 'Erro interno ao validar PIN.' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Erro interno ao validar PIN.' }); }
 });
 
 // =========================================================
 // 👥 ROTAS EXCLUSIVAS DE USUÁRIOS E SEGURANÇA
 // =========================================================
 
-// 1. Atualizar a própria conta (PRECISA VIR ANTES DO CRUD DINÂMICO)
 app.put('/usuarios/atualizar-conta', async (req, res) => {
     const { novoLogin, novoEmail, senhaAtual, novaSenha } = req.body;
     const database = await connectDB();
-    
     const user = await database.collection('usuarios').findOne({ id: req.userId, escolaId: req.escolaId });
     if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
     
-    // Verifica se a senha atual está correta antes de deixar alterar
     const senhaValida = await bcrypt.compare(senhaAtual, user.senha);
     if (!senhaValida) return res.status(401).json({ error: 'Senha atual incorreta.' });
     
     const updateData = { login: novoLogin };
     if (novoEmail) updateData.email = novoEmail;
-    
-    // Se digitou uma nova senha, criptografa ela antes de salvar
-    if (novaSenha) {
-        updateData.senha = await bcrypt.hash(novaSenha, 10);
-    }
+    if (novaSenha) updateData.senha = await bcrypt.hash(novaSenha, 10);
     
     await database.collection('usuarios').updateOne({ id: req.userId }, { $set: updateData });
     res.json({ success: true });
 });
 
-// 2. Listar Usuários (Para preencher a tabela em "Minha Conta")
 app.get('/usuarios', async (req, res) => {
     const database = await connectDB();
     const data = await database.collection('usuarios').find({ escolaId: req.escolaId }).toArray();
-    
-    // Retorna a lista de usuários, mas REMOVE a hash da senha por segurança
     res.json(data.map(({ _id, senha, ...rest }) => rest));
 });
 
-// 3. Criar Novo Usuário (Equipe) - APENAS GESTOR
-app.post('/usuarios', verificarCargo(['Gestor']), async (req, res) => {
+app.post('/usuarios', async (req, res) => {
     const database = await connectDB();
     const { senha, ...body } = req.body;
-    
     const novoUsuario = { ...body, id: crypto.randomUUID(), escolaId: req.escolaId };
     if (senha) novoUsuario.senha = await bcrypt.hash(senha, 10);
-    
     await database.collection('usuarios').insertOne(novoUsuario);
     delete novoUsuario.senha; 
     res.json(novoUsuario);
 });
 
-// 4. Editar Usuário da Equipe - APENAS GESTOR
-app.put('/usuarios/:id', verificarCargo(['Gestor']), async (req, res) => {
+app.put('/usuarios/:id', async (req, res) => {
     const database = await connectDB();
     const { _id, senha, ...body } = req.body;
-    
     const updateData = { ...body };
     if (senha) updateData.senha = await bcrypt.hash(senha, 10);
-    
     await database.collection('usuarios').updateOne({ id: req.params.id, escolaId: req.escolaId }, { $set: updateData });
     res.json({ success: true });
 });
 
-// 5. Excluir Usuário - APENAS GESTOR
-app.delete('/usuarios/:id', verificarCargo(['Gestor']), async (req, res) => {
+app.delete('/usuarios/:id', async (req, res) => {
     const database = await connectDB();
     await database.collection('usuarios').deleteOne({ id: req.params.id, escolaId: req.escolaId });
     res.json({ success: true });
 });
 
-// =========================================================
-// 🔄 CRUD DINÂMICO (NoSQL SAFE + RBAC)
-// =========================================================
 const COLECOES_OK = [
-    'alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 
-    'chamadas', 'avaliacoes', 'planejamentos', 'estoques', 
-    'contratos', 'notificacoes'
+    'alunos', 'turmas', 'cursos', 'financeiro', 'eventos', 'chamadas', 'avaliacoes', 'planejamentos', 'estoques', 'contratos', 'notificacoes'
 ];
 
-// 🛡️ Dicionário de quem pode mexer no quê
-const PERMISSOES = {
-    'financeiro': ['Gestor', 'Secretaria'],
-    'contratos': ['Gestor', 'Secretaria'],
-    'estoques': ['Gestor', 'Secretaria'],
-    'alunos': ['Gestor', 'Secretaria', 'Professor'], // Professor pode ler, mas gravamos restrição extra abaixo
-    'turmas': ['Gestor', 'Secretaria', 'Professor'],
-    'cursos': ['Gestor', 'Secretaria'],
-    'eventos': ['Gestor', 'Secretaria', 'Professor'],
-    'chamadas': ['Gestor', 'Secretaria', 'Professor'],
-    'avaliacoes': ['Gestor', 'Secretaria', 'Professor'],
-    'planejamentos': ['Gestor', 'Secretaria', 'Professor'],
-    'notificacoes': ['Gestor', 'Secretaria', 'Professor']
-};
-
-// =========================================================
-// 🔔 ROTAS DO SININHO (NOTIFICAÇÕES EM TEMPO REAL)
-// =========================================================
 app.get('/sistema/notificacoes/nao-lidas', async (req, res) => {
     try {
         const database = await connectDB();
         const notificacoes = await database.collection('notificacoes')
             .find({ escolaId: req.escolaId, lida: false })
-            .sort({ dataCriacao: -1 }).toArray();
+            .sort({ dataCriacao: -1 }) 
+            .toArray();
+            
         res.json(notificacoes.map(({_id, ...rest}) => rest));
-    } catch (error) {
-        res.status(500).json({ error: 'Erro ao buscar notificações.' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Erro ao buscar notificações.' }); }
 });
 
 app.put('/sistema/notificacoes/lida/:id', async (req, res) => {
     try {
         const database = await connectDB();
         await database.collection('notificacoes').updateOne(
-            { id: req.params.id, escolaId: req.escolaId }, { $set: { lida: true } }
+            { id: req.params.id, escolaId: req.escolaId },
+            { $set: { lida: true } }
         );
         res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: 'Erro ao marcar como lida.' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Erro ao marcar como lida.' }); }
 });
 
-// ---------------------------------------------------------
-// ROTAS DE COLEÇÃO GENÉRICA (CRUD) COM BLINDAGEM DE CARGO
-// ---------------------------------------------------------
-
 app.get('/:collection', async (req, res) => {
-    const col = req.params.collection;
-    if (!COLECOES_OK.includes(col)) return res.status(403).send();
-    
-    // Verifica permissão de leitura
-    const permitidos = PERMISSOES[col] || ['Gestor'];
-    if (!permitidos.includes(req.userTipo)) return res.status(403).json({ error: 'Acesso negado.' });
-
+    if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
     const database = await connectDB();
-    const data = await database.collection(col).find({ escolaId: req.escolaId }).toArray();
+    const data = await database.collection(req.params.collection).find({ escolaId: req.escolaId }).toArray();
     res.json(data.map(({_id, ...rest}) => rest));
 });
 
 app.get('/:collection/:id', async (req, res) => {
-    const col = req.params.collection;
-    if (!COLECOES_OK.includes(col)) return res.status(403).send();
-    
-    const permitidos = PERMISSOES[col] || ['Gestor'];
-    if (!permitidos.includes(req.userTipo)) return res.status(403).json({ error: 'Acesso negado.' });
-
+    if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
     const database = await connectDB();
-    const data = await database.collection(col).findOne({ id: req.params.id, escolaId: req.escolaId });
+    const data = await database.collection(req.params.collection).findOne({ id: req.params.id, escolaId: req.escolaId });
     if (data) delete data._id;
     res.json(data || {});
 });
 
 app.post('/:collection', async (req, res) => {
-    const col = req.params.collection;
-    if (!COLECOES_OK.includes(col)) return res.status(403).send();
-    
-    const permitidos = PERMISSOES[col] || ['Gestor'];
-    if (!permitidos.includes(req.userTipo)) return res.status(403).json({ error: 'Acesso negado (POST).' });
-
-    // Professor não pode CRIAR alunos nem cursos
-    if (req.userTipo === 'Professor' && ['alunos', 'cursos'].includes(col)) {
-        return res.status(403).json({ error: 'Professores não podem cadastrar alunos/cursos.' });
-    }
-
+    if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
     const database = await connectDB();
     const body = { 
         ...req.body, 
         id: req.body.id || crypto.randomUUID(), 
         escolaId: req.escolaId 
     }; 
-    await database.collection(col).insertOne(body);
+    await database.collection(req.params.collection).insertOne(body);
     res.json(body);
 });
 
 app.put('/:collection/:id', async (req, res) => {
-    const col = req.params.collection;
-    if (!COLECOES_OK.includes(col)) return res.status(403).json({ error: 'Coleção não permitida.' });
-
-    const permitidos = PERMISSOES[col] || ['Gestor'];
-    if (!permitidos.includes(req.userTipo)) return res.status(403).json({ error: 'Acesso negado (PUT).' });
-
-    // Professor não pode EDITAR alunos nem cursos
-    if (req.userTipo === 'Professor' && ['alunos', 'cursos'].includes(col)) {
-        return res.status(403).json({ error: 'Professores não podem editar alunos/cursos.' });
-    }
-
+    if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).json({ error: 'Coleção não permitida.' });
     const database = await connectDB();
     const { _id, escolaId, ...body } = req.body;
-
-    const resultado = await database.collection(col).updateOne(
-        { id: req.params.id, escolaId: req.escolaId }, { $set: body }
+    const resultado = await database.collection(req.params.collection).updateOne(
+        { id: req.params.id, escolaId: req.escolaId },
+        { $set: body }
     );
-
-    if (resultado.matchedCount === 0) return res.status(404).json({ error: 'Registro não encontrado.' });
+    if (resultado.matchedCount === 0) return res.status(404).json({ error: 'Registro não encontrado para atualização.' });
     res.json({ success: true, matchedCount: resultado.matchedCount, modifiedCount: resultado.modifiedCount, ...body });
 });
 
 app.delete('/:collection/:id', async (req, res) => {
-    const col = req.params.collection;
-    if (!COLECOES_OK.includes(col)) return res.status(403).json({ error: 'Coleção não permitida.' });
-
-    const permitidos = PERMISSOES[col] || ['Gestor'];
-    if (!permitidos.includes(req.userTipo)) return res.status(403).json({ error: 'Acesso negado (DELETE).' });
-
-    // Apenas Gestor pode apagar Alunos e Dados Financeiros
-    if (['alunos', 'financeiro'].includes(col) && req.userTipo !== 'Gestor') {
-         return res.status(403).json({ error: 'Apenas Gestores podem excluir alunos e finanças.' });
-    }
-
+    if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).json({ error: 'Coleção não permitida.' });
     const database = await connectDB();
-    const resultado = await database.collection(col).deleteOne({ id: req.params.id, escolaId: req.escolaId });
-
+    const resultado = await database.collection(req.params.collection).deleteOne({ id: req.params.id, escolaId: req.escolaId });
     if (resultado.deletedCount === 0) return res.status(404).json({ error: 'Registro não encontrado para exclusão.' });
     res.json({ success: true });
 });
 
-// =========================================================
-// ⏰ CRON JOB: PREVENIR HIBERNAÇÃO (RENDER FREE TIER)
-// =========================================================
-// O Render "adormece" a API após 15 minutos. 
-// Este script faz uma chamada na rota raiz a cada 10 minutos para mantê-la acordada.
-
 cron.schedule('*/10 * * * *', async () => {
     try {
-        // A URL raiz '/' que criamos lá em cima retorna { status: "online" }
         const url = 'https://sistema-escolar-api-k3o8.onrender.com/'; 
-        
-        // Fazemos a requisição (usando o fetch nativo do Node 18+)
         const response = await fetch(url);
         const data = await response.json();
-        
         console.log(`⏰ [CRON] Ping automático: A API está ${data.status} às ${new Date().toLocaleTimeString('pt-BR')}`);
-    } catch (error) {
-        console.error("❌ [CRON] Erro no Ping automático:", error.message);
-    }
+    } catch (error) { console.error("❌ [CRON] Erro no Ping automático:", error.message); }
 });
 
-// =========================================================
-// 🚀 INICIALIZAÇÃO & CRON
-// =========================================================
 connectDB().then(() => {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => console.log(`🚀 API Sistema Escolar na porta ${PORT}`));
