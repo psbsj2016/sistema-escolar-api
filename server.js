@@ -412,14 +412,17 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     
     const senhaHash = await bcrypt.hash("123", 10);
     
-    // 🔥 "QUEIMA" O PIN AQUI
-    await database.collection('ativacoes').updateOne(
-        { email }, 
-        { 
-            $unset: { codigoValidacao: "", expiracaoCodigo: "" },
-            $set: { status: 'Verificado' } // MUDA PARA VERIFICADO
-        }
-    );
+    // 🔥 "QUEIMA" O PIN E SINALIZA ATIVO NO ADMIN
+    await database.collection('ativacoes').updateOne(
+        { email }, 
+        { 
+            $unset: { codigoValidacao: "", expiracaoCodigo: "" },
+            $set: { 
+                status: 'Ativo', 
+                dataAtivacao: new Date().toISOString() 
+            }
+        }
+    );
 
     await database.collection('usuarios').insertOne({ id: crypto.randomUUID(), escolaId, login: email, senha: senhaHash, tipo: "Gestor", isDono: true });
     
@@ -559,22 +562,22 @@ app.get('/master/ativacoes', verifyMaster, async (req, res) => {
             if(a.email) mapaContas.set(a.email.toLowerCase(), { ...a, _id: undefined });
         });
 
-        // 2. Cruza os dados das escolas ativas e FORÇA o status Verificado
-        escolas.forEach(e => {
-            if (e.email) {
-                const emailLower = e.email.toLowerCase();
-                if (mapaContas.has(emailLower)) {
-                    let conta = mapaContas.get(emailLower);
-                    if(conta.status !== 'Bloqueado') { 
-                        conta.status = 'Verificado'; 
-                    }
-                    conta.plano = e.plano || conta.plano;
-                    mapaContas.set(emailLower, conta);
-                } else {
-                    mapaContas.set(emailLower, { email: e.email, plano: e.plano || 'Desconhecido', status: 'Verificado', pinAtivacao: 'FANTASMA 👻' });
-                }
-            }
-        });
+        // 2. Cruza os dados das escolas ativas e FORÇA o status Ativo
+        escolas.forEach(e => {
+            if (e.email) {
+                const emailLower = e.email.toLowerCase();
+                if (mapaContas.has(emailLower)) {
+                    let conta = mapaContas.get(emailLower);
+                    if(conta.status !== 'Bloqueado') { 
+                        conta.status = 'Ativo'; 
+                    }
+                    conta.plano = e.plano || conta.plano;
+                    mapaContas.set(emailLower, conta);
+                } else {
+                    mapaContas.set(emailLower, { email: e.email, plano: e.plano || 'Desconhecido', status: 'Ativo', pinAtivacao: 'FANTASMA 👻' });
+                }
+            }
+        });
 
         // 3. Pega quem fez usuário de login
         usuarios.forEach(u => {
@@ -669,11 +672,14 @@ app.post('/escola/validar-pin', async (req, res) => {
             status: 'Pendente' 
         });
 
-        if (ativacao) {
-            await database.collection('ativacoes').updateOne(
-                { _id: ativacao._id },
-                { $set: { status: 'Verificado' } }
-            );
+       if (ativacao) {
+            await database.collection('ativacoes').updateOne(
+                { _id: ativacao._id },
+                { $set: { 
+                    status: 'Ativo',
+                    dataAtivacao: new Date().toISOString()
+                } }
+            );
 
             await database.collection('escola').updateOne(
                 { escolaId: req.escolaId },
