@@ -477,25 +477,26 @@ app.post('/auth/login', async (req, res) => {
     // ✅ Compatibilidade entre usuários antigos e novo padrão escolaId
 let escolaIdFinal = user.escolaId;
 
-if (!escolaIdFinal) {
-    const escolaVinculada = await database.collection('escola').findOne({
-        $or: [
-            { email: new RegExp(`^${user.login}$`, 'i') },
-            { email: new RegExp(`^${user.email || user.login}$`, 'i') },
-            { donoId: user.id }
-        ]
-    });
+// Procura uma escola oficial vinculada ao usuário, mesmo que ele já tenha escolaId antigo como "1"
+const escolaVinculada = await database.collection('escola').findOne({
+    $or: [
+        { escolaId: user.escolaId },
+        { email: new RegExp(`^${user.login}$`, 'i') },
+        { email: new RegExp(`^${user.email || user.login}$`, 'i') },
+        { donoId: user.id }
+    ]
+});
 
-    if (escolaVinculada && escolaVinculada.escolaId) {
-        escolaIdFinal = escolaVinculada.escolaId;
+// Se encontrou uma escola oficial com escolaId tipo ESC-..., prioriza ela
+if (escolaVinculada && escolaVinculada.escolaId) {
+    escolaIdFinal = escolaVinculada.escolaId;
 
-        await database.collection('usuarios').updateOne(
-            { id: user.id },
-            { $set: { escolaId: escolaIdFinal } }
-        );
+    await database.collection('usuarios').updateOne(
+        { id: user.id },
+        { $set: { escolaId: escolaIdFinal } }
+    );
 
-        user.escolaId = escolaIdFinal;
-    }
+    user.escolaId = escolaIdFinal;
 }
 
 // Fallback final para não quebrar contas antigas sem escola cadastrada
