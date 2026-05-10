@@ -36,7 +36,7 @@ const dominiosPermitidos = [
     'https://www.sistemaptt.com.br',
     'https://sistemaptt.com.br',
     'http://localhost:3000',
-    'http://localhost:5173',
+    'http://localhost:5173', // 🚀 Permissão para o ambiente local do Vite
     'http://127.0.0.1:5500',
     'null'
 ];
@@ -173,20 +173,21 @@ app.use((req, res, next) => {
     
    const token = req.cookies.token_acesso;
 
-if (!token) {
-    return res.status(403).json({
-        error: 'Sessão não encontrada.'
-    });
-}
+    if (!token) {
+        return res.status(403).json({
+            error: 'Sessão não encontrada.'
+        });
+    }
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
         if (err) return res.status(401).json({ error: 'Sessão expirada.' });
         req.userId = decoded.id;
-req.escolaId = decoded.escolaId || decoded.id;
-req.userTipo = decoded.tipo;
-next();
+        req.escolaId = decoded.escolaId || decoded.id;
+        req.userTipo = decoded.tipo;
+        next();
     });
 });
 
+// ✅ Função FiltroTenant corrigida e única
 function filtroTenant(req) {
     const ids = [];
 
@@ -230,32 +231,32 @@ app.post('/public/receber-matricula', async (req, res) => {
     try {
         let { escolaId, ...dadosBrutos } = req.body;
 
-if (!escolaId) {
-    return res.status(400).json({ 
-        success: false,
-        error: 'ID da escola não fornecido no formulário.' 
-    });
-}
+        if (!escolaId) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'ID da escola não fornecido no formulário.' 
+            });
+        }
 
-escolaId = String(escolaId).trim();
+        escolaId = String(escolaId).trim();
 
-const database = await connectDB();
+        const database = await connectDB();
 
-// ✅ Garante que o escolaId enviado pelo link existe de verdade
-const escolaExiste = await database.collection('escola').findOne({ escolaId });
+        // ✅ Garante que o escolaId enviado pelo link existe de verdade
+        const escolaExiste = await database.collection('escola').findOne({ escolaId });
 
-if (!escolaExiste) {
-    return res.status(404).json({
-        success: false,
-        error: 'Escola não encontrada. Gere um novo link de matrícula dentro do sistema.',
-        escolaIdRecebido: escolaId
-    });
-}
+        if (!escolaExiste) {
+            return res.status(404).json({
+                success: false,
+                error: 'Escola não encontrada. Gere um novo link de matrícula dentro do sistema.',
+                escolaIdRecebido: escolaId
+            });
+        }
 
-// ✅ Usa sempre o escolaId oficial encontrado no banco
-escolaId = escolaExiste.escolaId;
+        // ✅ Usa sempre o escolaId oficial encontrado no banco
+        escolaId = escolaExiste.escolaId;
 
-const dadosPermitidos = {
+        const dadosPermitidos = {
             nome: dadosBrutos.nome || '',
             whatsapp: dadosBrutos.whatsapp || '',
             email: dadosBrutos.email || '',
@@ -343,12 +344,12 @@ const dadosPermitidos = {
         });
 
         res.status(200).json({ 
-    success: true, 
-    message: 'Matrícula ativada com sucesso!',
-    escolaId,
-    alunoId: idAlunoGerado,
-    contratoId: novoContrato.id
-});
+            success: true, 
+            message: 'Matrícula ativada com sucesso!',
+            escolaId,
+            alunoId: idAlunoGerado,
+            contratoId: novoContrato.id
+        });
     } catch (error) {
         res.status(500).json({ error: 'Erro interno ao processar a matrícula.' });
     }
@@ -421,7 +422,7 @@ app.post('/auth/enviar-codigo', async (req, res) => {
     }
 });
 
-// 🚀 AQUI O STATUS MUDA PARA "VERIFICADO" QUANDO O CLIENTE FINALIZA O CADASTRO!
+// 🚀 AQUI O STATUS MUDA PARA "ATIVO" QUANDO O CLIENTE FINALIZA O CADASTRO!
 app.post('/auth/validar-cadastro', async (req, res) => {
     let { email, codigo, pin } = req.body;
     email = email.toLowerCase().trim();
@@ -453,16 +454,16 @@ app.post('/auth/validar-cadastro', async (req, res) => {
     const senhaHash = await bcrypt.hash("123", 10);
     
     // 🔥 "QUEIMA" O PIN E SINALIZA ATIVO NO ADMIN
-    await database.collection('ativacoes').updateOne(
-        { email }, 
-        { 
-            $unset: { codigoValidacao: "", expiracaoCodigo: "" },
-            $set: { 
+    await database.collection('ativacoes').updateOne(
+        { email }, 
+        { 
+            $unset: { codigoValidacao: "", expiracaoCodigo: "" },
+            $set: { 
                 status: 'Ativo', 
                 dataAtivacao: new Date().toISOString() 
             }
-        }
-    );
+        }
+    );
 
     await database.collection('usuarios').insertOne({ id: crypto.randomUUID(), escolaId, login: email, senha: senhaHash, tipo: "Gestor", isDono: true });
     
@@ -476,66 +477,64 @@ app.post('/auth/login', async (req, res) => {
     if (!user || !(await bcrypt.compare(senha, user.senha))) return res.status(401).json({ error: 'Credenciais inválidas.' });
     
     // ✅ Compatibilidade entre usuários antigos e novo padrão escolaId
-let escolaIdFinal = user.escolaId;
+    let escolaIdFinal = user.escolaId;
 
-// Procura uma escola oficial vinculada ao usuário, mesmo que ele já tenha escolaId antigo como "1"
-const escolaVinculada = await database.collection('escola').findOne({
-    $or: [
-        { escolaId: user.escolaId },
-        { email: new RegExp(`^${user.login}$`, 'i') },
-        { email: new RegExp(`^${user.email || user.login}$`, 'i') },
-        { donoId: user.id }
-    ]
-});
+    // Procura uma escola oficial vinculada ao usuário
+    const escolaVinculada = await database.collection('escola').findOne({
+        $or: [
+            { escolaId: user.escolaId },
+            { email: new RegExp(`^${user.login}$`, 'i') },
+            { email: new RegExp(`^${user.email || user.login}$`, 'i') },
+            { donoId: user.id }
+        ]
+    });
 
-// Se encontrou uma escola oficial com escolaId tipo ESC-..., prioriza ela
-if (escolaVinculada && escolaVinculada.escolaId) {
-    escolaIdFinal = escolaVinculada.escolaId;
+    // Se encontrou uma escola oficial com escolaId tipo ESC-..., prioriza ela
+    if (escolaVinculada && escolaVinculada.escolaId) {
+        escolaIdFinal = escolaVinculada.escolaId;
 
-    await database.collection('usuarios').updateOne(
-        { id: user.id },
-        { $set: { escolaId: escolaIdFinal } }
+        await database.collection('usuarios').updateOne(
+            { id: user.id },
+            { $set: { escolaId: escolaIdFinal } }
+        );
+
+        user.escolaId = escolaIdFinal;
+    }
+
+    // Fallback final para não quebrar contas antigas sem escola cadastrada
+    if (!escolaIdFinal) {
+        escolaIdFinal = user.id;
+    }
+
+    const usuarioSeguro = {
+        ...user,
+        escolaId: escolaIdFinal
+    };
+
+    delete usuarioSeguro.senha;
+
+    const token = jwt.sign(
+        { id: user.id, tipo: user.tipo, escolaId: escolaIdFinal },
+        JWT_SECRET,
+        { expiresIn: '12h' }
     );
 
-    user.escolaId = escolaIdFinal;
-}
+    res.cookie('token_acesso', token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'Lax',
+        domain: '.sistemaptt.com.br',
+        maxAge: 12 * 60 * 60 * 1000,
+        path: '/'
+    });
 
-// Fallback final para não quebrar contas antigas sem escola cadastrada
-if (!escolaIdFinal) {
-    escolaIdFinal = user.id;
-}
-
-const usuarioSeguro = {
-    ...user,
-    escolaId: escolaIdFinal
-};
-
-delete usuarioSeguro.senha;
-
-const token = jwt.sign(
-    { id: user.id, tipo: user.tipo, escolaId: escolaIdFinal },
-    JWT_SECRET,
-    { expiresIn: '12h' }
-);
-
-res.cookie('token_acesso', token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'Lax',
-    domain: '.sistemaptt.com.br',
-    maxAge: 12 * 60 * 60 * 1000,
-    path: '/'
-});
-
-res.json({ success: true, usuario: usuarioSeguro });
-
+    res.json({ success: true, usuario: usuarioSeguro });
 });
 
 // =========================================================
 // ROTA: Recuperação de Senha por Link Temporário
 // =========================================================
 app.post('/auth/recuperar-senha', authLimiter, async (req, res) => {
-    // ... Código mantido idêntico ao original (já estava perfeito) ...
     try {
         let { email } = req.body;
         if (!email) return res.status(400).json({ success: false, error: "Informe um e-mail." });
@@ -629,7 +628,7 @@ app.post('/master/gerar-pin', verifyMaster, async (req, res) => {
     res.json({ success: true, pin });
 });
 
-// 🚀 AQUI É A LISTA INTELIGENTE QUE FORÇA "VERIFICADO" SE A CONTA JÁ EXISTIR
+// 🚀 AQUI É A LISTA INTELIGENTE QUE FORÇA "ATIVO" SE A CONTA JÁ EXISTIR
 app.get('/master/ativacoes', verifyMaster, async (req, res) => {
     try {
         const database = await connectDB();
@@ -645,21 +644,21 @@ app.get('/master/ativacoes', verifyMaster, async (req, res) => {
         });
 
         // 2. Cruza os dados das escolas ativas e FORÇA o status Ativo
-        escolas.forEach(e => {
-            if (e.email) {
-                const emailLower = e.email.toLowerCase();
-                if (mapaContas.has(emailLower)) {
-                    let conta = mapaContas.get(emailLower);
-                    if(conta.status !== 'Bloqueado') { 
-                        conta.status = 'Ativo'; 
-                    }
-                    conta.plano = e.plano || conta.plano;
-                    mapaContas.set(emailLower, conta);
-                } else {
-                    mapaContas.set(emailLower, { email: e.email, plano: e.plano || 'Desconhecido', status: 'Ativo', pinAtivacao: 'FANTASMA 👻' });
-                }
-            }
-        });
+        escolas.forEach(e => {
+            if (e.email) {
+                const emailLower = e.email.toLowerCase();
+                if (mapaContas.has(emailLower)) {
+                    let conta = mapaContas.get(emailLower);
+                    if(conta.status !== 'Bloqueado') { 
+                        conta.status = 'Ativo'; 
+                    }
+                    conta.plano = e.plano || conta.plano;
+                    mapaContas.set(emailLower, conta);
+                } else {
+                    mapaContas.set(emailLower, { email: e.email, plano: e.plano || 'Desconhecido', status: 'Ativo', pinAtivacao: 'FANTASMA 👻' });
+                }
+            }
+        });
 
         // 3. Pega quem fez usuário de login
         usuarios.forEach(u => {
@@ -762,13 +761,13 @@ app.post('/escola/validar-pin', async (req, res) => {
         });
 
        if (ativacao) {
-            await database.collection('ativacoes').updateOne(
-                { _id: ativacao._id },
-                { $set: { 
+            await database.collection('ativacoes').updateOne(
+                { _id: ativacao._id },
+                { $set: { 
                     status: 'Ativo',
                     dataAtivacao: new Date().toISOString()
                 } }
-            );
+            );
 
             await database.collection('escola').updateOne(
                 { escolaId: req.escolaId },
