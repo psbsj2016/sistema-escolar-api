@@ -179,12 +179,26 @@ if (!token) {
 }
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
         if (err) return res.status(401).json({ error: 'Sessão expirada.' });
-        req.userId = decoded.id; 
-        req.escolaId = decoded.escolaId; 
-        req.userTipo = decoded.tipo;
-        next();
+        req.userId = decoded.id;
+req.escolaId = decoded.escolaId || decoded.id;
+req.userTipo = decoded.tipo;
+next();
     });
 });
+
+function filtroTenant(req) {
+    const ids = [];
+
+    if (req.escolaId) ids.push(req.escolaId);
+    if (req.userId) ids.push(req.userId);
+
+    return {
+        $or: [
+            { escolaId: { $in: ids } },
+            { donoId: { $in: ids } }
+        ]
+    };
+}
 
 // =========================================================
 // 📄 ÁREA PÚBLICA (Matrículas Externas Automáticas)
@@ -460,18 +474,59 @@ app.post('/auth/login', async (req, res) => {
     const user = await database.collection('usuarios').findOne({ login: new RegExp(`^${login.replace('*FORCAR','')}$`, 'i') });
     if (!user || !(await bcrypt.compare(senha, user.senha))) return res.status(401).json({ error: 'Credenciais inválidas.' });
     
-    const token = jwt.sign(
-    { id: user.id, tipo: user.tipo, escolaId: user.escolaId },
+    // ✅ Compatibilidade entre usuários antigos e novo padrão escolaId
+let escolaIdFinal = user.escolaId;
+
+if (!escolaIdFinal) {
+    const escolaVinculada = await database.collection('escola').findOne({
+        $or: [
+            { email: new RegExp(`^${user.login}$`, 'i') },
+            { email: new RegExp(`^${user.email || user.login}$`, 'i') },
+            { donoId: user.id }
+        ]
+    });
+
+    if (escolaVinculada && escolaVinculada.escolaId) {
+        escolaIdFinal = escolaVinculada.escolaId;
+
+        await database.collection('usuarios').updateOne(
+            { id: user.id },
+            { $set: { escolaId: escolaIdFinal } }
+        );
+
+        user.escolaId = escolaIdFinal;
+    }
+}
+
+// Fallback final para não quebrar contas antigas sem escola cadastrada
+if (!escolaIdFinal) {
+    escolaIdFinal = user.id;
+}
+
+const usuarioSeguro = {
+    ...user,
+    escolaId: escolaIdFinal
+};
+
+delete usuarioSeguro.senha;
+
+const token = jwt.sign(
+    { id: user.id, tipo: user.tipo, escolaId: escolaIdFinal },
     JWT_SECRET,
     { expiresIn: '12h' }
 );
 
 res.cookie('token_acesso', token, {
-    httpOnly: true, secure: true, sameSite: 'Lax', domain: '.sistemaptt.com.br',
-    maxAge: 12 * 60 * 60 * 1000, path: '/'
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax',
+    domain: '.sistemaptt.com.br',
+    maxAge: 12 * 60 * 60 * 1000,
+    path: '/'
 });
 
-res.json({ success: true, usuario: user });
+res.json({ success: true, usuario: usuarioSeguro });
+
 });
 
 // =========================================================
@@ -664,7 +719,14 @@ app.post('/master/excluir-conta', verifyMaster, async (req, res) => {
 
 app.get('/escola', async (req, res) => {
     const database = await connectDB();
-    const data = await database.collection('escola').findOne({ escolaId: req.escolaId });
+
+    const data = await database.collection('escola').findOne({
+        $or: [
+            { escolaId: req.escolaId },
+            { donoId: req.userId }
+        ]
+    });
+
     if (data) delete data._id;
     res.json(data || {});
 });
@@ -675,10 +737,10 @@ app.put('/escola', async (req, res) => {
         const { _id, ...body } = req.body; 
         
         await database.collection('escola').updateOne(
-            { escolaId: req.escolaId }, 
-            { $set: body }, 
-            { upsert: true }
-        );
+    { escolaId: req.escolaId },
+    { $set: { ...body, escolaId: req.escolaId } },
+    { upsert: true }
+);
         res.json({ success: true, ...body });
     } catch (error) { res.status(500).json({ error: 'Erro ao salvar.' }); }
 });
@@ -760,13 +822,13 @@ app.put('/usuarios/:id', async (req, res) => {
     const { _id, senha, ...body } = req.body;
     const updateData = { ...body };
     if (senha) updateData.senha = await bcrypt.hash(senha, 10);
-    await database.collection('usuarios').updateOne({ id: req.params.id, escolaId: req.escolaId }, { $set: updateData });
+    await database.collection('usuarios').updateOne({ id: req.params.id, ...filtroTenant(req) }, { $set: updateData });
     res.json({ success: true });
 });
 
 app.delete('/usuarios/:id', async (req, res) => {
     const database = await connectDB();
-    await database.collection('usuarios').deleteOne({ id: req.params.id, escolaId: req.escolaId });
+    await database.collection('usuarios').deleteOne({ id: req.params.id, ...filtroTenant(req) });
     res.json({ success: true });
 });
 
@@ -778,7 +840,10 @@ app.get('/sistema/notificacoes/nao-lidas', async (req, res) => {
     try {
         const database = await connectDB();
         const notificacoes = await database.collection('notificacoes')
-            .find({ escolaId: req.escolaId, lida: false })
+            .find({
+    ...filtroTenant(req),
+    lida: false
+})
             .sort({ dataCriacao: -1 }) 
             .toArray();
             
@@ -790,7 +855,7 @@ app.put('/sistema/notificacoes/lida/:id', async (req, res) => {
     try {
         const database = await connectDB();
         await database.collection('notificacoes').updateOne(
-            { id: req.params.id, escolaId: req.escolaId },
+            { id: req.params.id, ...filtroTenant(req) },
             { $set: { lida: true } }
         );
         res.json({ success: true });
@@ -800,14 +865,17 @@ app.put('/sistema/notificacoes/lida/:id', async (req, res) => {
 app.get('/:collection', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
     const database = await connectDB();
-    const data = await database.collection(req.params.collection).find({ escolaId: req.escolaId }).toArray();
+    const data = await database.collection(req.params.collection).find(filtroTenant(req)).toArray();
     res.json(data.map(({_id, ...rest}) => rest));
 });
 
 app.get('/:collection/:id', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
     const database = await connectDB();
-    const data = await database.collection(req.params.collection).findOne({ id: req.params.id, escolaId: req.escolaId });
+    const data = await database.collection(req.params.collection).findOne({
+    id: req.params.id,
+    ...filtroTenant(req)
+});
     if (data) delete data._id;
     res.json(data || {});
 });
@@ -829,7 +897,7 @@ app.put('/:collection/:id', async (req, res) => {
     const database = await connectDB();
     const { _id, escolaId, ...body } = req.body;
     const resultado = await database.collection(req.params.collection).updateOne(
-        { id: req.params.id, escolaId: req.escolaId },
+        { id: req.params.id, ...filtroTenant(req) },
         { $set: body }
     );
     if (resultado.matchedCount === 0) return res.status(404).json({ error: 'Registro não encontrado para atualização.' });
@@ -839,7 +907,10 @@ app.put('/:collection/:id', async (req, res) => {
 app.delete('/:collection/:id', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).json({ error: 'Coleção não permitida.' });
     const database = await connectDB();
-    const resultado = await database.collection(req.params.collection).deleteOne({ id: req.params.id, escolaId: req.escolaId });
+    const resultado = await database.collection(req.params.collection).deleteOne({
+    id: req.params.id,
+    ...filtroTenant(req)
+});
     if (resultado.deletedCount === 0) return res.status(404).json({ error: 'Registro não encontrado para exclusão.' });
     res.json({ success: true });
 });
