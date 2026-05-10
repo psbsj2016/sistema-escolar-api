@@ -213,23 +213,34 @@ app.get('/public/escola/:id', async (req, res) => {
 
 app.post('/public/receber-matricula', async (req, res) => {
     try {
-        const { escolaId, ...dadosBrutos } = req.body;
+        let { escolaId, ...dadosBrutos } = req.body;
 
-        if (!escolaId) {
-            return res.status(400).json({ error: 'ID da escola não fornecido no formulário.' });
-        }
+if (!escolaId) {
+    return res.status(400).json({ 
+        success: false,
+        error: 'ID da escola não fornecido no formulário.' 
+    });
+}
 
-        const database = await connectDB();
+escolaId = String(escolaId).trim();
 
+const database = await connectDB();
+
+// ✅ Garante que o escolaId enviado pelo link existe de verdade
 const escolaExiste = await database.collection('escola').findOne({ escolaId });
 
 if (!escolaExiste) {
     return res.status(404).json({
-        error: 'Escola não encontrada. Gere um novo link de matrícula dentro do sistema.'
+        success: false,
+        error: 'Escola não encontrada. Gere um novo link de matrícula dentro do sistema.',
+        escolaIdRecebido: escolaId
     });
 }
 
-            const dadosPermitidos = {
+// ✅ Usa sempre o escolaId oficial encontrado no banco
+escolaId = escolaExiste.escolaId;
+
+const dadosPermitidos = {
             nome: dadosBrutos.nome || '',
             whatsapp: dadosBrutos.whatsapp || '',
             email: dadosBrutos.email || '',
@@ -316,7 +327,13 @@ if (!escolaExiste) {
             dataCriacao: new Date().toISOString()
         });
 
-        res.status(200).json({ success: true, message: 'Matrícula ativada com sucesso!' });
+        res.status(200).json({ 
+    success: true, 
+    message: 'Matrícula ativada com sucesso!',
+    escolaId,
+    alunoId: idAlunoGerado,
+    contratoId: novoContrato.id
+});
     } catch (error) {
         res.status(500).json({ error: 'Erro interno ao processar a matrícula.' });
     }
