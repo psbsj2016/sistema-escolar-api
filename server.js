@@ -221,7 +221,15 @@ app.post('/public/receber-matricula', async (req, res) => {
 
         const database = await connectDB();
 
-        const dadosPermitidos = {
+const escolaExiste = await database.collection('escola').findOne({ escolaId });
+
+if (!escolaExiste) {
+    return res.status(404).json({
+        error: 'Escola não encontrada. Gere um novo link de matrícula dentro do sistema.'
+    });
+}
+
+            const dadosPermitidos = {
             nome: dadosBrutos.nome || '',
             whatsapp: dadosBrutos.whatsapp || '',
             email: dadosBrutos.email || '',
