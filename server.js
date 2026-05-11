@@ -280,6 +280,7 @@ app.post('/public/receber-matricula', async (req, res) => {
             resp_parentesco: dadosBrutos.resp_parentesco || null,
             resp_cpf: dadosBrutos.resp_cpf || null,
             resp_zap: dadosBrutos.resp_zap || null,
+            horarioPreferencia: dadosBrutos.horarioPreferencia || 'Não informado',
             conteudoHTML: sanitizeString(dadosBrutos.conteudoHTML || '<p>Contrato não gerado.</p>')
         };
 
@@ -319,6 +320,7 @@ app.post('/public/receber-matricula', async (req, res) => {
             resp_parentesco: dadosPermitidos.resp_parentesco || 'Não informado',
             resp_cpf: dadosPermitidos.resp_cpf || 'Não informado',
             resp_zap: dadosPermitidos.resp_zap || 'Não informado',
+            horarioPreferencia: dadosPermitidos.horarioPreferencia,
             conteudoHTML: dadosPermitidos.conteudoHTML,
             dataHoraRegistro: carimboDeTempo,
             tipoDocumento: 'Termo de Matrícula Digital'
