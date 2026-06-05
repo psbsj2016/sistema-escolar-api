@@ -68,20 +68,32 @@ app.use('/master/login', authLimiter);
 app.use('/auth/recuperar-senha', authLimiter);
 app.use('/auth/redefinir-senha', authLimiter);
 
-app.use(verifyJWT);
-
-// Inicialização das Rotas
+// =========================================================
+// 🔓 ROTAS PÚBLICAS (Não exigem login/token)
+// =========================================================
 app.get('/', (req, res) => res.status(200).json({ status: "online", message: "API Sistema Escolar PTT Modular 🚀" }));
 
-app.use('/auth', authRoutes);
-app.use('/public', publicRoutes);
-app.use('/master', masterRoutes);
+app.use('/auth', authRoutes);       // Login, Cadastro, Recuperar Senha
+app.use('/public', publicRoutes);   // Matrículas Externas (Carnês/PDFs)
+app.use('/master', masterRoutes);   // Login do Admin Master
+
+
+// =========================================================
+// 🛡️ GUARDA DE SEGURANÇA (A partir daqui, só entra logado!)
+// =========================================================
+app.use(verifyJWT); 
+
+
+// =========================================================
+// 🔒 ROTAS PROTEGIDAS (Exigem token válido)
+// =========================================================
 app.use('/escola', escolaRoutes);
-app.use('/usuarios', usuariosRoutes); // Protege as senhas!
+app.use('/usuarios', usuariosRoutes); 
 app.use('/', dataRoutes); // CRUD no final para não colidir
 
-
-
+// =========================================================
+// 🚀 INICIALIZAÇÃO DO SERVIDOR
+// =========================================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
     console.log(`🚀 API Sistema Escolar Modular na porta ${PORT}`);
