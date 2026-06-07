@@ -358,14 +358,18 @@ router.post('/receber-matricula', async (req, res) => {
                     </div>
                 `;
 
-                // Disparo pelo Resend
-                const respostaResend = await resend.emails.send({
-                    from: 'Matriculas <contato@sistemaptt.com.br>',
-                    to: email,
-                    subject: '🎉 Bem-vindo(a)! Seu Contrato e Carnês estão aqui',
-                    html: corpoDoEmail,
-                    attachments: anexos
-                });
+                // Comente estas linhas:
+// const contratoPdfBuffer = await gerarPdfBuffer(htmlDoContrato);
+// const carnesPdfBuffer = await gerarPdfBuffer(htmlDoCarne);
+
+// Envie o e-mail SEM anexos:
+const respostaResend = await resend.emails.send({
+    from: 'Matriculas <contato@sistemaptt.com.br>',
+    to: email,
+    subject: '🎉 Bem-vindo(a)! Sua Matrícula foi recebida',
+    html: corpoDoEmail
+    // attachments: anexos  <-- COMENTE ESTA LINHA TAMBÉM
+});
 
                 if (respostaResend.error) {
                     console.error("\n🚨 ERRO EXATO DO RESEND:", respostaResend.error);
