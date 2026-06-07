@@ -3,8 +3,8 @@ const router = express.Router();
 const crypto = require('crypto');
 const connectDB = require('../config/db');
 
-// Importação das bibliotecas
-const puppeteer = require('puppeteer');
+// DESATIVE O PUPPETEER AQUI LÁ NO TOPO:
+// const puppeteer = require('puppeteer');
 const { Resend } = require('resend');
 
 // Inicialize o Resend com a chave segura do .env
@@ -309,21 +309,16 @@ router.post('/receber-matricula', async (req, res) => {
         });
 
        // ====================================================================
-        // 📧 6. DISPARO DE E-MAIL (TESTE SEM PDF)
+        // 📧 6. DISPARO DE E-MAIL (TESTE SEM PDF PARA EVITAR ERRO 502)
         // ====================================================================
         
         if (email) {
             try {
-                console.log("Começando preparação do e-mail..."); 
-                
-                // Monta os HTMLs
-                const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula);
-                const htmlDoCarne = montarHtmlCarnesOficial(parcelas, nome, escola);
-                
-                // 🚨 O SEGREDO ESTÁ AQUI: TEM DE DESATIVAR A CHAMADA AO PUPPETEER!
+                // 🚨 PDF Desativado temporariamente
+                // const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula);
+                // const htmlDoCarne = montarHtmlCarnesOficial(parcelas, nome, escola);
                 // const contratoPdfBuffer = await gerarPdfBuffer(htmlDoContrato);
                 // const carnesPdfBuffer = await gerarPdfBuffer(htmlDoCarne);
-                // console.log("PDFs gerados com sucesso!"); 
 
                 const corpoDoEmail = `
                     <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; line-height: 1.6;">
@@ -333,7 +328,7 @@ router.post('/receber-matricula', async (req, res) => {
                         
                         <div style="background-color: #f4f6f7; border-left: 4px solid #27ae60; padding: 15px; margin: 20px 0;">
                             <b>📱 Atenção ao seu WhatsApp!</b><br>
-                            Fique de olho no seu celular. Muito em breve, a nossa equipe entrará em contato com você para lhe passar novas informações!
+                            Fique de olho no seu celular. Muito em breve, a nossa equipe entrará em contato com você para lhe passar novas informações e tirar qualquer dúvida que possa ter!
                         </div>
 
                         <p>Com os melhores cumprimentos,<br>
@@ -341,25 +336,21 @@ router.post('/receber-matricula', async (req, res) => {
                     </div>
                 `;
 
-                console.log("Tentando enviar e-mail pelo Resend (SEM ANEXOS)..."); 
-                
+                // Disparo pelo Resend (SEM ANEXOS)
                 const respostaResend = await resend.emails.send({
                     from: 'Matriculas <contato@sistemaptt.com.br>',
                     to: email,
                     subject: '🎉 Bem-vindo(a)! Sua Matrícula foi recebida',
                     html: corpoDoEmail
-                    // attachments: anexos  <-- DESATIVADO
                 });
-                
-                console.log("Resposta do Resend:", respostaResend); 
-                
+
                 if (respostaResend.error) {
-                    console.error("\n🚨 ERRO EXATO DO RESEND:", respostaResend.error);
+                    console.error("Erro do Resend:", respostaResend.error);
                 } else {
-                    console.log(`\n✅ E-mail enviado COM SUCESSO para ${email}!`);
+                    console.log(`✅ E-mail enviado COM SUCESSO!`);
                 }
             } catch (emailError) {
-                console.error("ERRO CRÍTICO NO ENVIO:", emailError); 
+                console.error("Erro ao tentar enviar o e-mail:", emailError);
             }
         }
 
