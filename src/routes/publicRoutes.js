@@ -226,6 +226,7 @@ router.get('/escola/:id', async (req, res) => {
 
 // Receber formulário de matrícula externa
 router.post('/receber-matricula', async (req, res) => {
+    console.log("Iniciando processamento da matrícula para:", email); // <--- AQUI
     try {
         const database = await connectDB();
         const dadosMatricula = req.body; 
@@ -313,6 +314,7 @@ router.post('/receber-matricula', async (req, res) => {
         
         if (email) {
             try {
+                console.log("Começando geração de PDF..."); // <--- AQUI
                 // Monta os HTMLs passando TUDO: O HTML original, dados da escola, E os dados preenchidos no form
                 const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula);
                 const htmlDoCarne = montarHtmlCarnesOficial(parcelas, nome, escola);
@@ -320,7 +322,7 @@ router.post('/receber-matricula', async (req, res) => {
                 // Transforma em PDF
                 const contratoPdfBuffer = await gerarPdfBuffer(htmlDoContrato);
                 const carnesPdfBuffer = await gerarPdfBuffer(htmlDoCarne);
-
+                console.log("PDFs gerados com sucesso!"); // <--- AQUI  
                 // Converte para Base64 corretamente para o Resend
                 const anexos = [];
                 if (contratoPdfBuffer) {
@@ -363,6 +365,7 @@ router.post('/receber-matricula', async (req, res) => {
 // const carnesPdfBuffer = await gerarPdfBuffer(htmlDoCarne);
 
 // Envie o e-mail SEM anexos:
+console.log("Tentando enviar e-mail pelo Resend..."); // <--- AQUI
 const respostaResend = await resend.emails.send({
     from: 'Matriculas <contato@sistemaptt.com.br>',
     to: email,
@@ -370,7 +373,7 @@ const respostaResend = await resend.emails.send({
     html: corpoDoEmail
     // attachments: anexos  <-- COMENTE ESTA LINHA TAMBÉM
 });
-
+console.log("Resposta do Resend:", respostaResend); // <--- AQUI
                 if (respostaResend.error) {
                     console.error("\n🚨 ERRO EXATO DO RESEND:", respostaResend.error);
                 } else {
