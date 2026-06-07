@@ -321,47 +321,26 @@ router.post('/receber-matricula', async (req, res) => {
         // 📧 6. DISPARO DE E-MAIL (TESTE SEM PDF PARA EVITAR ERRO 502)
         // ====================================================================
         
-      if (email) {
+     if (email) {
             try {
-                console.log("Começando geração de PDF na Nuvem...");
+                console.log("Preparando envio de e-mail (SEM PDF temporariamente)...");
                 
-                // 1. GERA OS PDFS
-                const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula);
-                const htmlDoCarne = montarHtmlCarnesOficial(parcelas, nome, escola);
-                
-                const contratoPdfBuffer = await gerarPdfBuffer(htmlDoContrato);
-                const carnesPdfBuffer = await gerarPdfBuffer(htmlDoCarne);
-                console.log("✅ PDFs gerados com sucesso!");
+                // 🚨 COMENTE A GERAÇÃO DO PDF PARA O RENDER NÃO TRAVAR
+                // const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula);
+                // const htmlDoCarne = montarHtmlCarnesOficial(parcelas, nome, escola);
+                // const contratoPdfBuffer = await gerarPdfBuffer(htmlDoContrato);
+                // const carnesPdfBuffer = await gerarPdfBuffer(htmlDoCarne);
+                // console.log("✅ PDFs gerados com sucesso!");
 
-                // 2. PREPARA OS ANEXOS
-                const anexos = [];
-                if (contratoPdfBuffer) {
-                    anexos.push({ 
-                        filename: 'Contrato_Assinado.pdf', 
-                        content: Buffer.from(contratoPdfBuffer).toString('base64')
-                    });
-                }
-                anexos.push({ 
-                    filename: 'Carnes_Mensalidades.pdf', 
-                    content: Buffer.from(carnesPdfBuffer).toString('base64')
-                });
-
-                // 3. PREPARA O CORPO DO E-MAIL
                 const corpoDoEmail = `
                     <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; line-height: 1.6;">
                         <h2 style="color: #2c3e50;">Olá, ${nome}! 🎉</h2>
                         <p>É com grande alegria que lhe damos as boas-vindas à <b>${escola.nome || 'nossa instituição'}</b>!</p>
                         <p>A sua matrícula no curso <b>${planoCurso || 'selecionado'}</b> foi realizada com sucesso e já preparamos tudo para você.</p>
                         
-                        <p>Em anexo a este e-mail, você encontrará:</p>
-                        <ul>
-                            <li><b>O seu Contrato de Matrícula</b> (cópia digital);</li>
-                            <li><b>O seu Carnê de Pagamento</b> (com as 12 mensalidades).</li>
-                        </ul>
-
                         <div style="background-color: #f4f6f7; border-left: 4px solid #27ae60; padding: 15px; margin: 20px 0;">
                             <b>📱 Atenção ao seu WhatsApp!</b><br>
-                            Fique de olho no seu celular. Muito em breve, a nossa equipe entrará em contato com você para lhe passar novas informações e tirar qualquer dúvida que possa ter!
+                            Fique de olho no seu celular. Muito em breve, a nossa equipe entrará em contato com você para lhe passar os seus documentos e tirar qualquer dúvida!
                         </div>
 
                         <p>Com os melhores cumprimentos,<br>
@@ -369,20 +348,19 @@ router.post('/receber-matricula', async (req, res) => {
                     </div>
                 `;
 
-                // 4. DISPARA O E-MAIL COM OS ANEXOS LIGADOS
                 console.log("Enviando e-mail pelo Resend...");
                 const respostaResend = await resend.emails.send({
                     from: 'Matriculas <contato@sistemaptt.com.br>',
                     to: email,
-                    subject: '🎉 Bem-vindo(a)! Seu Contrato e Carnês estão aqui',
-                    html: corpoDoEmail,
-                    attachments: anexos // <-- LIGADOS NOVAMENTE
+                    subject: '🎉 Bem-vindo(a)! Sua Matrícula foi recebida',
+                    html: corpoDoEmail
+                    // attachments: anexos <-- COMENTE OS ANEXOS TAMBÉM
                 });
 
                 if (respostaResend.error) {
                     console.error("Erro do Resend:", respostaResend.error);
                 } else {
-                    console.log(`✅ E-mail com PDFs enviado COM SUCESSO!`);
+                    console.log(`✅ E-mail enviado COM SUCESSO!`);
                 }
             } catch (emailError) {
                 console.error("Erro ao tentar enviar o e-mail:", emailError);
