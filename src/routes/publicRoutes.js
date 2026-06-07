@@ -226,17 +226,22 @@ router.get('/escola/:id', async (req, res) => {
 
 // Receber formulário de matrícula externa
 router.post('/receber-matricula', async (req, res) => {
-    console.log("Iniciando processamento da matrícula para:", email); // <--- AQUI
+    // ❌ APAGUE O CONSOLE.LOG QUE ESTAVA AQUI EM CIMA
+    
     try {
         const database = await connectDB();
         const dadosMatricula = req.body; 
         const { escolaId, nome, email, conteudoHTML, planoCurso, diaVencimento } = dadosMatricula;
+
+        // ✅ COLOQUE O CONSOLE.LOG AQUI (Agora o servidor já sabe o que é o 'email')
+        console.log("Iniciando processamento da matrícula para:", email); 
 
         // 🕵️‍♂️ Busca os dados completos da escola para usar nos PDFs
         const escola = await database.collection('escola').findOne({ escolaId: escolaId }) || {};
 
         const idAlunoGerado = crypto.randomUUID();
         
+       
         // 1. Gravação do Perfil do Aluno
         const novoAluno = {
             ...dadosMatricula,
