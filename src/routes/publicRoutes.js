@@ -3,8 +3,8 @@ const router = express.Router();
 const crypto = require('crypto');
 const connectDB = require('../config/db');
 
-// DESATIVE O PUPPETEER AQUI LÁ NO TOPO:
-// const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 const { Resend } = require('resend');
 
 // Inicialize o Resend com a chave segura do .env
@@ -15,10 +15,14 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // ============================================================================
 
 async function gerarPdfBuffer(htmlContent) {
-    console.log("⏳ Iniciando o gerador de PDF (Puppeteer)...");
+    console.log("⏳ Iniciando o gerador de PDF na Nuvem (Sparticuz)...");
+    
     const browser = await puppeteer.launch({ 
-        headless: "new",
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] 
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath(),
+        headless: chromium.headless,
+        ignoreHTTPSErrors: true,
     });
     
     const page = await browser.newPage();
@@ -317,20 +321,44 @@ router.post('/receber-matricula', async (req, res) => {
         // 📧 6. DISPARO DE E-MAIL (TESTE SEM PDF PARA EVITAR ERRO 502)
         // ====================================================================
         
-        if (email) {
+      if (email) {
             try {
-                // 🚨 PDF Desativado temporariamente
-                // const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula);
-                // const htmlDoCarne = montarHtmlCarnesOficial(parcelas, nome, escola);
-                // const contratoPdfBuffer = await gerarPdfBuffer(htmlDoContrato);
-                // const carnesPdfBuffer = await gerarPdfBuffer(htmlDoCarne);
+                console.log("Começando geração de PDF na Nuvem...");
+                
+                // 1. GERA OS PDFS
+                const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula);
+                const htmlDoCarne = montarHtmlCarnesOficial(parcelas, nome, escola);
+                
+                const contratoPdfBuffer = await gerarPdfBuffer(htmlDoContrato);
+                const carnesPdfBuffer = await gerarPdfBuffer(htmlDoCarne);
+                console.log("✅ PDFs gerados com sucesso!");
 
+                // 2. PREPARA OS ANEXOS
+                const anexos = [];
+                if (contratoPdfBuffer) {
+                    anexos.push({ 
+                        filename: 'Contrato_Assinado.pdf', 
+                        content: Buffer.from(contratoPdfBuffer).toString('base64')
+                    });
+                }
+                anexos.push({ 
+                    filename: 'Carnes_Mensalidades.pdf', 
+                    content: Buffer.from(carnesPdfBuffer).toString('base64')
+                });
+
+                // 3. PREPARA O CORPO DO E-MAIL
                 const corpoDoEmail = `
                     <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; line-height: 1.6;">
                         <h2 style="color: #2c3e50;">Olá, ${nome}! 🎉</h2>
                         <p>É com grande alegria que lhe damos as boas-vindas à <b>${escola.nome || 'nossa instituição'}</b>!</p>
                         <p>A sua matrícula no curso <b>${planoCurso || 'selecionado'}</b> foi realizada com sucesso e já preparamos tudo para você.</p>
                         
+                        <p>Em anexo a este e-mail, você encontrará:</p>
+                        <ul>
+                            <li><b>O seu Contrato de Matrícula</b> (cópia digital);</li>
+                            <li><b>O seu Carnê de Pagamento</b> (com as 12 mensalidades).</li>
+                        </ul>
+
                         <div style="background-color: #f4f6f7; border-left: 4px solid #27ae60; padding: 15px; margin: 20px 0;">
                             <b>📱 Atenção ao seu WhatsApp!</b><br>
                             Fique de olho no seu celular. Muito em breve, a nossa equipe entrará em contato com você para lhe passar novas informações e tirar qualquer dúvida que possa ter!
@@ -341,18 +369,20 @@ router.post('/receber-matricula', async (req, res) => {
                     </div>
                 `;
 
-                // Disparo pelo Resend (SEM ANEXOS)
+                // 4. DISPARA O E-MAIL COM OS ANEXOS LIGADOS
+                console.log("Enviando e-mail pelo Resend...");
                 const respostaResend = await resend.emails.send({
                     from: 'Matriculas <contato@sistemaptt.com.br>',
                     to: email,
-                    subject: '🎉 Bem-vindo(a)! Sua Matrícula foi recebida',
-                    html: corpoDoEmail
+                    subject: '🎉 Bem-vindo(a)! Seu Contrato e Carnês estão aqui',
+                    html: corpoDoEmail,
+                    attachments: anexos // <-- LIGADOS NOVAMENTE
                 });
 
                 if (respostaResend.error) {
                     console.error("Erro do Resend:", respostaResend.error);
                 } else {
-                    console.log(`✅ E-mail enviado COM SUCESSO!`);
+                    console.log(`✅ E-mail com PDFs enviado COM SUCESSO!`);
                 }
             } catch (emailError) {
                 console.error("Erro ao tentar enviar o e-mail:", emailError);
