@@ -227,7 +227,11 @@ router.get('/escola/:id', async (req, res) => {
         const escola = await database.collection('escola').findOne({ escolaId: schoolIdClean });
         if (!escola) return res.status(404).json({ error: 'Escola não encontrada.' });
 
-        res.json({ escolaId: escola.escolaId, configMatricula: escola.configMatricula || null });
+            res.json({
+            escolaId: escola.escolaId,
+            configMatricula: escola.configMatricula || null,
+            configHub: escola.configHub || null 
+        });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao carregar matrícula.' });
     }
@@ -345,7 +349,7 @@ router.post('/receber-matricula', async (req, res) => {
                     <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; line-height: 1.6;">
                         <h2 style="color: #2c3e50;">Olá, ${nome}! 🎉</h2>
                         <p>É com grande alegria que lhe damos as boas-vindas à <b>${escola.nome || 'nossa instituição'}</b>!</p>
-                        <p>A sua matrícula no curso <b>${planoCurso || 'selecionado'}</b> foi realizada com sucesso e já preparamos tudo para si.</p>
+                        <p>A sua matrícula no curso <b>${planoCurso || 'selecionado'}</b> foi realizada com sucesso e já preparamos tudo para você.</p>
                         
                         <p>Em anexo a este e-mail, encontrará:</p>
                         <ul>
@@ -355,11 +359,11 @@ router.post('/receber-matricula', async (req, res) => {
 
                         <div style="background-color: #f4f6f7; border-left: 4px solid #27ae60; padding: 15px; margin: 20px 0;">
                             <b>📱 Atenção ao seu WhatsApp!</b><br>
-                            Fique de olho no seu telemóvel. Muito em breve, a nossa equipa entrará em contacto consigo para lhe passar novas informações e tirar qualquer dúvida que possa ter!
+                            Fique de olho no seu celular. Muito em breve, a nossa equipe entrará em contato para lhe passar novas informações e tirar qualquer dúvida que você possa ter!
                         </div>
 
                         <p>Com os melhores cumprimentos,<br>
-                        <b>Equipa ${escola.nome || 'PTT CURSOS'}</b></p>
+                        <b>Equipe ${escola.nome || 'PTT CURSOS'}</b></p>
                     </div>
                 `;
 
