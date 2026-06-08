@@ -3,40 +3,51 @@ const router = express.Router();
 const crypto = require('crypto');
 const connectDB = require('../config/db');
 
-const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
 const { Resend } = require('resend');
 
 // Inicialize o Resend com a chave segura do .env
 const resend = new Resend(process.env.RESEND_API_KEY); 
 
 // ============================================================================
-// 📄 FUNÇÕES GERADORAS DE PDF (COM DESIGN OFICIAL DO SISTEMA)
+// 📄 FUNÇÕES GERADORAS DE PDF (VIA API EXTERNA - API2PDF)
 // ============================================================================
 
 async function gerarPdfBuffer(htmlContent) {
-    console.log("⏳ Iniciando o gerador de PDF na Nuvem (Sparticuz)...");
+    console.log("⏳ Solicitando PDF ultra-rápido à API2PDF...");
     
-    const browser = await puppeteer.launch({ 
-        args: chromium.args,
-        defaultViewport: chromium.defaultViewport,
-        executablePath: await chromium.executablePath(),
-        headless: chromium.headless,
-        ignoreHTTPSErrors: true,
+    // O fetch nativo do Node.js envia o HTML para a nuvem da API2PDF
+    const response = await fetch('https://v2.api2pdf.com/chrome/pdf/html', {
+        method: 'POST',
+        headers: {
+            'Authorization': process.env.API2PDF_KEY, // A chave que colocou no Render
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            html: htmlContent,
+            inline: true,
+            options: {
+                printBackground: true,
+                marginTop: 0.4, // Aproximadamente 10mm
+                marginBottom: 0.4,
+                marginLeft: 0.4,
+                marginRight: 0.4
+            }
+        })
     });
+
+    const data = await response.json();
     
-    const page = await browser.newPage();
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+    if (!data.FileUrl) {
+        console.error("🚨 Erro da API2PDF:", data);
+        throw new Error("Falha ao processar o PDF na nuvem.");
+    }
+
+    console.log("✅ PDF gerado na nuvem! Fazendo download do documento...");
     
-    // Margens padrão
-    const pdfBuffer = await page.pdf({ 
-        format: 'A4', 
-        printBackground: true, 
-        margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' } 
-    });
-    
-    await browser.close();
-    return pdfBuffer;
+    // Transforma o link recebido num ficheiro digital (Buffer) para o Resend
+    const pdfResponse = await fetch(data.FileUrl);
+    const arrayBuffer = await pdfResponse.arrayBuffer();
+    return Buffer.from(arrayBuffer);
 }
 
 // 🎨 CONSTRUTOR DO HTML DO CARNÊ (Idêntico ao financeiro.js + CNPJ)
@@ -45,7 +56,6 @@ function montarHtmlCarnesOficial(parcelas, nomeAluno, escola) {
     const bancoNome = escola.banco || 'Não Configurado';
     const chavePix = escola.chavePix || 'Não Configurada';
     
-    // Configuração do Logo e CNPJ para o Canhoto
     const imgLogo = escola.foto ? `<img src="${escola.foto}" style="max-height:30px; object-fit:contain;">` : `<div style="font-size:11px; font-weight:bold;">${nomeEscola}</div>`;
     const cnpjCanhoto = escola.cnpj ? `<div style="font-size: 8px; color: #555; margin-top: 3px; font-weight: bold;">CNPJ: ${escola.cnpj}</div>` : '';
     
@@ -114,9 +124,8 @@ function montarHtmlCarnesOficial(parcelas, nomeAluno, escola) {
     return `<html><head><meta charset="UTF-8">${estilo}</head><body><div class="carnes-container">${carnesHTML}</div></body></html>`;
 }
 
-// 🎨 CONSTRUTOR DO HTML DO CONTRATO COMPLETO (Ficha + Cláusulas + CNPJ)
+// 🎨 CONSTRUTOR DO HTML DO CONTRATO COMPLETO
 function montarHtmlContratoOficial(conteudoHTML, escola, dados) {
-    // Configuração do Logo e CNPJ para o topo do Contrato
     const imgLogo = escola.foto ? `<img src="${escola.foto}" style="max-height:80px; margin-bottom: 5px;">` : `<h2 style="margin:0; color:#2c3e50;">${escola.nome || 'INSTITUIÇÃO'}</h2>`;
     const cnpjDiv = escola.cnpj ? `<div style="font-size: 13px; color: #555; font-weight: bold;">CNPJ: ${escola.cnpj}</div>` : '';
     
@@ -141,16 +150,12 @@ function montarHtmlContratoOficial(conteudoHTML, escola, dados) {
                 body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; padding: 0; background: white; }
                 .contrato-container { width: 100%; max-width: 800px; margin: 0 auto; }
                 h1, h2, h3 { color: #2c3e50; }
-                
-                /* Estilo da Ficha de Matrícula */
                 .ficha-box { border: 1px solid #ddd; padding: 20px; border-radius: 8px; background: #fcfcfc; margin-bottom: 30px; }
                 .ficha-titulo { background: #2c3e50; color: white; padding: 8px 15px; border-radius: 5px; font-size: 14px; text-transform: uppercase; margin-top: 0; margin-bottom: 15px; }
                 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; font-size: 13px; }
                 .linha-dado { border-bottom: 1px dashed #eee; padding-bottom: 5px; }
                 .label { font-weight: bold; color: #666; font-size: 11px; text-transform: uppercase; display: block; }
                 .valor { font-size: 14px; font-weight: bold; color: #222; }
-
-                /* Estilo do Contrato */
                 .clausulas { font-size: 12px; text-align: justify; line-height: 1.5; margin-top: 30px; }
                 .assinatura-box { margin-top: 50px; text-align: center; page-break-inside: avoid; }
             </style>
@@ -159,7 +164,7 @@ function montarHtmlContratoOficial(conteudoHTML, escola, dados) {
             <div class="contrato-container">
                 ${cabecalhoEscola}
                 <h2 style="text-align: center; margin-bottom: 5px; text-transform: uppercase;">Contrato de Prestação de Serviços Educacionais</h2>
-                <div style="text-align: center; font-size: 12px; color: #666; margin-bottom: 25px;">Documento gerado e aceito digitalmente em ${dataAtual} às ${horaAtual}</div>
+                <div style="text-align: center; font-size: 12px; color: #666; margin-bottom: 25px;">Documento gerado e aceite digitalmente em ${dataAtual} às ${horaAtual}</div>
                 
                 <div class="ficha-box">
                     <h3 class="ficha-titulo">📝 Ficha de Matrícula e Dados do Contratante</h3>
@@ -203,7 +208,6 @@ function montarHtmlContratoOficial(conteudoHTML, escola, dados) {
                         ✅ Aceite Eletrónico Registado (IP Logado e Confirmado via Sistema)
                     </div>
                 </div>
-
             </div>
         </body>
         </html>
@@ -214,7 +218,6 @@ function montarHtmlContratoOficial(conteudoHTML, escola, dados) {
 // 🌐 ROTAS DA API
 // ============================================================================
 
-// Buscar dados básicos da escola para a página de matrícula
 router.get('/escola/:id', async (req, res) => {
     try {
         const database = await connectDB();
@@ -228,24 +231,17 @@ router.get('/escola/:id', async (req, res) => {
     }
 });
 
-// Receber formulário de matrícula externa
 router.post('/receber-matricula', async (req, res) => {
-    // ❌ APAGUE O CONSOLE.LOG QUE ESTAVA AQUI EM CIMA
-    
     try {
         const database = await connectDB();
         const dadosMatricula = req.body; 
         const { escolaId, nome, email, conteudoHTML, planoCurso, diaVencimento } = dadosMatricula;
 
-        // ✅ COLOQUE O CONSOLE.LOG AQUI (Agora o servidor já sabe o que é o 'email')
         console.log("Iniciando processamento da matrícula para:", email); 
 
-        // 🕵️‍♂️ Busca os dados completos da escola para usar nos PDFs
         const escola = await database.collection('escola').findOne({ escolaId: escolaId }) || {};
-
         const idAlunoGerado = crypto.randomUUID();
         
-       
         // 1. Gravação do Perfil do Aluno
         const novoAluno = {
             ...dadosMatricula,
@@ -264,7 +260,7 @@ router.post('/receber-matricula', async (req, res) => {
             }
         }
 
-        // 3. GERADOR DO CARNÊ AUTOMÁTICO (12 MENSALIDADES)
+        // 3. GERADOR DO CARNÊ AUTOMÁTICO
         const parcelas = [];
         const dataAtual = new Date();
         const diaPagar = parseInt(diaVencimento) || 10;
@@ -306,7 +302,7 @@ router.post('/receber-matricula', async (req, res) => {
             });
         }
 
-        // 5. Notificação Interna do Sistema
+        // 5. Notificação Interna
         await database.collection('notificacoes').insertOne({
             id: "NOTI_" + crypto.randomUUID(),
             escolaId,
@@ -317,57 +313,74 @@ router.post('/receber-matricula', async (req, res) => {
             dataCriacao: new Date().toISOString()
         });
 
-       // ====================================================================
-        // 📧 6. DISPARO DE E-MAIL (TESTE SEM PDF PARA EVITAR ERRO 502)
-        // ====================================================================
-        
-     if (email) {
+        // 6. GERAÇÃO DOS PDFS E ENVIO DE E-MAIL
+        if (email) {
             try {
-                console.log("Preparando envio de e-mail (SEM PDF temporariamente)...");
+                console.log("Iniciando conversão de HTML para PDF via API externa...");
                 
-                // 🚨 COMENTE A GERAÇÃO DO PDF PARA O RENDER NÃO TRAVAR
-                // const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula);
-                // const htmlDoCarne = montarHtmlCarnesOficial(parcelas, nome, escola);
-                // const contratoPdfBuffer = await gerarPdfBuffer(htmlDoContrato);
-                // const carnesPdfBuffer = await gerarPdfBuffer(htmlDoCarne);
-                // console.log("✅ PDFs gerados com sucesso!");
+                const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula);
+                const htmlDoCarne = montarHtmlCarnesOficial(parcelas, nome, escola);
+                
+                // Pede os PDFs à API
+                const contratoPdfBuffer = await gerarPdfBuffer(htmlDoContrato);
+                const carnesPdfBuffer = await gerarPdfBuffer(htmlDoCarne);
+                console.log("✅ Ficheiros PDF prontos para envio!");
+
+                // Prepara os Anexos
+                const anexos = [];
+                if (contratoPdfBuffer) {
+                    anexos.push({ 
+                        filename: 'Contrato_Assinado.pdf', 
+                        content: Buffer.from(contratoPdfBuffer).toString('base64')
+                    });
+                }
+                anexos.push({ 
+                    filename: 'Carnes_Mensalidades.pdf', 
+                    content: Buffer.from(carnesPdfBuffer).toString('base64')
+                });
 
                 const corpoDoEmail = `
                     <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; line-height: 1.6;">
                         <h2 style="color: #2c3e50;">Olá, ${nome}! 🎉</h2>
                         <p>É com grande alegria que lhe damos as boas-vindas à <b>${escola.nome || 'nossa instituição'}</b>!</p>
-                        <p>A sua matrícula no curso <b>${planoCurso || 'selecionado'}</b> foi realizada com sucesso e já preparamos tudo para você.</p>
+                        <p>A sua matrícula no curso <b>${planoCurso || 'selecionado'}</b> foi realizada com sucesso e já preparamos tudo para si.</p>
                         
+                        <p>Em anexo a este e-mail, encontrará:</p>
+                        <ul>
+                            <li><b>O seu Contrato de Matrícula</b> (cópia digital);</li>
+                            <li><b>O seu Carnê de Pagamento</b> (com as 12 mensalidades).</li>
+                        </ul>
+
                         <div style="background-color: #f4f6f7; border-left: 4px solid #27ae60; padding: 15px; margin: 20px 0;">
                             <b>📱 Atenção ao seu WhatsApp!</b><br>
-                            Fique de olho no seu celular. Muito em breve, a nossa equipe entrará em contato com você para lhe passar os seus documentos e tirar qualquer dúvida!
+                            Fique de olho no seu telemóvel. Muito em breve, a nossa equipa entrará em contacto consigo para lhe passar novas informações e tirar qualquer dúvida que possa ter!
                         </div>
 
                         <p>Com os melhores cumprimentos,<br>
-                        <b>Equipe ${escola.nome || 'PTT CURSOS'}</b></p>
+                        <b>Equipa ${escola.nome || 'PTT CURSOS'}</b></p>
                     </div>
                 `;
 
-                console.log("Enviando e-mail pelo Resend...");
+                console.log("Enviando e-mail final pelo Resend...");
                 const respostaResend = await resend.emails.send({
                     from: 'Matriculas <contato@sistemaptt.com.br>',
                     to: email,
-                    subject: '🎉 Bem-vindo(a)! Sua Matrícula foi recebida',
-                    html: corpoDoEmail
-                    // attachments: anexos <-- COMENTE OS ANEXOS TAMBÉM
+                    subject: '🎉 Bem-vindo(a)! O seu Contrato e Carnês estão aqui',
+                    html: corpoDoEmail,
+                    attachments: anexos
                 });
 
                 if (respostaResend.error) {
                     console.error("Erro do Resend:", respostaResend.error);
                 } else {
-                    console.log(`✅ E-mail enviado COM SUCESSO!`);
+                    console.log(`✅ E-mail com PDFs enviado COM SUCESSO!`);
                 }
             } catch (emailError) {
-                console.error("Erro ao tentar enviar o e-mail:", emailError);
+                console.error("Erro ao tentar enviar o e-mail ou gerar PDF:", emailError);
             }
         }
 
-        res.json({ success: true, message: 'Matrícula processada!' });
+        res.json({ success: true, message: 'Matrícula processada com sucesso!' });
     } catch (error) {
         console.error("Erro crítico ao processar matrícula:", error);
         res.status(500).json({ error: 'Erro ao processar matrícula.' });
