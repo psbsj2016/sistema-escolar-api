@@ -139,8 +139,10 @@ function montarHtmlContratoOficial(conteudoHTML, escola, dados) {
     const dataNascimentoF = dados.nascimento ? dados.nascimento.split('-').reverse().join('/') : 'Não informado';
     const telefone = dados.telefone || dados.whatsapp || dados.celular || 'Não informado';
     const endereco = `${dados.rua || ''}, Nº ${dados.numero || 'S/N'} ${dados.complemento ? ' - ' + dados.complemento : ''}`;
-    const dataAtual = new Date().toLocaleDateString('pt-BR');
-    const horaAtual = new Date().toLocaleTimeString('pt-BR');
+   
+    const fusoBR = { timeZone: 'America/Sao_Paulo' };
+    const dataAtual = new Date().toLocaleDateString('pt-BR', fusoBR);
+    const horaAtual = new Date().toLocaleTimeString('pt-BR', fusoBR);
 
     return `
         <html>
@@ -265,7 +267,7 @@ router.post('/receber-matricula', async (req, res) => {
         const dataAtual = new Date();
         const diaPagar = parseInt(diaVencimento) || 10;
         const idLote = Date.now().toString(); 
-        const dataGeracao = new Date().toLocaleDateString('pt-BR');
+        const dataGeracao = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
         for (let i = 1; i <= 12; i++) {
             let dataVenc = new Date(dataAtual.getFullYear(), dataAtual.getMonth() + i, diaPagar);
