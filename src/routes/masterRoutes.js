@@ -5,45 +5,55 @@ const crypto = require('crypto');
 const bcrypt = require('bcrypt'); 
 const connectDB = require('../config/db');
 
-const JWT_SECRET = process.env.JWT_SECRET;
-const SENHA_DONO_HASH = process.env.SENHA_DONO_HASH; 
-
-// 🛡️ Validação de Segurança Inicial (Avisa no terminal se esquecer as chaves)
-if (!JWT_SECRET || !SENHA_DONO_HASH) {
-    console.error("🚨 ALERTA CRÍTICO: JWT_SECRET ou SENHA_DONO_HASH não encontrados no ficheiro .env!");
-}
-
 // 🛡️ Middleware de Segurança do Master
 const verifyMaster = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.status(403).json({ error: 'Não autorizado.' });
-    jwt.verify(authHeader.split(' ')[1], JWT_SECRET, (err, decoded) => {
-        if (err || !decoded.master) return res.status(401).json({ error: 'Acesso negado.' });
-        next();
-    });
+    
+    // Fallback caso o JWT_SECRET demore a ser lido do .env
+    const segredo = process.env.JWT_SECRET || 'fallback_secret_ptt_2024_seguro';
+
+    try {
+        jwt.verify(authHeader.split(' ')[1], segredo, (err, decoded) => {
+            if (err || !decoded.master) return res.status(401).json({ error: 'Acesso negado.' });
+            next();
+        });
+    } catch (e) {
+        return res.status(500).json({ error: 'Erro interno de validação.' });
+    }
 };
 
 // ==========================================
-// 1. LOGIN
+// 1. LOGIN (À Prova de Falhas)
 // ==========================================
 router.post('/login', async (req, res) => {
     try {
         const senhaDigitada = req.body.senha;
+        // Lemos as variáveis de ambiente AQUI, no momento exato do clique!
+        const senhaEnv = process.env.SENHA_DONO_HASH;
+        const segredo = process.env.JWT_SECRET || 'fallback_secret_ptt_2024_seguro';
         
-        // Proteção contra envio de dados vazios ou corrompidos
         if (!senhaDigitada) return res.status(400).json({ error: 'Senha não fornecida.' });
-        if (!SENHA_DONO_HASH) return res.status(500).json({ error: 'Erro de configuração do servidor (.env).' });
+        if (!senhaEnv) return res.status(500).json({ error: 'A variável SENHA_DONO_HASH não está configurada no seu servidor.' });
 
-        const senhaValida = await bcrypt.compare(String(senhaDigitada), String(SENHA_DONO_HASH));
+        let senhaValida = false;
+
+        // 🛡️ INTELIGÊNCIA DE FALLBACK: 
+        // Verifica se a senha no .env é um Hash (começa com $2) ou se é texto normal.
+        if (String(senhaEnv).startsWith('$2')) {
+            senhaValida = await bcrypt.compare(String(senhaDigitada), String(senhaEnv));
+        } else {
+            senhaValida = (String(senhaDigitada) === String(senhaEnv));
+        }
 
         if (senhaValida) {
-            const token = jwt.sign({ master: true }, JWT_SECRET, { expiresIn: '2h' });
+            const token = jwt.sign({ master: true }, segredo, { expiresIn: '2h' });
             return res.json({ success: true, token });
         }
         res.status(401).json({ error: 'Senha incorreta.' });
     } catch (error) {
-        console.error("🚨 Erro Crítico na rota de login master:", error.message);
-        res.status(500).json({ error: 'Erro interno no login.' });
+        console.error("🚨 Erro Crítico no login master:", error.message);
+        res.status(500).json({ error: `Erro 500: ${error.message}` }); // Agora mostra o motivo exato no navegador!
     }
 });
 
@@ -60,13 +70,11 @@ router.get('/ativacoes', verifyMaster, async (req, res) => {
         const listaFinal = [];
         const emailsProcessados = new Set(); 
 
-        // 1. Processa a lista principal de ativações
         for (let a of ativacoes) {
             if (!a.email) continue;
             
-            // 🛡️ BLINDAGEM: Converte sempre para string antes de usar toLowerCase()
+            // Blindagem: Garante que é sempre String
             const email = String(a.email).toLowerCase().trim();
-            
             const escola = escolas.find(e => e.email && String(e.email).toLowerCase().trim() === email);
             
             let statusFinal = a.status || 'Pendente';
@@ -78,11 +86,9 @@ router.get('/ativacoes', verifyMaster, async (req, res) => {
                 pinAtivacao: a.pinAtivacao || '',
                 plano: (escola && escola.plano) ? escola.plano : (a.plano || 'Pendente')
             });
-            
             emailsProcessados.add(email);
         }
 
-        // 2. Resgata escolas antigas que sumiram da tabela de ativações
         for (let e of escolas) {
             if (!e.email) continue;
             const email = String(e.email).toLowerCase().trim();
@@ -98,12 +104,10 @@ router.get('/ativacoes', verifyMaster, async (req, res) => {
             }
         }
 
-        console.log(`\n📡 MASTER: Enviando ${listaFinal.length} registros para o Painel.`);
         res.json(listaFinal);
-        
     } catch (error) {
-        console.error("🚨 Erro Crítico ao puxar ativações:", error.message, error.stack);
-        res.status(500).json({ error: 'Erro interno ao carregar ativações.' });
+        console.error("🚨 Erro Crítico ao puxar ativações:", error.message);
+        res.status(500).json({ error: 'Erro interno ao carregar dados.' });
     }
 });
 
@@ -202,7 +206,7 @@ router.get('/notificacoes', verifyMaster, async (req, res) => {
             if (!a.dataAtivacao) return; 
 
             const dataAtiv = new Date(a.dataAtivacao);
-            if (isNaN(dataAtiv.getTime())) return; // Evita erro se a data for inválida
+            if (isNaN(dataAtiv.getTime())) return;
 
             const diasPassados = Math.floor((hoje - dataAtiv) / (1000 * 60 * 60 * 24));
             let diasLimite = (a.plano === 'Teste') ? 7 : 30; 
@@ -214,8 +218,7 @@ router.get('/notificacoes', verifyMaster, async (req, res) => {
                     titulo: 'Renovação Próxima',
                     mensagem: `O plano <b>${a.plano}</b> de ${a.email} vence em ${diasRestantes} dia(s).`,
                 });
-            } 
-            else if (diasRestantes < 0) {
+            } else if (diasRestantes < 0) {
                 notificacoes.push({
                     tipo: 'perigo',
                     titulo: 'Plano Vencido',
