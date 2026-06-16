@@ -10,7 +10,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const JWT_SECRET = process.env.JWT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://www.sistemaptt.com.br';
 const isProduction = process.env.NODE_ENV === 'production';
-const cookieDomain = isProduction ? '.sistemaptt.com.br' : undefined; // 'undefined' deixa funcionar no localhost!
+const cookieDomain = isProduction ? '.sistemaptt.com.br';
 
 // ============================================================================
 // 1. ROTA: ENVIAR CÓDIGO DE CADASTRO
