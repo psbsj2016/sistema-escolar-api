@@ -18,11 +18,12 @@ const masterRoutes = require('./src/routes/masterRoutes');
 const escolaRoutes = require('./src/routes/escolaRoutes');
 const usuariosRoutes = require('./src/routes/usuariosRoutes');
 const dataRoutes = require('./src/routes/dataRoutes');
+const workspaceRoutes = require('./src/routes/workspaceRoutes');
 
 const app = express();
 app.set('trust proxy', 1);
 
-// Segurança e CORS idêntico ao original
+// Segurança e CORS
 app.use(helmet({ crossOriginResourcePolicy: false }));
 
 const dominiosPermitidos = ['https://www.sistemaptt.com.br', 'https://sistemaptt.com.br', 'http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:5500', 'null'];
@@ -47,7 +48,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Middlewares
+// Middlewares (CRUCIAL: Têm de vir antes das rotas!)
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 app.use(mongoSanitize());
@@ -89,6 +90,7 @@ app.use(verifyJWT);
 // =========================================================
 app.use('/escola', escolaRoutes);
 app.use('/usuarios', usuariosRoutes); 
+app.use('/workspace', workspaceRoutes); // 🔥 Corrigido: Agora sim o workspace consegue ler dados, ficheiros e sessões seguras!
 app.use('/', dataRoutes); // CRUD no final para não colidir
 
 // =========================================================
