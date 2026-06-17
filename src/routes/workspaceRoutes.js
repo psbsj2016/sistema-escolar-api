@@ -1,17 +1,58 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const connectDB = require('../config/db'); // Ajuste o caminho se a sua pasta config estiver noutro local
+const connectDB = require('../config/db');
+const multer = require('multer');
+const { v2: cloudinary } = require('cloudinary');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
-// Middleware simples para validar a sessão (caso não tenha um global)
+// ☁️ 1. Configuração do Cloudinary
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// 📦 2. Configuração do Motor de Upload
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: async (req, file) => {
+        return {
+            folder: 'workspace_escola', // Pasta que será criada no seu Cloudinary
+            resource_type: 'auto', // Aceita vídeo, imagem e ficheiros raw (PDF/Docs)
+            public_id: `${Date.now()}_${file.originalname.split('.')[0]}`
+        };
+    },
+});
+const upload = multer({ storage: storage });
+
 const verificarToken = (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
-    // Assume-se que o token é verificado aqui (pode usar o jwt.verify se desejar)
     next();
 };
 
-// 1. ROTA PARA CRIAR UMA NOVA PUBLICAÇÃO
+// 🚀 3. ROTA NOVA: UPLOAD DIRETO PARA A NUVEM
+// Aceita até 10 ficheiros de uma vez no campo 'anexos'
+router.post('/upload', verificarToken, upload.array('anexos', 10), async (req, res) => {
+    try {
+        if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'Nenhum ficheiro enviado.' });
+
+        // Monta os links gerados pelo Cloudinary
+        const urls = req.files.map(file => ({
+            url: file.path,
+            nome: file.originalname,
+            tipo: file.mimetype
+        }));
+
+        res.status(200).json({ success: true, anexos: urls });
+    } catch (error) {
+        console.error("Erro no upload da Nuvem:", error);
+        res.status(500).json({ error: 'Erro ao enviar ficheiros para a Nuvem.' });
+    }
+});
+
+// 📝 4. ROTA PARA CRIAR A PUBLICAÇÃO NO MONGODB
 router.post('/posts', verificarToken, async (req, res) => {
     try {
         const { texto, autorNome, autorTipo, escolaId, anexos } = req.body;
@@ -23,71 +64,37 @@ router.post('/posts', verificarToken, async (req, res) => {
         const database = await connectDB();
         const novoPost = {
             id: crypto.randomUUID(),
-            escolaId: escolaId || 'DEFAULT', // O ideal é extrair do token JWT
+            escolaId: escolaId || 'DEFAULT',
             autorNome: autorNome || 'Desconhecido',
             autorTipo: autorTipo || 'Professor',
             texto: texto,
-            anexos: anexos || [], // Array de URLs (Fase 4: Nuvem)
+            anexos: anexos || [], // Aqui gravamos apenas os LINKS do Cloudinary!
             dataCriacao: new Date().toISOString(),
             comentarios: [],
             likes: 0
         };
 
         await database.collection('workspace_posts').insertOne(novoPost);
-        
-        // Retorna o post recém-criado para o frontend desenhar imediatamente
         res.status(201).json({ success: true, post: novoPost });
 
     } catch (error) {
-        console.error("Erro ao criar post no Workspace:", error);
         res.status(500).json({ error: 'Erro interno ao publicar.' });
     }
 });
 
-// 2. ROTA PARA BUSCAR TODAS AS PUBLICAÇÕES
+// 🔍 5. ROTA PARA BUSCAR TODAS AS PUBLICAÇÕES
 router.get('/posts', verificarToken, async (req, res) => {
     try {
-        // Num cenário real, filtramos pelo escolaId da requisição
         const database = await connectDB();
         const posts = await database.collection('workspace_posts')
             .find({})
-            .sort({ dataCriacao: -1 }) // Mais recentes primeiro
-            .limit(50) // Paginação básica
+            .sort({ dataCriacao: -1 })
+            .limit(50)
             .toArray();
 
         res.status(200).json(posts);
     } catch (error) {
-        console.error("Erro ao buscar posts:", error);
         res.status(500).json({ error: 'Erro ao carregar o feed.' });
-    }
-});
-
-// 3. ROTA PARA ADICIONAR COMENTÁRIOS / RESPOSTAS A UMA ATIVIDADE
-router.post('/posts/:id/comentarios', verificarToken, async (req, res) => {
-    try {
-        const postId = req.params.id;
-        const { texto, autorNome } = req.body;
-
-        const database = await connectDB();
-        const novoComentario = {
-            id: crypto.randomUUID(),
-            autorNome: autorNome,
-            texto: texto,
-            data: new Date().toISOString()
-        };
-
-        const result = await database.collection('workspace_posts').updateOne(
-            { id: postId },
-            { $push: { comentarios: novoComentario } }
-        );
-
-        if (result.modifiedCount === 0) {
-            return res.status(404).json({ error: 'Post não encontrado.' });
-        }
-
-        res.status(201).json({ success: true, comentario: novoComentario });
-    } catch (error) {
-        res.status(500).json({ error: 'Erro ao comentar.' });
     }
 });
 
