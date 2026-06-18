@@ -186,4 +186,40 @@ router.delete('/posts/:id', verificarToken, async (req, res) => {
     }
 });
 
+// 9. BUSCAR MENSAGENS DO FÓRUM DA TURMA
+router.get('/chat/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const mensagens = await database.collection('workspace_chats')
+            .find({ turmaId: req.params.turmaId })
+            .sort({ data: 1 }) // Mais antigas no topo, mais novas em baixo
+            .toArray();
+        res.status(200).json(mensagens);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao carregar o chat.' });
+    }
+});
+
+// 10. ENVIAR MENSAGEM PARA O FÓRUM DA TURMA
+router.post('/chat/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const { texto, autorNome } = req.body;
+        if (!texto) return res.status(400).json({ error: 'A mensagem não pode estar vazia.' });
+
+        const database = await connectDB();
+        const novaMensagem = {
+            id: crypto.randomUUID(),
+            turmaId: req.params.turmaId,
+            autorNome: autorNome || 'Desconhecido',
+            texto: texto,
+            data: new Date().toISOString()
+        };
+
+        await database.collection('workspace_chats').insertOne(novaMensagem);
+        res.status(201).json({ success: true, mensagem: novaMensagem });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao enviar mensagem.' });
+    }
+});
+
 module.exports = router;
