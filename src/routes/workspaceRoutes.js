@@ -222,4 +222,31 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
     }
 });
 
+// 11. ATUALIZAR PERFIL DO ALUNO (MUDAR SENHA)
+router.put('/perfil', verificarToken, async (req, res) => {
+    try {
+        const { id, senha } = req.body;
+        
+        if (!id || !senha || senha.length < 6) {
+            return res.status(400).json({ error: 'Dados inválidos ou senha muito curta.' });
+        }
+
+        const database = await connectDB();
+        
+        // Vai à base de dados de utilizadores do sistema e atualiza a senha deste ID
+        const result = await database.collection('usuarios').updateOne(
+            { id: id },
+            { $set: { senha: senha } }
+        );
+
+        if (result.modifiedCount === 0) {
+            return res.status(404).json({ error: 'Utilizador não encontrado.' });
+        }
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao atualizar a senha.' });
+    }
+});
+
 module.exports = router;
