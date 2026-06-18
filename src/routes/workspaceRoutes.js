@@ -252,4 +252,48 @@ router.put('/perfil', verificarToken, async (req, res) => {
     }
 });
 
+// 12. ENTREGAR TRABALHO / TAREFA
+router.post('/entregas', verificarToken, async (req, res) => {
+    try {
+        const { eventoId, alunoId, alunoNome, arquivoUrl, arquivoNome, observacao } = req.body;
+        if (!eventoId || !arquivoUrl) return res.status(400).json({ error: 'O ficheiro é obrigatório.' });
+
+        const database = await connectDB();
+        const novaEntrega = {
+            id: crypto.randomUUID(),
+            eventoId: eventoId,
+            alunoId: alunoId,
+            alunoNome: alunoNome,
+            arquivoUrl: arquivoUrl,
+            arquivoNome: arquivoNome,
+            observacao: observacao || '',
+            dataEntrega: new Date().toISOString()
+        };
+
+        await database.collection('workspace_entregas').insertOne(novaEntrega);
+        res.status(201).json({ success: true, entrega: novaEntrega });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao registar a entrega.' });
+    }
+});
+
+// 13. VERIFICAR SE O ALUNO JÁ ENTREGOU UMA TAREFA ESPECÍFICA
+router.get('/entregas/verificar/:eventoId/:alunoId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const entrega = await database.collection('workspace_entregas').findOne({
+            eventoId: req.params.eventoId,
+            alunoId: req.params.alunoId
+        });
+        
+        if (entrega) {
+            res.status(200).json({ entregue: true, detalhes: entrega });
+        } else {
+            res.status(200).json({ entregue: false });
+        }
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao verificar entrega.' });
+    }
+});
+
 module.exports = router;
