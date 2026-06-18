@@ -16,6 +16,19 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: async (req, file) => {
+        // 1. Descobre se é um documento ou uma imagem/vídeo
+        const ehDocumento = file.originalname.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
+        
+        // 2. Se for documento, tem de ser 'raw' e TEM DE MANTER a extensão no nome!
+        if (ehDocumento) {
+            return {
+                folder: 'workspace_escola',
+                resource_type: 'raw',
+                public_id: `${Date.now()}_${file.originalname}` // Mantém a extensão intacta!
+            };
+        }
+        
+        // 3. Se for imagem/vídeo, deixa no 'auto' e tira a extensão (o Cloudinary põe depois)
         return {
             folder: 'workspace_escola',
             resource_type: 'auto',
@@ -23,6 +36,7 @@ const storage = new CloudinaryStorage({
         };
     },
 });
+
 const upload = multer({ storage: storage });
 
 const verificarToken = (req, res, next) => {
