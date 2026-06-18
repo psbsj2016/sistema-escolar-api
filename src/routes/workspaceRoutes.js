@@ -146,17 +146,37 @@ router.post('/posts/:id/comentarios', verificarToken, async (req, res) => {
 
         if (result.modifiedCount === 0) return res.status(404).json({ error: 'Post não encontrado.' });
 
-        // 🔔 Cria a notificação se o autor do comentário for diferente do dono do post
-        if (postOriginal && postOriginal.autorNome !== autorNome) {
-            await database.collection('workspace_notificacoes').insertOne({
+        // 🔔 Gatilho: Notificar quem interagiu com o post
+        if (postOriginal) {
+            const usuariosNotificar = new Set();
+            
+            // Adiciona o dono do post
+            if (postOriginal.autorNome !== autorNome) usuariosNotificar.add(postOriginal.autorNome);
+            
+            // Adiciona quem já comentou
+            if (postOriginal.comentarios) {
+                postOriginal.comentarios.forEach(c => {
+                    if (c.autorNome !== autorNome) usuariosNotificar.add(c.autorNome);
+                });
+            }
+            
+            // Adiciona quem já curtiu/descurtiu (se houver IDs mapeados para nomes ou se os nomes forem usados)
+            // Nota: Se usarmos IDs, o ideal é buscar o nome. Para simplificar e manter compatível com o seu sistema atual baseado em nomes:
+            const notificacoesArray = Array.from(usuariosNotificar).map(destinatario => ({
                 id: crypto.randomUUID(),
                 escolaId: postOriginal.escolaId,
-                destinatarioNome: postOriginal.autorNome, // A quem se destina a notificação
+                destinatarioNome: destinatario,
                 remetenteNome: autorNome,
-                mensagem: `comentou na sua publicação: "${texto.substring(0, 20)}..."`,
+                mensagem: `interagiu no post: "${texto.substring(0, 20)}..."`,
+                origem: 'post',
+                origemId: postId,
                 lida: false,
                 data: new Date().toISOString()
-            });
+            }));
+
+            if (notificacoesArray.length > 0) {
+                await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
+            }
         }
 
         res.status(201).json({ success: true, comentario: novoComentario });
@@ -222,7 +242,21 @@ router.put('/posts/:id/reacao', verificarToken, async (req, res) => {
         const database = await connectDB();
         
         const post = await database.collection('workspace_posts').findOne({ id: postId });
-        if (!post) return res.status(404).json({ error: 'Post não encontrado.' });
+        // Código existente de update executado com sucesso...
+        // 🔔 Gatilho: Notificar o dono do post sobre a reação
+        if (post && post.autorNome !== req.body.autorNome) { // Certifique-se de enviar autorNome no body do frontend
+            await database.collection('workspace_notificacoes').insertOne({
+                id: crypto.randomUUID(),
+                escolaId: post.escolaId,
+                destinatarioNome: post.autorNome,
+                remetenteNome: req.body.autorNome,
+                mensagem: `reagiu à sua publicação.`,
+                origem: 'post',
+                origemId: postId,
+                lida: false,
+                data: new Date().toISOString()
+            });
+        }
 
         // Garante que são arrays (proteção para posts antigos que tinham o like como número)
         let likes = Array.isArray(post.likes) ? post.likes : [];
@@ -293,6 +327,33 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
         };
 
         await database.collection('workspace_chats').insertOne(novaMensagem);
+        
+        // 🔔 Gatilho: Notificar todos os membros da turma (exceto quem enviou)
+        const alunosDaTurma = await database.collection('alunos').find({ 
+            $or: [{ turma: req.params.turmaId }, { turmas: req.params.turmaId }] 
+        }).toArray();
+
+        const notificacoesChat = [];
+        alunosDaTurma.forEach(aluno => {
+            if (aluno.nome !== autorNome) {
+                notificacoesChat.push({
+                    id: crypto.randomUUID(),
+                    escolaId: aluno.escolaId || 'DEFAULT',
+                    destinatarioNome: aluno.nome,
+                    remetenteNome: autorNome,
+                    mensagem: `enviou uma mensagem no fórum da turma.`,
+                    origem: 'chat',
+                    origemId: req.params.turmaId,
+                    destinoNome: 'Fórum da Turma', // 🛡️ CORRIGIDO: Removida a variável fantasma
+                    lida: false,
+                    data: new Date().toISOString()
+                });
+            }
+        });
+
+        if (notificacoesChat.length > 0) {
+            await database.collection('workspace_notificacoes').insertMany(notificacoesChat);
+        }
         res.status(201).json({ success: true, mensagem: novaMensagem });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao enviar mensagem.' });
