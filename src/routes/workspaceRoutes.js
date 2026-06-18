@@ -327,4 +327,19 @@ router.get('/entregas/verificar/:eventoId/:alunoId', verificarToken, async (req,
     }
 });
 
+// 14. LISTAR ENTREGAS DE UMA TAREFA (PARA PROFESSORES/GESTORES)
+router.get('/entregas/tarefa/:eventoId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const entregas = await database.collection('workspace_entregas')
+            .find({ eventoId: req.params.eventoId })
+            .sort({ dataEntrega: -1 }) // As entregas mais recentes aparecem primeiro
+            .toArray();
+            
+        res.status(200).json(entregas);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao buscar trabalhos entregues.' });
+    }
+});
+
 module.exports = router;
