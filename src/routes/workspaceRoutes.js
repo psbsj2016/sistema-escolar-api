@@ -196,22 +196,54 @@ router.put('/notificacoes/ler/:nomeDono', verificarToken, async (req, res) => {
     }
 });
 
-// 7. DAR GOSTO (LIKE) NUMA PUBLICAÇÃO
-router.put('/posts/:id/like', verificarToken, async (req, res) => {
+// 4.1 APAGAR COMENTÁRIO 🗑️
+router.delete('/posts/:postId/comentarios/:comentarioId', verificarToken, async (req, res) => {
     try {
-        const postId = req.params.id;
+        const { postId, comentarioId } = req.params;
         const database = await connectDB();
         
-        // Soma +1 aos likes da publicação
         const result = await database.collection('workspace_posts').updateOne(
             { id: postId },
-            { $inc: { likes: 1 } }
+            { $pull: { comentarios: { id: comentarioId } } } // Remove da array o comentário com este ID
         );
 
-        if (result.modifiedCount === 0) return res.status(404).json({ error: 'Post não encontrado.' });
+        if (result.modifiedCount === 0) return res.status(404).json({ error: 'Comentário não encontrado.' });
         res.status(200).json({ success: true });
     } catch (error) {
-        res.status(500).json({ error: 'Erro ao processar gosto.' });
+        res.status(500).json({ error: 'Erro ao apagar comentário.' });
+    }
+});
+
+// 7. REAGIR A UMA PUBLICAÇÃO (LIKE / DISLIKE) 👍👎
+router.put('/posts/:id/reacao', verificarToken, async (req, res) => {
+    try {
+        const postId = req.params.id;
+        const { userId, tipo } = req.body; // 'like', 'dislike', ou 'none'
+        const database = await connectDB();
+        
+        const post = await database.collection('workspace_posts').findOne({ id: postId });
+        if (!post) return res.status(404).json({ error: 'Post não encontrado.' });
+
+        // Garante que são arrays (proteção para posts antigos que tinham o like como número)
+        let likes = Array.isArray(post.likes) ? post.likes : [];
+        let dislikes = Array.isArray(post.dislikes) ? post.dislikes : [];
+
+        // Remove a pessoa das duas listas (limpa o estado dela)
+        likes = likes.filter(id => id !== userId);
+        dislikes = dislikes.filter(id => id !== userId);
+
+        // Adiciona na lista certa
+        if (tipo === 'like') likes.push(userId);
+        if (tipo === 'dislike') dislikes.push(userId);
+
+        await database.collection('workspace_posts').updateOne(
+            { id: postId },
+            { $set: { likes: likes, dislikes: dislikes } }
+        );
+
+        res.status(200).json({ success: true, likes, dislikes });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao processar reação.' });
     }
 });
 
