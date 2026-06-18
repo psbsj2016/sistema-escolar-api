@@ -151,4 +151,39 @@ router.put('/notificacoes/ler/:nomeDono', verificarToken, async (req, res) => {
     }
 });
 
+// 7. DAR GOSTO (LIKE) NUMA PUBLICAÇÃO
+router.put('/posts/:id/like', verificarToken, async (req, res) => {
+    try {
+        const postId = req.params.id;
+        const database = await connectDB();
+        
+        // Soma +1 aos likes da publicação
+        const result = await database.collection('workspace_posts').updateOne(
+            { id: postId },
+            { $inc: { likes: 1 } }
+        );
+
+        if (result.modifiedCount === 0) return res.status(404).json({ error: 'Post não encontrado.' });
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao processar gosto.' });
+    }
+});
+
+// 8. APAGAR UMA PUBLICAÇÃO
+router.delete('/posts/:id', verificarToken, async (req, res) => {
+    try {
+        const postId = req.params.id;
+        const database = await connectDB();
+        
+        // Remove a publicação inteira da base de dados
+        const result = await database.collection('workspace_posts').deleteOne({ id: postId });
+        
+        if (result.deletedCount === 0) return res.status(404).json({ error: 'Post não encontrado.' });
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao apagar publicação.' });
+    }
+});
+
 module.exports = router;
