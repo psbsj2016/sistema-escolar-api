@@ -45,10 +45,10 @@ router.post('/upload', verificarToken, upload.array('anexos', 10), async (req, r
     }
 });
 
-// 2. CRIAR POST
+// 2. CRIAR POST (Agora com seleção de público)
 router.post('/posts', verificarToken, async (req, res) => {
     try {
-        const { texto, autorNome, autorTipo, escolaId, anexos } = req.body;
+        const { texto, autorNome, autorTipo, escolaId, anexos, destino, destinoNome } = req.body;
         if (!texto && (!anexos || anexos.length === 0)) return res.status(400).json({ error: 'Publicação vazia.' });
 
         const database = await connectDB();
@@ -57,6 +57,8 @@ router.post('/posts', verificarToken, async (req, res) => {
             escolaId: escolaId || 'DEFAULT',
             autorNome: autorNome || 'Desconhecido',
             autorTipo: autorTipo || 'Professor',
+            destino: destino || 'global', // ID da turma ou 'global'
+            destinoNome: destinoNome || 'Público Geral', // Nome da turma ou 'Geral'
             texto: texto,
             anexos: anexos || [],
             dataCriacao: new Date().toISOString(),
@@ -71,11 +73,40 @@ router.post('/posts', verificarToken, async (req, res) => {
     }
 });
 
-// 3. BUSCAR POSTS
+// 3. BUSCAR POSTS (Agora com Fechadura de Privacidade)
 router.get('/posts', verificarToken, async (req, res) => {
     try {
+        const alunoRefId = req.query.alunoRefId;
         const database = await connectDB();
-        const posts = await database.collection('workspace_posts').find({}).sort({ dataCriacao: -1 }).limit(50).toArray();
+        let filtro = {}; // Por defeito, puxa tudo (para Gestores e Professores)
+
+        // Se quem está a pedir for um Aluno (tem um alunoRefId)
+        if (alunoRefId && alunoRefId !== 'undefined') {
+            const aluno = await database.collection('alunos').findOne({ id: alunoRefId });
+            
+            if (aluno) {
+                // Descobre as turmas do aluno
+                let minhasTurmas = [];
+                if (aluno.turmas) minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas];
+                else if (aluno.turma) minhasTurmas = [aluno.turma];
+                
+                // O Aluno só vê os posts que são "Globais" OU que pertencem às suas turmas
+                filtro = {
+                    $or: [
+                        { destino: 'global' },
+                        { destino: { $in: minhasTurmas } },
+                        { destinoNome: { $in: minhasTurmas } } // Segurança extra caso o filtro seja por nome
+                    ]
+                };
+            }
+        }
+
+        const posts = await database.collection('workspace_posts')
+            .find(filtro)
+            .sort({ dataCriacao: -1 })
+            .limit(50)
+            .toArray();
+            
         res.status(200).json(posts);
     } catch (error) {
         res.status(500).json({ error: 'Erro ao carregar o feed.' });
