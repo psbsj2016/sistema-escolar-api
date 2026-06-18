@@ -222,26 +222,29 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
     }
 });
 
-// 11. ATUALIZAR PERFIL DO ALUNO (MUDAR SENHA)
+// 11. ATUALIZAR PERFIL DO ALUNO (MUDAR SENHA) COM SEGURANÇA
 router.put('/perfil', verificarToken, async (req, res) => {
     try {
-        const { id, senha } = req.body;
+        const { id, senhaAtual, novaSenha } = req.body;
         
-        if (!id || !senha || senha.length < 6) {
-            return res.status(400).json({ error: 'Dados inválidos ou senha muito curta.' });
+        if (!id || !senhaAtual || !novaSenha || novaSenha.length < 6) {
+            return res.status(400).json({ error: 'Dados inválidos ou senha nova muito curta.' });
         }
 
         const database = await connectDB();
         
-        // Vai à base de dados de utilizadores do sistema e atualiza a senha deste ID
-        const result = await database.collection('usuarios').updateOne(
-            { id: id },
-            { $set: { senha: senha } }
-        );
-
-        if (result.modifiedCount === 0) {
-            return res.status(404).json({ error: 'Utilizador não encontrado.' });
+        // 🛡️ Segurança: Primeiro verifica se a senha atual está correta!
+        const user = await database.collection('usuarios').findOne({ id: id, senha: senhaAtual });
+        
+        if (!user) {
+            return res.status(401).json({ error: 'A senha atual está incorreta.' });
         }
+
+        // Se estiver certa, guarda a nova senha
+        await database.collection('usuarios').updateOne(
+            { id: id },
+            { $set: { senha: novaSenha } }
+        );
 
         res.status(200).json({ success: true });
     } catch (error) {
