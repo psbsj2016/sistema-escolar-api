@@ -90,8 +90,19 @@ app.use(verifyJWT);
 // =========================================================
 app.use('/escola', escolaRoutes);
 app.use('/usuarios', usuariosRoutes); 
-app.use('/workspace', workspaceRoutes); // 🔥 Corrigido: Agora sim o workspace consegue ler dados, ficheiros e sessões seguras!
-app.use('/', dataRoutes); // CRUD no final para não colidir
+app.use('/workspace', workspaceRoutes); 
+
+// 🔥 O ESPELHO MÁGICO PARA PRODUÇÃO (Resolve os erros 403 do Mobile/PWA)
+// Como o frontend pede as rotas com '/api/...' no telemóvel, ensinamos o servidor a aceitar esse prefixo:
+const apiRouter = express.Router();
+apiRouter.use('/workspace', workspaceRoutes);
+apiRouter.use('/escola', escolaRoutes);
+apiRouter.use('/usuarios', usuariosRoutes);
+apiRouter.use('/', dataRoutes);
+app.use('/api', apiRouter);
+
+// CRUD principal no final para não colidir
+app.use('/', dataRoutes);
 
 // =========================================================
 // 🚀 INICIALIZAÇÃO DO SERVIDOR
