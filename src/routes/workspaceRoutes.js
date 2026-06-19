@@ -390,6 +390,34 @@ router.put('/perfil', verificarToken, async (req, res) => {
     }
 });
 
+// 11.1 ATUALIZAR AVATAR DO PERFIL 📸
+router.put('/perfil/avatar', verificarToken, async (req, res) => {
+    try {
+        const { id, alunoRefId, avatarUrl } = req.body;
+        if (!id || !avatarUrl) return res.status(400).json({ error: 'Dados inválidos.' });
+
+        const database = await connectDB();
+        
+        // Atualiza a foto no login do utilizador
+        await database.collection('usuarios').updateOne(
+            { id: id }, 
+            { $set: { avatar: avatarUrl } }
+        );
+
+        // Se for um aluno, atualiza a foto também na ficha de matrícula (para a secretaria ver)
+        if (alunoRefId) {
+            await database.collection('alunos').updateOne(
+                { id: alunoRefId }, 
+                { $set: { avatar: avatarUrl } }
+            );
+        }
+
+        res.status(200).json({ success: true, avatar: avatarUrl });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao atualizar a foto de perfil.' });
+    }
+});
+
 // 12. ENTREGAR TRABALHO / TAREFA
 router.post('/entregas', verificarToken, async (req, res) => {
     try {
