@@ -92,17 +92,19 @@ app.use('/escola', escolaRoutes);
 app.use('/usuarios', usuariosRoutes); 
 app.use('/workspace', workspaceRoutes); 
 
-// 🔥 O ESPELHO MÁGICO PARA PRODUÇÃO (Resolve os erros 403 do Mobile/PWA)
-// Como o frontend pede as rotas com '/api/...' no telemóvel, ensinamos o servidor a aceitar esse prefixo:
+// 🔥 O ESPELHO MÁGICO PARA PRODUÇÃO (Resolve os erros 403 da App e Notificações)
+// Isto ensina o servidor a aceitar os pedidos que chegam com o prefixo '/api'
 const apiRouter = express.Router();
 apiRouter.use('/workspace', workspaceRoutes);
 apiRouter.use('/escola', escolaRoutes);
 apiRouter.use('/usuarios', usuariosRoutes);
 apiRouter.use('/', dataRoutes);
+
+// Aplica o espelho
 app.use('/api', apiRouter);
 
 // CRUD principal no final para não colidir
-app.use('/', dataRoutes);
+app.use('/', dataRoutes); 
 
 // =========================================================
 // 🚀 INICIALIZAÇÃO DO SERVIDOR
