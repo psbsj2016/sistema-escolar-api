@@ -83,7 +83,27 @@ router.post('/login', async (req, res) => {
         path: '/' 
     });
     
-    res.json({ success: true, usuario: { ...user, escolaId: escolaIdFinal, senha: undefined } });
+    // 🔗 O CASAMENTO DE DADOS (Injeção da Turma no Workspace)
+    let dadosExtras = {};
+    if (user.tipo === 'Aluno' && user.alunoRefId) {
+        const alunoMatriculado = await database.collection('alunos').findOne({ id: user.alunoRefId });
+        if (alunoMatriculado) {
+            dadosExtras.turma = alunoMatriculado.turma; // Puxa a turma exata do cadastro
+            if (alunoMatriculado.turmas) dadosExtras.turmas = alunoMatriculado.turmas;
+            if (alunoMatriculado.curso) dadosExtras.curso = alunoMatriculado.curso;
+        }
+    }
+
+    // Envia o utilizador com a turma fundida na bagagem
+    res.json({ 
+        success: true, 
+        usuario: { 
+            ...user, 
+            ...dadosExtras, // <- A mágica acontece aqui!
+            escolaId: escolaIdFinal, 
+            senha: undefined 
+        } 
+    });
 });
 
 router.post('/recuperar-senha', async (req, res) => {
