@@ -477,4 +477,26 @@ router.get('/entregas/tarefa/:eventoId', verificarToken, async (req, res) => {
     }
 });
 
+// 15. BUSCAR DICIONÁRIO DE AVATARES DA ESCOLA (Para o Feed, Chat e Alertas)
+router.get('/avatars', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const mapaAvatars = {};
+        
+        // Puxa apenas as fotos para poupar internet
+        const alunos = await database.collection('alunos').find({ avatar: { $exists: true, $ne: null } }).toArray();
+        const usuarios = await database.collection('usuarios').find({ avatar: { $exists: true, $ne: null } }).toArray();
+
+        alunos.forEach(a => { if(a.nome) mapaAvatars[a.nome] = a.avatar; });
+        usuarios.forEach(u => {
+            const nome = u.nome || u.login;
+            if(nome) mapaAvatars[nome] = u.avatar;
+        });
+
+        res.status(200).json(mapaAvatars);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao buscar dicionário de avatares.' });
+    }
+});
+
 module.exports = router;
