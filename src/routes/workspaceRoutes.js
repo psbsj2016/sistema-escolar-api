@@ -499,4 +499,34 @@ router.get('/avatars', verificarToken, async (req, res) => {
     }
 });
 
+// 16. EDITAR INSTRUÇÕES DA TAREFA ✏️
+router.put('/eventos/:id', verificarToken, async (req, res) => {
+    try {
+        const { descricao } = req.body;
+        const database = await connectDB();
+        await database.collection('eventos').updateOne(
+            { id: req.params.id },
+            { $set: { descricao: descricao } }
+        );
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao editar tarefa.' });
+    }
+});
+
+// 17. APAGAR TAREFA 🗑️
+router.delete('/eventos/:id', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        // 1. Apaga a tarefa
+        await database.collection('eventos').deleteOne({ id: req.params.id });
+        // 2. Apaga também todos os trabalhos (entregas) que os alunos já tinham feito para esta tarefa
+        await database.collection('entregas').deleteMany({ eventoId: req.params.id });
+        
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao apagar tarefa.' });
+    }
+});
+
 module.exports = router;
