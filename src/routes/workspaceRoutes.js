@@ -297,6 +297,34 @@ router.delete('/posts/:id', verificarToken, async (req, res) => {
     }
 });
 
+// 8.1 EDITAR UMA PUBLICAÇÃO ✏️
+router.put('/posts/:id', verificarToken, async (req, res) => {
+    try {
+        const postId = req.params.id;
+        const { texto } = req.body;
+
+        if (!texto) {
+            return res.status(400).json({ error: 'O texto não pode estar vazio.' });
+        }
+
+        const database = await connectDB();
+        
+        // Atualiza apenas o campo 'texto' do post com o ID correspondente
+        const result = await database.collection('workspace_posts').updateOne(
+            { id: postId },
+            { $set: { texto: texto } }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ error: 'Publicação não encontrada.' });
+        }
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao editar publicação.' });
+    }
+});
+
 // 9. BUSCAR MENSAGENS DO FÓRUM DA TURMA
 router.get('/chat/:turmaId', verificarToken, async (req, res) => {
     try {
