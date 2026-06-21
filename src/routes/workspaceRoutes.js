@@ -234,6 +234,34 @@ router.delete('/posts/:postId/comentarios/:comentarioId', verificarToken, async 
     }
 });
 
+// 4.2 EDITAR COMENTÁRIO ✏️
+router.put('/posts/:postId/comentarios/:comentarioId', verificarToken, async (req, res) => {
+    try {
+        const { postId, comentarioId } = req.params;
+        const { texto } = req.body;
+
+        if (!texto) {
+            return res.status(400).json({ error: 'O texto do comentário não pode estar vazio.' });
+        }
+
+        const database = await connectDB();
+        
+        // Atualiza o texto do comentário específico dentro da array 'comentarios'
+        const result = await database.collection('workspace_posts').updateOne(
+            { id: postId, "comentarios.id": comentarioId },
+            { $set: { "comentarios.$.texto": texto } }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ error: 'Comentário ou post não encontrado.' });
+        }
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao editar comentário.' });
+    }
+});
+
 // 7. REAGIR A UMA PUBLICAÇÃO (LIKE / DISLIKE) 👍👎
 router.put('/posts/:id/reacao', verificarToken, async (req, res) => {
     try {
