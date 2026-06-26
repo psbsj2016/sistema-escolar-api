@@ -263,21 +263,25 @@ router.put('/posts/:postId/comentarios/:comentarioId', verificarToken, async (re
 });
 
 // 7. REAGIR A UMA PUBLICAÇÃO (LIKE / DISLIKE) 👍👎
-router.put('/posts/:id/reacao', verificarToken, async (req, res) => {
+router.put('/posts/:id/reagir', verificarToken, async (req, res) => {
     try {
         const postId = req.params.id;
-        const { userId, tipo } = req.body; // 'like', 'dislike', ou 'none'
-        const database = await connectDB();
+        const { userId, tipo, autorNome } = req.body; 
         
+        if (!userId) return res.status(400).json({ error: 'ID do utilizador é obrigatório.' });
+
+        const database = await connectDB();
         const post = await database.collection('workspace_posts').findOne({ id: postId });
-        // Código existente de update executado com sucesso...
-        // 🔔 Gatilho: Notificar o dono do post sobre a reação
-        if (post && post.autorNome !== req.body.autorNome) { // Certifique-se de enviar autorNome no body do frontend
+        
+        if (!post) return res.status(404).json({ error: 'Publicação não encontrada.' });
+
+        // 🔔 Gatilho: Notificar o dono do post sobre a reação (apenas se não for ele próprio a curtir)
+        if (autorNome && post.autorNome !== autorNome) { 
             await database.collection('workspace_notificacoes').insertOne({
                 id: crypto.randomUUID(),
                 escolaId: post.escolaId,
                 destinatarioNome: post.autorNome,
-                remetenteNome: req.body.autorNome,
+                remetenteNome: autorNome,
                 mensagem: `reagiu à sua publicação.`,
                 origem: 'post',
                 origemId: postId,
@@ -286,7 +290,7 @@ router.put('/posts/:id/reacao', verificarToken, async (req, res) => {
             });
         }
 
-        // Garante que são arrays (proteção para posts antigos que tinham o like como número)
+        // Garante que são arrays
         let likes = Array.isArray(post.likes) ? post.likes : [];
         let dislikes = Array.isArray(post.dislikes) ? post.dislikes : [];
 
