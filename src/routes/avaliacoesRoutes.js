@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 
-// Memória temporária (Substitua depois por consultas reais à Base de Dados)
 let dbAvaliacoes = []; 
 let dbEntregas = [];
 
@@ -26,7 +25,39 @@ router.get('/', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: "Erro ao buscar." }); }
 });
 
-// 3. ALUNO ENTREGA AVALIAÇÃO
+// 🚀 3. EDITAR AVALIAÇÃO EXISTENTE
+router.put('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const index = dbAvaliacoes.findIndex(a => a.id === id);
+        if (index === -1) return res.status(404).json({ success: false, error: "Não encontrada." });
+        
+        dbAvaliacoes[index] = { ...dbAvaliacoes[index], ...req.body };
+        res.json({ success: true, avaliacao: dbAvaliacoes[index] });
+    } catch (error) { res.status(500).json({ success: false, error: "Erro ao editar." }); }
+});
+
+// 🚀 4. MUDAR STATUS (Ocultar/Ativar)
+router.patch('/:id/status', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+        const prova = dbAvaliacoes.find(a => a.id === id);
+        if (prova) prova.status = status;
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ success: false }); }
+});
+
+// 🚀 5. EXCLUIR AVALIAÇÃO DEFINITIVAMENTE
+router.delete('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        dbAvaliacoes = dbAvaliacoes.filter(a => a.id !== id);
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ success: false }); }
+});
+
+// 6. ALUNO ENTREGA AVALIAÇÃO
 router.post('/:id/entregar', async (req, res) => {
     try {
         const { id } = req.params;
@@ -39,20 +70,19 @@ router.post('/:id/entregar', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: "Erro na entrega." }); }
 });
 
-// 🚀 4. PROFESSOR BUSCA TODAS AS ENTREGAS PARA CORRIGIR
+// 7. PROFESSOR BUSCA TODAS AS ENTREGAS
 router.get('/entregas', async (req, res) => {
-    try {
-        res.json({ success: true, entregas: dbEntregas });
+    try { res.json({ success: true, entregas: dbEntregas });
     } catch (error) { res.status(500).json({ success: false, error: "Erro ao buscar entregas." }); }
 });
 
-// 🚀 5. ALUNO BUSCA AS SUAS PRÓPRIAS ENTREGAS (Para a aba de Concluídos)
+// 8. ALUNO BUSCA AS SUAS PRÓPRIAS ENTREGAS
 router.get('/minhas-entregas/:alunoId', async (req, res) => {
     try {
         const { alunoId } = req.params;
         const minhas = dbEntregas.filter(e => e.alunoId === alunoId);
         res.json({ success: true, entregas: minhas });
-    } catch (error) { res.status(500).json({ success: false, error: "Erro ao buscar histórico do aluno." }); }
+    } catch (error) { res.status(500).json({ success: false, error: "Erro ao buscar histórico." }); }
 });
 
 module.exports = router;
