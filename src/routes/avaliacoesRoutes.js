@@ -19,7 +19,7 @@ router.post('/', async (req, res) => {
             destino: destino || 'global', 
             destinoNome: destinoNome || 'Todas as Turmas', 
             dataCriacao: new Date().toISOString(),
-            ultimaAtualizacao: new Date().toISOString(), // 🚀 NOVO: Carimbo de tempo
+            ultimaAtualizacao: new Date().toISOString(),
             status: 'ativa'
         };
         dbAvaliacoes.push(novaAvaliacao);
@@ -36,14 +36,20 @@ router.get('/', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: "Erro ao buscar." }); }
 });
 
-// 3. EDITAR AVALIAÇÃO EXISTENTE
+// 🚀 3. EDITAR AVALIAÇÃO EXISTENTE (Agora com Bloqueio de Integridade)
 router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        
+        // 🔒 BLOQUEIO: Se a avaliação já tiver respostas, recusa a edição
+        const temEntregas = dbEntregas.some(e => e.avaliacaoId === id);
+        if (temEntregas) {
+            return res.status(403).json({ success: false, error: "Esta avaliação já possui respostas entregues e não pode ser alterada." });
+        }
+
         const index = dbAvaliacoes.findIndex(a => a.id === id);
         if (index === -1) return res.status(404).json({ success: false, error: "Não encontrada." });
         
-        // 🚀 Atualiza e muda o carimbo de tempo
         dbAvaliacoes[index] = { ...dbAvaliacoes[index], ...req.body, ultimaAtualizacao: new Date().toISOString() };
         res.json({ success: true, avaliacao: dbAvaliacoes[index] });
     } catch (error) { res.status(500).json({ success: false, error: "Erro ao editar." }); }
@@ -57,7 +63,7 @@ router.patch('/:id/status', async (req, res) => {
         const prova = dbAvaliacoes.find(a => a.id === id);
         if (prova) {
             prova.status = status;
-            prova.ultimaAtualizacao = new Date().toISOString(); // 🚀 Muda o carimbo de tempo
+            prova.ultimaAtualizacao = new Date().toISOString(); 
         }
         res.json({ success: true });
     } catch (error) { res.status(500).json({ success: false }); }
