@@ -5,115 +5,117 @@ const router = express.Router();
 let dbAvaliacoes = []; 
 let dbEntregas = [];
 
-// 1. CRIAR NOVA AVALIAÇÃO
 router.post('/', async (req, res) => {
     try {
-        // 🚀 NOVO: Recebe o campo 'tentativas'
         const { titulo, tipo, tempo, questoes, instrucoes, escolaId, autorNome, destino, destinoNome, tentativas } = req.body;
         const novaAvaliacao = {
-            id: 'av_' + Date.now(), 
-            titulo, tipo, 
-            tempo: tempo || null, 
-            questoes: questoes || [], 
-            instrucoes: instrucoes || '', 
-            escolaId, autorNome, 
-            destino: destino || 'global', 
-            destinoNome: destinoNome || 'Todas as Turmas', 
-            tentativas: tentativas || 1, // 🚀 Salva as tentativas (Padrão: 1)
-            dataCriacao: new Date().toISOString(),
-            ultimaAtualizacao: new Date().toISOString(),
-            status: 'ativa'
+            id: 'av_' + Date.now(), titulo, tipo, tempo: tempo || null, questoes: questoes || [], instrucoes: instrucoes || '', escolaId, autorNome, destino: destino || 'global', destinoNome: destinoNome || 'Todas as Turmas', tentativas: tentativas || 1, dataCriacao: new Date().toISOString(), ultimaAtualizacao: new Date().toISOString(), status: 'ativa'
         };
         dbAvaliacoes.push(novaAvaliacao);
         res.json({ success: true, avaliacao: novaAvaliacao });
-    } catch (error) { res.status(500).json({ success: false, error: "Erro interno." }); }
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 2. LISTAR AVALIAÇÕES DISPONÍVEIS
 router.get('/', async (req, res) => {
     try {
         const { escolaId } = req.query;
-        const provas = dbAvaliacoes.filter(p => !escolaId || p.escolaId === escolaId);
-        res.json({ success: true, avaliacoes: provas });
-    } catch (error) { res.status(500).json({ success: false, error: "Erro ao buscar." }); }
+        res.json({ success: true, avaliacoes: dbAvaliacoes.filter(p => !escolaId || p.escolaId === escolaId) });
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 3. EDITAR AVALIAÇÃO EXISTENTE
 router.put('/:id', async (req, res) => {
     try {
-        const { id } = req.params;
-        
-        const temEntregas = dbEntregas.some(e => e.avaliacaoId === id);
-        if (temEntregas) {
-            return res.status(403).json({ success: false, error: "Esta avaliação já possui respostas entregues e não pode ser alterada." });
-        }
-
-        const index = dbAvaliacoes.findIndex(a => a.id === id);
-        if (index === -1) return res.status(404).json({ success: false, error: "Não encontrada." });
-        
+        const temEntregas = dbEntregas.some(e => e.avaliacaoId === req.params.id);
+        if (temEntregas) return res.status(403).json({ success: false, error: "Possui entregas. Não pode ser editada." });
+        const index = dbAvaliacoes.findIndex(a => a.id === req.params.id);
+        if (index === -1) return res.status(404).json({ success: false });
         dbAvaliacoes[index] = { ...dbAvaliacoes[index], ...req.body, ultimaAtualizacao: new Date().toISOString() };
         res.json({ success: true, avaliacao: dbAvaliacoes[index] });
-    } catch (error) { res.status(500).json({ success: false, error: "Erro ao editar." }); }
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 4. MUDAR STATUS
 router.patch('/:id/status', async (req, res) => {
     try {
-        const { id } = req.params;
-        const { status } = req.body;
-        const prova = dbAvaliacoes.find(a => a.id === id);
-        if (prova) {
-            prova.status = status;
-            prova.ultimaAtualizacao = new Date().toISOString(); 
-        }
+        const prova = dbAvaliacoes.find(a => a.id === req.params.id);
+        if (prova) { prova.status = req.body.status; prova.ultimaAtualizacao = new Date().toISOString(); }
         res.json({ success: true });
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 5. EXCLUIR AVALIAÇÃO DEFINITIVAMENTE
 router.delete('/:id', async (req, res) => {
     try {
-        const { id } = req.params;
-        dbAvaliacoes = dbAvaliacoes.filter(a => a.id !== id);
+        dbAvaliacoes = dbAvaliacoes.filter(a => a.id !== req.params.id);
         res.json({ success: true });
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 6. ALUNO ENTREGA AVALIAÇÃO
+// 🚀 1. NOVO: INICIAR AVALIAÇÃO (Consome a tentativa imediatamente)
+router.post('/:id/iniciar', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { alunoId, alunoNome } = req.body;
+        
+        const prova = dbAvaliacoes.find(a => a.id === id);
+        if (!prova) return res.status(404).json({ success: false, error: "Prova não encontrada." });
+
+        // Verifica quantas tentativas o aluno já gastou (em curso ou concluídas)
+        const tentativasFeitas = dbEntregas.filter(e => e.avaliacaoId === id && e.alunoId === alunoId).length;
+        if (tentativasFeitas >= (prova.tentativas || 1)) {
+            return res.status(403).json({ success: false, error: "Limite de tentativas esgotado." });
+        }
+
+        const novaEntrega = {
+            id: 'ent_' + Date.now(),
+            avaliacaoId: id,
+            alunoId,
+            alunoNome,
+            status: 'em_curso', // ⏳ Regista que está a fazer
+            dataInicio: new Date().toISOString()
+        };
+        dbEntregas.push(novaEntrega);
+
+        res.json({ success: true, entregaId: novaEntrega.id });
+    } catch (error) { res.status(500).json({ success: false }); }
+});
+
+// 🚀 2. ATUALIZADO: ENTREGAR AVALIAÇÃO (Atualiza a tentativa "Em Curso")
 router.post('/:id/entregar', async (req, res) => {
     try {
         const { id } = req.params;
-        // 🚀 NOVO: Recebe o relatorioFraude com os logs de ausência de ecrã
-        const { respostas, audioUrl, alunoId, alunoNome, relatorioFraude } = req.body;
+        const { respostas, audioUrl, alunoId, relatorioFraude, entregaId } = req.body;
         
-        const novaEntrega = {
-            id: 'ent_' + Date.now(), 
-            avaliacaoId: id, 
-            alunoId, 
-            alunoNome, 
-            respostas: respostas || null, 
-            audioUrl: audioUrl || null, 
-            relatorioFraude: relatorioFraude || { fugas: 0, tempoFora: 0 }, // 🚀 Salva os logs
-            dataEntrega: new Date().toISOString()
-        };
-        dbEntregas.push(novaEntrega);
-        res.json({ success: true, entrega: novaEntrega });
+        // Puxa a tentativa ativa
+        let entrega = dbEntregas.find(e => e.id === entregaId && e.alunoId === alunoId);
+        
+        if (!entrega) {
+            // Fallback de segurança caso a sessão tenha caído
+            entrega = { id: 'ent_' + Date.now(), avaliacaoId: id, alunoId, alunoNome: req.body.alunoNome };
+            dbEntregas.push(entrega);
+        }
+
+        // Salva tudo e tranca o exame
+        entrega.respostas = respostas || null;
+        entrega.audioUrl = audioUrl || null;
+        entrega.relatorioFraude = relatorioFraude || { fugas: 0, tempoFora: 0 };
+        entrega.status = 'concluida'; // ✅ Trancou!
+        entrega.dataEntrega = new Date().toISOString();
+
+        res.json({ success: true, entrega });
     } catch (error) { res.status(500).json({ success: false, error: "Erro na entrega." }); }
 });
 
-// 7. PROFESSOR BUSCA TODAS AS ENTREGAS
+// 🚀 3. ATUALIZADO: O PROFESSOR SÓ VÊ EXAMES CONCLUÍDOS
 router.get('/entregas', async (req, res) => {
-    try { res.json({ success: true, entregas: dbEntregas });
-    } catch (error) { res.status(500).json({ success: false, error: "Erro ao buscar entregas." }); }
+    try { 
+        res.json({ success: true, entregas: dbEntregas.filter(e => e.status === 'concluida') });
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 8. ALUNO BUSCA AS SUAS PRÓPRIAS ENTREGAS
+// O ALUNO VÊ TODAS AS TENTATIVAS (Para o sistema saber que ele já esgotou a chance)
 router.get('/minhas-entregas/:alunoId', async (req, res) => {
     try {
-        const { alunoId } = req.params;
-        const minhas = dbEntregas.filter(e => e.alunoId === alunoId);
-        res.json({ success: true, entregas: minhas });
-    } catch (error) { res.status(500).json({ success: false, error: "Erro ao buscar histórico." }); }
+        res.json({ success: true, entregas: dbEntregas.filter(e => e.alunoId === req.params.alunoId) });
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
 module.exports = router;
