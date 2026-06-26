@@ -19,6 +19,7 @@ const escolaRoutes = require('./src/routes/escolaRoutes');
 const usuariosRoutes = require('./src/routes/usuariosRoutes');
 const dataRoutes = require('./src/routes/dataRoutes');
 const workspaceRoutes = require('./src/routes/workspaceRoutes');
+const avaliacoesRoutes = require('./src/routes/avaliacoesRoutes');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -90,12 +91,18 @@ app.use(verifyJWT);
 // =========================================================
 app.use('/escola', escolaRoutes);
 app.use('/usuarios', usuariosRoutes); 
+
+// 🚀 A rota de avaliações TEM de vir antes da rota geral do workspace!
+app.use('/workspace/avaliacoes', avaliacoesRoutes);
 app.use('/workspace', workspaceRoutes); 
 
 // 🔥 O ESPELHO MÁGICO PARA PRODUÇÃO (Resolve os erros 403 da App e Notificações)
-// Isto ensina o servidor a aceitar os pedidos que chegam com o prefixo '/api'
 const apiRouter = express.Router();
+
+// 🚀 Injeta a rota de avaliações no espelho antes do workspace geral
+apiRouter.use('/workspace/avaliacoes', avaliacoesRoutes);
 apiRouter.use('/workspace', workspaceRoutes);
+
 apiRouter.use('/escola', escolaRoutes);
 apiRouter.use('/usuarios', usuariosRoutes);
 apiRouter.use('/', dataRoutes);
