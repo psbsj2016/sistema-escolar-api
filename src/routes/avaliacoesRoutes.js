@@ -26,7 +26,9 @@ router.get('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
     try {
         const temEntregas = dbEntregas.some(e => e.avaliacaoId === req.params.id);
-        if (temEntregas) return res.status(403).json({ success: false, error: "Possui entregas. Não pode ser editada." });
+        // 🚀 CORREÇÃO 1: Removido o status(403) para evitar crash no front-end
+        if (temEntregas) return res.json({ success: false, error: "Possui entregas. Não pode ser editada." });
+        
         const index = dbAvaliacoes.findIndex(a => a.id === req.params.id);
         if (index === -1) return res.status(404).json({ success: false });
         dbAvaliacoes[index] = { ...dbAvaliacoes[index], ...req.body, ultimaAtualizacao: new Date().toISOString() };
@@ -49,7 +51,6 @@ router.delete('/:id', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 🚀 1. NOVO: INICIAR AVALIAÇÃO (Consome a tentativa imediatamente)
 router.post('/:id/iniciar', async (req, res) => {
     try {
         const { id } = req.params;
@@ -58,10 +59,11 @@ router.post('/:id/iniciar', async (req, res) => {
         const prova = dbAvaliacoes.find(a => a.id === id);
         if (!prova) return res.status(404).json({ success: false, error: "Prova não encontrada." });
 
-        // Verifica quantas tentativas o aluno já gastou (em curso ou concluídas)
         const tentativasFeitas = dbEntregas.filter(e => e.avaliacaoId === id && e.alunoId === alunoId).length;
+        
+        // 🚀 CORREÇÃO 2: Removido o status(403) para que a mensagem chegue direitinha à UI do aluno
         if (tentativasFeitas >= (prova.tentativas || 1)) {
-            return res.status(403).json({ success: false, error: "Limite de tentativas esgotado." });
+            return res.json({ success: false, error: "Limite de tentativas esgotado." });
         }
 
         const novaEntrega = {
@@ -69,7 +71,7 @@ router.post('/:id/iniciar', async (req, res) => {
             avaliacaoId: id,
             alunoId,
             alunoNome,
-            status: 'em_curso', // ⏳ Regista que está a fazer
+            status: 'em_curso', 
             dataInicio: new Date().toISOString()
         };
         dbEntregas.push(novaEntrega);
@@ -78,40 +80,34 @@ router.post('/:id/iniciar', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 🚀 2. ATUALIZADO: ENTREGAR AVALIAÇÃO (Atualiza a tentativa "Em Curso")
 router.post('/:id/entregar', async (req, res) => {
     try {
         const { id } = req.params;
         const { respostas, audioUrl, alunoId, relatorioFraude, entregaId } = req.body;
         
-        // Puxa a tentativa ativa
         let entrega = dbEntregas.find(e => e.id === entregaId && e.alunoId === alunoId);
         
         if (!entrega) {
-            // Fallback de segurança caso a sessão tenha caído
             entrega = { id: 'ent_' + Date.now(), avaliacaoId: id, alunoId, alunoNome: req.body.alunoNome };
             dbEntregas.push(entrega);
         }
 
-        // Salva tudo e tranca o exame
         entrega.respostas = respostas || null;
         entrega.audioUrl = audioUrl || null;
         entrega.relatorioFraude = relatorioFraude || { fugas: 0, tempoFora: 0 };
-        entrega.status = 'concluida'; // ✅ Trancou!
+        entrega.status = 'concluida';
         entrega.dataEntrega = new Date().toISOString();
 
         res.json({ success: true, entrega });
     } catch (error) { res.status(500).json({ success: false, error: "Erro na entrega." }); }
 });
 
-// 🚀 3. ATUALIZADO: O PROFESSOR SÓ VÊ EXAMES CONCLUÍDOS
 router.get('/entregas', async (req, res) => {
     try { 
         res.json({ success: true, entregas: dbEntregas.filter(e => e.status === 'concluida') });
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// O ALUNO VÊ TODAS AS TENTATIVAS (Para o sistema saber que ele já esgotou a chance)
 router.get('/minhas-entregas/:alunoId', async (req, res) => {
     try {
         res.json({ success: true, entregas: dbEntregas.filter(e => e.alunoId === req.params.alunoId) });
