@@ -4,6 +4,7 @@ const router = express.Router();
 
 let dbAvaliacoes = []; 
 let dbEntregas = [];
+let dbBancoQuestoes = []; // 🚀 O COFRE DAS QUESTÕES PERMANENTES
 
 router.post('/', async (req, res) => {
     try {
@@ -26,7 +27,6 @@ router.get('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
     try {
         const temEntregas = dbEntregas.some(e => e.avaliacaoId === req.params.id);
-        // 🚀 CORREÇÃO 1: Removido o status(403) para evitar crash no front-end
         if (temEntregas) return res.json({ success: false, error: "Possui entregas. Não pode ser editada." });
         
         const index = dbAvaliacoes.findIndex(a => a.id === req.params.id);
@@ -51,6 +51,35 @@ router.delete('/:id', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
+// ==========================================
+// 🚀 ETAPA C: ROTAS DO BANCO DE QUESTÕES
+// ==========================================
+router.post('/banco-questoes', async (req, res) => {
+    try {
+        const { questao, escolaId } = req.body;
+        const novaQuestaoBanco = {
+            id: 'qbank_' + Date.now() + Math.floor(Math.random() * 1000),
+            escolaId: escolaId || 'DEFAULT',
+            tipo: questao.tipo,
+            pergunta: questao.pergunta,
+            opcoes: questao.opcoes || null,
+            respostaCorreta: questao.respostaCorreta || null,
+            dataGuardado: new Date().toISOString()
+        };
+        dbBancoQuestoes.push(novaQuestaoBanco);
+        res.json({ success: true, questao: novaQuestaoBanco });
+    } catch (error) { res.status(500).json({ success: false }); }
+});
+
+router.get('/banco-questoes', async (req, res) => {
+    try {
+        const { escolaId } = req.query;
+        const lista = dbBancoQuestoes.filter(q => !escolaId || q.escolaId === escolaId);
+        res.json({ success: true, questoes: lista });
+    } catch (error) { res.status(500).json({ success: false }); }
+});
+// ==========================================
+
 router.post('/:id/iniciar', async (req, res) => {
     try {
         const { id } = req.params;
@@ -61,7 +90,6 @@ router.post('/:id/iniciar', async (req, res) => {
 
         const tentativasFeitas = dbEntregas.filter(e => e.avaliacaoId === id && e.alunoId === alunoId).length;
         
-        // 🚀 CORREÇÃO 2: Removido o status(403) para que a mensagem chegue direitinha à UI do aluno
         if (tentativasFeitas >= (prova.tentativas || 1)) {
             return res.json({ success: false, error: "Limite de tentativas esgotado." });
         }
