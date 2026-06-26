@@ -8,7 +8,8 @@ let dbEntregas = [];
 // 1. CRIAR NOVA AVALIAÇÃO
 router.post('/', async (req, res) => {
     try {
-        const { titulo, tipo, tempo, questoes, instrucoes, escolaId, autorNome, destino, destinoNome } = req.body;
+        // 🚀 NOVO: Recebe o campo 'tentativas'
+        const { titulo, tipo, tempo, questoes, instrucoes, escolaId, autorNome, destino, destinoNome, tentativas } = req.body;
         const novaAvaliacao = {
             id: 'av_' + Date.now(), 
             titulo, tipo, 
@@ -18,6 +19,7 @@ router.post('/', async (req, res) => {
             escolaId, autorNome, 
             destino: destino || 'global', 
             destinoNome: destinoNome || 'Todas as Turmas', 
+            tentativas: tentativas || 1, // 🚀 Salva as tentativas (Padrão: 1)
             dataCriacao: new Date().toISOString(),
             ultimaAtualizacao: new Date().toISOString(),
             status: 'ativa'
@@ -36,12 +38,11 @@ router.get('/', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: "Erro ao buscar." }); }
 });
 
-// 🚀 3. EDITAR AVALIAÇÃO EXISTENTE (Agora com Bloqueio de Integridade)
+// 3. EDITAR AVALIAÇÃO EXISTENTE
 router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
         
-        // 🔒 BLOQUEIO: Se a avaliação já tiver respostas, recusa a edição
         const temEntregas = dbEntregas.some(e => e.avaliacaoId === id);
         if (temEntregas) {
             return res.status(403).json({ success: false, error: "Esta avaliação já possui respostas entregues e não pode ser alterada." });
@@ -55,7 +56,7 @@ router.put('/:id', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: "Erro ao editar." }); }
 });
 
-// 4. MUDAR STATUS (Ocultar/Ativar)
+// 4. MUDAR STATUS
 router.patch('/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
@@ -82,9 +83,18 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/entregar', async (req, res) => {
     try {
         const { id } = req.params;
-        const { respostas, audioUrl, alunoId, alunoNome } = req.body;
+        // 🚀 NOVO: Recebe o relatorioFraude com os logs de ausência de ecrã
+        const { respostas, audioUrl, alunoId, alunoNome, relatorioFraude } = req.body;
+        
         const novaEntrega = {
-            id: 'ent_' + Date.now(), avaliacaoId: id, alunoId, alunoNome, respostas: respostas || null, audioUrl: audioUrl || null, dataEntrega: new Date().toISOString()
+            id: 'ent_' + Date.now(), 
+            avaliacaoId: id, 
+            alunoId, 
+            alunoNome, 
+            respostas: respostas || null, 
+            audioUrl: audioUrl || null, 
+            relatorioFraude: relatorioFraude || { fugas: 0, tempoFora: 0 }, // 🚀 Salva os logs
+            dataEntrega: new Date().toISOString()
         };
         dbEntregas.push(novaEntrega);
         res.json({ success: true, entrega: novaEntrega });
