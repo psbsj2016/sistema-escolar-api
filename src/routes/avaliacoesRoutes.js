@@ -1,3 +1,4 @@
+// src/routes/avaliacoesRoutes.js
 const express = require('express');
 const router = express.Router();
 
@@ -7,9 +8,18 @@ let dbEntregas = [];
 // 1. CRIAR NOVA AVALIAÇÃO
 router.post('/', async (req, res) => {
     try {
-        const { titulo, tipo, tempo, questoes, instrucoes, escolaId, autorNome } = req.body;
+        const { titulo, tipo, tempo, questoes, instrucoes, escolaId, autorNome, destino, destinoNome } = req.body;
         const novaAvaliacao = {
-            id: 'av_' + Date.now(), titulo, tipo, tempo: tempo || null, questoes: questoes || [], instrucoes: instrucoes || '', escolaId, autorNome, dataCriacao: new Date().toISOString(), status: 'ativa'
+            id: 'av_' + Date.now(), 
+            titulo, tipo, 
+            tempo: tempo || null, 
+            questoes: questoes || [], 
+            instrucoes: instrucoes || '', 
+            escolaId, autorNome, 
+            destino: destino || 'global', // 🚀 NOVO: Guarda o ID da turma
+            destinoNome: destinoNome || 'Todas as Turmas', // 🚀 NOVO: Guarda o nome da turma
+            dataCriacao: new Date().toISOString(), 
+            status: 'ativa'
         };
         dbAvaliacoes.push(novaAvaliacao);
         res.json({ success: true, avaliacao: novaAvaliacao });
@@ -25,7 +35,7 @@ router.get('/', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: "Erro ao buscar." }); }
 });
 
-// 🚀 3. EDITAR AVALIAÇÃO EXISTENTE
+// 3. EDITAR AVALIAÇÃO EXISTENTE
 router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -37,7 +47,7 @@ router.put('/:id', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: "Erro ao editar." }); }
 });
 
-// 🚀 4. MUDAR STATUS (Ocultar/Ativar)
+// 4. MUDAR STATUS (Ocultar/Ativar)
 router.patch('/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
@@ -48,7 +58,7 @@ router.patch('/:id/status', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 🚀 5. EXCLUIR AVALIAÇÃO DEFINITIVAMENTE
+// 5. EXCLUIR AVALIAÇÃO DEFINITIVAMENTE
 router.delete('/:id', async (req, res) => {
     try {
         const { id } = req.params;
