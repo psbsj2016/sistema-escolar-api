@@ -16,9 +16,10 @@ router.post('/', async (req, res) => {
             questoes: questoes || [], 
             instrucoes: instrucoes || '', 
             escolaId, autorNome, 
-            destino: destino || 'global', // 🚀 NOVO: Guarda o ID da turma
-            destinoNome: destinoNome || 'Todas as Turmas', // 🚀 NOVO: Guarda o nome da turma
-            dataCriacao: new Date().toISOString(), 
+            destino: destino || 'global', 
+            destinoNome: destinoNome || 'Todas as Turmas', 
+            dataCriacao: new Date().toISOString(),
+            ultimaAtualizacao: new Date().toISOString(), // 🚀 NOVO: Carimbo de tempo
             status: 'ativa'
         };
         dbAvaliacoes.push(novaAvaliacao);
@@ -42,7 +43,8 @@ router.put('/:id', async (req, res) => {
         const index = dbAvaliacoes.findIndex(a => a.id === id);
         if (index === -1) return res.status(404).json({ success: false, error: "Não encontrada." });
         
-        dbAvaliacoes[index] = { ...dbAvaliacoes[index], ...req.body };
+        // 🚀 Atualiza e muda o carimbo de tempo
+        dbAvaliacoes[index] = { ...dbAvaliacoes[index], ...req.body, ultimaAtualizacao: new Date().toISOString() };
         res.json({ success: true, avaliacao: dbAvaliacoes[index] });
     } catch (error) { res.status(500).json({ success: false, error: "Erro ao editar." }); }
 });
@@ -53,7 +55,10 @@ router.patch('/:id/status', async (req, res) => {
         const { id } = req.params;
         const { status } = req.body;
         const prova = dbAvaliacoes.find(a => a.id === id);
-        if (prova) prova.status = status;
+        if (prova) {
+            prova.status = status;
+            prova.ultimaAtualizacao = new Date().toISOString(); // 🚀 Muda o carimbo de tempo
+        }
         res.json({ success: true });
     } catch (error) { res.status(500).json({ success: false }); }
 });
