@@ -201,18 +201,20 @@ router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
     }
 });
 
-// 6. MARCAR NOTIFICAÇÕES COMO LIDAS 🔔
-router.put('/notificacoes/ler/:nomeDono', verificarToken, async (req, res) => {
+// 🚀 MARCAR UMA ÚNICA NOTIFICAÇÃO COMO LIDA (Para o Sininho Flutuante)
+router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
     try {
-        const nomeDono = req.params.nomeDono;
         const database = await connectDB();
-        await database.collection('workspace_notificacoes').updateMany(
-            { destinatarioNome: nomeDono, lida: false },
+        
+        // Altera apenas o documento que tem aquele ID específico
+        await database.collection('workspace_notificacoes').updateOne(
+            { id: req.params.id },
             { $set: { lida: true } }
         );
+        
         res.status(200).json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: 'Erro ao atualizar.' });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao dispensar notificação.' }); 
     }
 });
 
