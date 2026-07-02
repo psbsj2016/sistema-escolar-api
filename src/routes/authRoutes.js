@@ -23,7 +23,8 @@ const isProduction = process.env.NODE_ENV === 'production';
 // 2. Configurações da Biometria
 const rpName = 'Sistema PTT';
 const rpID = isProduction ? 'sistemaptt.com.br' : 'localhost';
-const expectedOrigin = isProduction ? 'https://www.sistemaptt.com.br' : 'http://localhost:5173';
+
+const expectedOrigin = isProduction ? ['https://www.sistemaptt.com.br', 'https://sistemaptt.com.br'] : 'http://localhost:5173';
 
 router.post('/enviar-codigo', async (req, res) => {
     let { email } = req.body;
