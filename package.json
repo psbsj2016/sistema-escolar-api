@@ -7,7 +7,7 @@
   "dependencies": {
     "@simplewebauthn/server": "^13.3.2",
     "bcrypt": "^6.0.0",
-    "cloudinary": "^1.41.3",
+    "cloudinary": "^2.10.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
@@ -18,7 +18,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^6.3.0",
     "multer": "^2.2.0",
-    "multer-storage-cloudinary": "^4.0.0",
+    "multer-storage-cloudinary": "^2.2.1",
     "resend": "^6.12.4",
     "xss": "^1.0.15",
     "zod": "^4.4.3"
