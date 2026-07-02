@@ -1,17 +1,3 @@
-// No topo do seu authRoutes.js, adicione isto:
-const {
-    generateRegistrationOptions,
-    verifyRegistrationResponse,
-    generateAuthenticationOptions,
-    verifyAuthenticationResponse
-} = require('@simplewebauthn/server');
-
-// O "rpName" é o nome da sua aplicação e o "rpID" é o seu domínio.
-const rpName = 'Sistema PTT';
-// ATENÇÃO: Em produção, o rpID deve ser o seu domínio (ex: 'sistemaptt.com.br'). Em testes locais, use 'localhost'.
-const rpID = isProduction ? 'sistemaptt.com.br' : 'localhost';
-const expectedOrigin = isProduction ? 'https://www.sistemaptt.com.br' : 'http://localhost:5173';
-
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
@@ -19,11 +5,25 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const connectDB = require('../config/db');
 const { Resend } = require('resend');
+const {
+    generateRegistrationOptions,
+    verifyRegistrationResponse,
+    generateAuthenticationOptions,
+    verifyAuthenticationResponse
+} = require('@simplewebauthn/server');
 
+// 1. Variáveis de Ambiente primeiro!
 const resend = new Resend(process.env.RESEND_API_KEY);
 const JWT_SECRET = process.env.JWT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://www.sistemaptt.com.br';
+
+// 👇 A CORREÇÃO AQUI: Definimos o 'isProduction' ANTES de o usarmos abaixo!
 const isProduction = process.env.NODE_ENV === 'production';
+
+// 2. Configurações da Biometria
+const rpName = 'Sistema PTT';
+const rpID = isProduction ? 'sistemaptt.com.br' : 'localhost';
+const expectedOrigin = isProduction ? 'https://www.sistemaptt.com.br' : 'http://localhost:5173';
 
 router.post('/enviar-codigo', async (req, res) => {
     let { email } = req.body;
