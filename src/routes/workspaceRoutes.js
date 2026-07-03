@@ -4,7 +4,9 @@ const crypto = require('crypto');
 const connectDB = require('../config/db');
 const multer = require('multer');
 const { v2: cloudinary } = require('cloudinary');
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
+// ☁️ Importação à prova de balas (Adapta-se a qualquer versão que o Render instalar)
+const multerCloudinary = require('multer-storage-cloudinary');
+const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary;
 
 // ☁️ Configuração Cloudinary
 cloudinary.config({
