@@ -195,15 +195,14 @@ router.post('/biometria/gerar-registo', async (req, res) => {
     const options = await generateRegistrationOptions({
         rpName,
         rpID,
-        userID: user.id, // ID interno do utilizador
+        // ✅ A CORREÇÃO: Transforma o ID em formato binário!
+        userID: new Uint8Array(Buffer.from(user.id, 'utf8')), 
         userName: user.login,
-        // Evita que ele registe o mesmo telemóvel duas vezes
         excludeCredentials: userPasskeys.map(passkey => ({
             id: passkey.credentialID,
             type: 'public-key',
         })),
         authenticatorSelection: {
-            // Força a utilização do hardware do próprio aparelho (FaceID/TouchID)
             authenticatorAttachment: 'platform', 
             userVerification: 'required',
         },
