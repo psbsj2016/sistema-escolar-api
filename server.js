@@ -117,7 +117,7 @@ app.use('/', dataRoutes);
 // 🚀 INICIALIZAÇÃO DO SERVIDOR
 // =========================================================
 const PORT = process.env.PORT || 10000;
-// O '0.0.0.0' é MÁGICO. Ele diz ao Render para libertar o acesso externo e não dar timeout!
+// 🚀 O '0.0.0.0' diz ao Render: "Estou aberto à internet!"
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 API Sistema Escolar Modular ligada na porta ${PORT}`);
 });

@@ -12,19 +12,10 @@ const {
     verifyAuthenticationResponse
 } = require('@simplewebauthn/server');
 
-// 1. Variáveis de Ambiente primeiro!
 const resend = new Resend(process.env.RESEND_API_KEY);
 const JWT_SECRET = process.env.JWT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://www.sistemaptt.com.br';
-
-// 👇 A CORREÇÃO AQUI: Definimos o 'isProduction' ANTES de o usarmos abaixo!
 const isProduction = process.env.NODE_ENV === 'production';
-
-// 2. Configurações da Biometria
-const rpName = 'Sistema PTT';
-const rpID = isProduction ? 'sistemaptt.com.br' : 'localhost';
-
-const expectedOrigin = isProduction ? ['https://www.sistemaptt.com.br', 'https://sistemaptt.com.br'] : 'http://localhost:5173';
 
 router.post('/enviar-codigo', async (req, res) => {
     let { email } = req.body;
@@ -89,7 +80,6 @@ router.post('/login', async (req, res) => {
 
     const token = jwt.sign({ id: user.id, tipo: user.tipo, escolaId: escolaIdFinal }, JWT_SECRET, { expiresIn: '12h' });
 
-   // 🔥 MÁGICA: Cookies super compatíveis que não quebram ao premir F5!
     res.cookie('token_acesso', token, { 
         httpOnly: true, 
         secure: isProduction, 
@@ -98,23 +88,21 @@ router.post('/login', async (req, res) => {
         path: '/' 
     });
     
-    // 🔗 O CASAMENTO DE DADOS (Injeção da Turma no Workspace)
     let dadosExtras = {};
     if (user.tipo === 'Aluno' && user.alunoRefId) {
         const alunoMatriculado = await database.collection('alunos').findOne({ id: user.alunoRefId });
         if (alunoMatriculado) {
-            dadosExtras.turma = alunoMatriculado.turma; // Puxa a turma exata do cadastro
+            dadosExtras.turma = alunoMatriculado.turma;
             if (alunoMatriculado.turmas) dadosExtras.turmas = alunoMatriculado.turmas;
             if (alunoMatriculado.curso) dadosExtras.curso = alunoMatriculado.curso;
         }
     }
 
-    // Envia o utilizador com a turma fundida na bagagem
     res.json({ 
         success: true, 
         usuario: { 
             ...user, 
-            ...dadosExtras, // <- A mágica acontece aqui!
+            ...dadosExtras,
             escolaId: escolaIdFinal, 
             senha: undefined 
         } 
@@ -178,21 +166,19 @@ router.post('/logout', (req, res) => {
 });
 
 // ============================================================================
-// 🔐 ROTAS DE BIOMETRIA (WEBAUTHN V10+) - BLINDADO ANTI-CRASH
+// 🔐 ROTAS DE BIOMETRIA (WEBAUTHN V10+) - 100% BLINDADO
 // ============================================================================
 
 const rpName = 'Sistema PTT';
 
-// 🧠 Descobre automaticamente o domínio
 const getOriginInfo = (req) => {
     let origin = req.headers.origin;
     if (!origin && req.headers.referer) origin = new URL(req.headers.referer).origin;
-    if (!origin) origin = process.env.FRONTEND_URL || 'https://sistemaptt.com.br';
+    if (!origin) origin = FRONTEND_URL || 'https://sistemaptt.com.br';
     origin = origin.replace(/\/$/, ''); // Remove a barra no final, se existir
     return { expectedOrigin: origin, rpID: new URL(origin).hostname };
 };
 
-// 1. Gerar Registo
 router.post('/biometria/gerar-registo', async (req, res) => {
     try {
         const { login } = req.body;
@@ -207,7 +193,6 @@ router.post('/biometria/gerar-registo', async (req, res) => {
         const options = await generateRegistrationOptions({
             rpName,
             rpID,
-            // 🔥 ID em formato binário obrigatório da v10
             userID: new Uint8Array(Buffer.from(user.id, 'utf8')), 
             userName: user.login,
             excludeCredentials: userPasskeys.filter(p => p.credentialID).map(passkey => ({ 
@@ -219,11 +204,11 @@ router.post('/biometria/gerar-registo', async (req, res) => {
         await database.collection('usuarios').updateOne({ id: user.id }, { $set: { currentChallenge: options.challenge } });
         res.json(options);
     } catch (error) {
+        console.error(error);
         res.status(500).json({ error: 'Erro interno ao preparar biometria.' });
     }
 });
 
-// 2. Verificar Registo
 router.post('/biometria/verificar-registo', async (req, res) => {
     try {
         const { login, respostaBio } = req.body;
@@ -259,11 +244,11 @@ router.post('/biometria/verificar-registo', async (req, res) => {
         }
         res.status(400).json({ error: 'Verificação falhou.' });
     } catch (error) {
+        console.error(error);
         res.status(400).json({ error: 'A verificação biométrica falhou no servidor.' });
     }
 });
 
-// 3. Gerar Login
 router.post('/biometria/gerar-login', async (req, res) => {
     try {
         const { login } = req.body;
@@ -288,11 +273,11 @@ router.post('/biometria/gerar-login', async (req, res) => {
         await database.collection('usuarios').updateOne({ id: user.id }, { $set: { currentChallenge: options.challenge } });
         res.json(options);
     } catch (error) {
+        console.error(error);
         res.status(500).json({ error: 'Erro ao gerar desafio de login.' });
     }
 });
 
-// 4. Verificar Login
 router.post('/biometria/verificar-login', async (req, res) => {
     try {
         const { login, respostaBio } = req.body;
@@ -304,9 +289,9 @@ router.post('/biometria/verificar-login', async (req, res) => {
 
         const passkey = await database.collection('biometria').findOne({ userId: user.id, credentialID: respostaBio.id });
         
-        // 🛡️ O ESCUDO DE PROTEÇÃO (Evita o erro 'undefined' que você sofreu)
+        // 🛡️ O ESCUDO ANTI-CRASH: Se a biometria antiga falhou, ignoramos sem derrubar o servidor!
         if (!passkey || !passkey.credentialPublicKey) {
-            return res.status(400).json({ error: 'Biometria corrompida. Use a sua senha, vá a Minha Conta, remova a biometria e configure novamente.' });
+            return res.status(400).json({ error: 'Biometria corrompida. Faça login com senha e configure novamente.' });
         }
 
         const verification = await verifyAuthenticationResponse({
@@ -330,13 +315,24 @@ router.post('/biometria/verificar-login', async (req, res) => {
             if (escolaVinculada && escolaVinculada.escolaId) escolaIdFinal = escolaVinculada.escolaId;
             else if (!escolaIdFinal) escolaIdFinal = user.id;
 
-            const token = jwt.sign({ id: user.id, tipo: user.tipo, escolaId: escolaIdFinal }, process.env.JWT_SECRET, { expiresIn: '12h' });
-            res.cookie('token_acesso', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', maxAge: 12*60*60*1000, path: '/' });
+            const token = jwt.sign({ id: user.id, tipo: user.tipo, escolaId: escolaIdFinal }, JWT_SECRET, { expiresIn: '12h' });
+            res.cookie('token_acesso', token, { httpOnly: true, secure: isProduction, sameSite: 'lax', maxAge: 12*60*60*1000, path: '/' });
 
-            return res.json({ success: true, usuario: { ...user, escolaId: escolaIdFinal, senha: undefined } });
+            let dadosExtras = {};
+            if (user.tipo === 'Aluno' && user.alunoRefId) {
+                const alunoMatriculado = await database.collection('alunos').findOne({ id: user.alunoRefId });
+                if (alunoMatriculado) {
+                    dadosExtras.turma = alunoMatriculado.turma;
+                    if (alunoMatriculado.turmas) dadosExtras.turmas = alunoMatriculado.turmas;
+                    if (alunoMatriculado.curso) dadosExtras.curso = alunoMatriculado.curso;
+                }
+            }
+
+            return res.json({ success: true, usuario: { ...user, ...dadosExtras, escolaId: escolaIdFinal, senha: undefined } });
         }
         res.status(400).json({ error: 'A validação falhou.' });
     } catch (error) {
+        console.error(error);
         res.status(400).json({ error: 'A validação criptográfica falhou.' });
     }
 });
