@@ -342,5 +342,3 @@ router.post('/biometria/verificar-login', async (req, res) => {
 });
 
 module.exports = router;
-
-module.exports = router;
