@@ -278,6 +278,7 @@ router.post('/biometria/gerar-login', async (req, res) => {
     }
 });
 
+// 4. O telemóvel resolveu o desafio
 router.post('/biometria/verificar-login', async (req, res) => {
     try {
         const { login, respostaBio } = req.body;
@@ -289,7 +290,6 @@ router.post('/biometria/verificar-login', async (req, res) => {
 
         const passkey = await database.collection('biometria').findOne({ userId: user.id, credentialID: respostaBio.id });
         
-        // 🛡️ O ESCUDO ANTI-CRASH: Se a biometria antiga falhou, ignoramos sem derrubar o servidor!
         if (!passkey || !passkey.credentialPublicKey) {
             return res.status(400).json({ error: 'Biometria corrompida. Faça login com senha e configure novamente.' });
         }
@@ -299,10 +299,11 @@ router.post('/biometria/verificar-login', async (req, res) => {
             expectedChallenge: user.currentChallenge,
             expectedOrigin,
             expectedRPID: rpID,
-            authenticator: {
-                credentialPublicKey: new Uint8Array(Buffer.from(passkey.credentialPublicKey, 'base64url')),
-                credentialID: passkey.credentialID,
-                counter: passkey.counter,
+            // 💡 A GRANDE CORREÇÃO DA VERSÃO 10: 'authenticator' mudou para 'credential'!
+            credential: {
+                id: passkey.credentialID,
+                publicKey: new Uint8Array(Buffer.from(passkey.credentialPublicKey, 'base64url')),
+                counter: passkey.counter || 0,
             },
         });
 
@@ -315,8 +316,8 @@ router.post('/biometria/verificar-login', async (req, res) => {
             if (escolaVinculada && escolaVinculada.escolaId) escolaIdFinal = escolaVinculada.escolaId;
             else if (!escolaIdFinal) escolaIdFinal = user.id;
 
-            const token = jwt.sign({ id: user.id, tipo: user.tipo, escolaId: escolaIdFinal }, JWT_SECRET, { expiresIn: '12h' });
-            res.cookie('token_acesso', token, { httpOnly: true, secure: isProduction, sameSite: 'lax', maxAge: 12*60*60*1000, path: '/' });
+            const token = jwt.sign({ id: user.id, tipo: user.tipo, escolaId: escolaIdFinal }, process.env.JWT_SECRET, { expiresIn: '12h' });
+            res.cookie('token_acesso', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', maxAge: 12*60*60*1000, path: '/' });
 
             let dadosExtras = {};
             if (user.tipo === 'Aluno' && user.alunoRefId) {
@@ -332,7 +333,7 @@ router.post('/biometria/verificar-login', async (req, res) => {
         }
         res.status(400).json({ error: 'A validação falhou.' });
     } catch (error) {
-        console.error(error);
+        console.error("Erro verificar-login:", error);
         res.status(400).json({ error: 'A validação criptográfica falhou.' });
     }
 });
