@@ -178,23 +178,21 @@ router.post('/logout', (req, res) => {
 });
 
 // ============================================================================
-// 🔐 ROTAS DE BIOMETRIA (WEBAUTHN V10+) - 100% BLINDADO
+// 🔐 ROTAS DE BIOMETRIA (WEBAUTHN V10+) - BLINDADO ANTI-CRASH
 // ============================================================================
 
 const rpName = 'Sistema PTT';
 
-// 🧠 Função Mágica: Descobre automaticamente o domínio
+// 🧠 Descobre automaticamente o domínio
 const getOriginInfo = (req) => {
     let origin = req.headers.origin;
-    if (!origin && req.headers.referer) {
-        origin = new URL(req.headers.referer).origin;
-    }
+    if (!origin && req.headers.referer) origin = new URL(req.headers.referer).origin;
     if (!origin) origin = process.env.FRONTEND_URL || 'https://sistemaptt.com.br';
-    
+    origin = origin.replace(/\/$/, ''); // Remove a barra no final, se existir
     return { expectedOrigin: origin, rpID: new URL(origin).hostname };
 };
 
-// 1. O telemóvel pede permissão para registar a biometria
+// 1. Gerar Registo
 router.post('/biometria/gerar-registo', async (req, res) => {
     try {
         const { login } = req.body;
@@ -209,12 +207,11 @@ router.post('/biometria/gerar-registo', async (req, res) => {
         const options = await generateRegistrationOptions({
             rpName,
             rpID,
+            // 🔥 ID em formato binário obrigatório da v10
             userID: new Uint8Array(Buffer.from(user.id, 'utf8')), 
             userName: user.login,
-            // Filtra lixo e passa a chave no formato exato da V10
             excludeCredentials: userPasskeys.filter(p => p.credentialID).map(passkey => ({ 
-                id: passkey.credentialID, 
-                type: 'public-key' 
+                id: passkey.credentialID, type: 'public-key' 
             })),
             authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
         });
@@ -222,12 +219,11 @@ router.post('/biometria/gerar-registo', async (req, res) => {
         await database.collection('usuarios').updateOne({ id: user.id }, { $set: { currentChallenge: options.challenge } });
         res.json(options);
     } catch (error) {
-        console.error("Erro gerar-registo:", error);
         res.status(500).json({ error: 'Erro interno ao preparar biometria.' });
     }
 });
 
-// 2. O telemóvel envia a chave gerada
+// 2. Verificar Registo
 router.post('/biometria/verificar-registo', async (req, res) => {
     try {
         const { login, respostaBio } = req.body;
@@ -240,21 +236,18 @@ router.post('/biometria/verificar-registo', async (req, res) => {
         const verification = await verifyRegistrationResponse({
             response: respostaBio,
             expectedChallenge: user.currentChallenge,
-            expectedOrigin: expectedOrigin,
+            expectedOrigin,
             expectedRPID: rpID,
         });
 
         if (verification.verified) {
             const { registrationInfo } = verification;
-            
-            // 💡 A GRANDE MÁGICA DA VERSÃO 10: O objeto chama-se 'credential' agora!
             const cred = registrationInfo.credential || registrationInfo;
             const credID = cred.id || cred.credentialID;
             const credPublicKey = cred.publicKey || cred.credentialPublicKey;
 
             await database.collection('biometria').insertOne({
                 userId: user.id,
-                // Guarda de forma universal
                 credentialID: typeof credID === 'string' ? credID : Buffer.from(credID).toString('base64url'),
                 credentialPublicKey: Buffer.from(credPublicKey).toString('base64url'),
                 counter: cred.counter,
@@ -266,12 +259,11 @@ router.post('/biometria/verificar-registo', async (req, res) => {
         }
         res.status(400).json({ error: 'Verificação falhou.' });
     } catch (error) {
-        console.error("Erro verificar-registo:", error);
         res.status(400).json({ error: 'A verificação biométrica falhou no servidor.' });
     }
 });
 
-// 3. O Utilizador abre o site e nós enviamos um "desafio"
+// 3. Gerar Login
 router.post('/biometria/gerar-login', async (req, res) => {
     try {
         const { login } = req.body;
@@ -282,15 +274,13 @@ router.post('/biometria/gerar-login', async (req, res) => {
         if (!user) return res.status(404).json({ error: 'Utilizador não encontrado.' });
 
         const userPasskeys = await database.collection('biometria').find({ userId: user.id }).toArray();
-        const validPasskeys = userPasskeys.filter(p => p.credentialID); // Remove lixos
-        
+        const validPasskeys = userPasskeys.filter(p => p.credentialID); 
         if (validPasskeys.length === 0) return res.status(400).json({ error: 'Nenhuma biometria registada.' });
 
         const options = await generateAuthenticationOptions({
             rpID,
             allowCredentials: validPasskeys.map(passkey => ({
-                id: passkey.credentialID, // V10 suporta string base64url direta!
-                type: 'public-key'
+                id: passkey.credentialID, type: 'public-key'
             })),
             userVerification: 'required',
         });
@@ -298,12 +288,11 @@ router.post('/biometria/gerar-login', async (req, res) => {
         await database.collection('usuarios').updateOne({ id: user.id }, { $set: { currentChallenge: options.challenge } });
         res.json(options);
     } catch (error) {
-        console.error("Erro gerar-login:", error);
         res.status(500).json({ error: 'Erro ao gerar desafio de login.' });
     }
 });
 
-// 4. O telemóvel resolveu o desafio
+// 4. Verificar Login
 router.post('/biometria/verificar-login', async (req, res) => {
     try {
         const { login, respostaBio } = req.body;
@@ -314,16 +303,20 @@ router.post('/biometria/verificar-login', async (req, res) => {
         if (!user || !user.currentChallenge) return res.status(400).json({ error: 'Login inválido.' });
 
         const passkey = await database.collection('biometria').findOne({ userId: user.id, credentialID: respostaBio.id });
-        if (!passkey) return res.status(400).json({ error: 'Dispositivo não reconhecido.' });
+        
+        // 🛡️ O ESCUDO DE PROTEÇÃO (Evita o erro 'undefined' que você sofreu)
+        if (!passkey || !passkey.credentialPublicKey) {
+            return res.status(400).json({ error: 'Biometria corrompida. Use a sua senha, vá a Minha Conta, remova a biometria e configure novamente.' });
+        }
 
         const verification = await verifyAuthenticationResponse({
             response: respostaBio,
             expectedChallenge: user.currentChallenge,
-            expectedOrigin: expectedOrigin,
+            expectedOrigin,
             expectedRPID: rpID,
             authenticator: {
                 credentialPublicKey: new Uint8Array(Buffer.from(passkey.credentialPublicKey, 'base64url')),
-                credentialID: passkey.credentialID, // V10: ID como string
+                credentialID: passkey.credentialID,
                 counter: passkey.counter,
             },
         });
@@ -334,31 +327,20 @@ router.post('/biometria/verificar-login', async (req, res) => {
 
             let escolaIdFinal = user.escolaId;
             const escolaVinculada = await database.collection('escola').findOne({ $or: [{ escolaId: user.escolaId }, { email: new RegExp(`^${user.login}$`, 'i') }, { donoId: user.id }] });
-            if (escolaVinculada && escolaVinculada.escolaId) {
-                escolaIdFinal = escolaVinculada.escolaId;
-                await database.collection('usuarios').updateOne({ id: user.id }, { $set: { escolaId: escolaIdFinal } });
-            } else if (!escolaIdFinal) { escolaIdFinal = user.id; }
+            if (escolaVinculada && escolaVinculada.escolaId) escolaIdFinal = escolaVinculada.escolaId;
+            else if (!escolaIdFinal) escolaIdFinal = user.id;
 
             const token = jwt.sign({ id: user.id, tipo: user.tipo, escolaId: escolaIdFinal }, process.env.JWT_SECRET, { expiresIn: '12h' });
             res.cookie('token_acesso', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', maxAge: 12*60*60*1000, path: '/' });
 
-            let dadosExtras = {};
-            if (user.tipo === 'Aluno' && user.alunoRefId) {
-                const alunoMatriculado = await database.collection('alunos').findOne({ id: user.alunoRefId });
-                if (alunoMatriculado) {
-                    dadosExtras.turma = alunoMatriculado.turma;
-                    if (alunoMatriculado.turmas) dadosExtras.turmas = alunoMatriculado.turmas;
-                    if (alunoMatriculado.curso) dadosExtras.curso = alunoMatriculado.curso;
-                }
-            }
-
-            return res.json({ success: true, usuario: { ...user, ...dadosExtras, escolaId: escolaIdFinal, senha: undefined } });
+            return res.json({ success: true, usuario: { ...user, escolaId: escolaIdFinal, senha: undefined } });
         }
         res.status(400).json({ error: 'A validação falhou.' });
     } catch (error) {
-        console.error("Erro verificar-login:", error);
         res.status(400).json({ error: 'A validação criptográfica falhou.' });
     }
 });
+
+module.exports = router;
 
 module.exports = router;
