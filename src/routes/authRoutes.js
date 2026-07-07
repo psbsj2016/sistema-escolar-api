@@ -174,22 +174,26 @@ const rpName = 'Sistema PTT';
 const getOriginInfo = (req) => {
     let origin = req.headers.origin;
     if (!origin && req.headers.referer) origin = new URL(req.headers.referer).origin;
-    if (!origin) origin = FRONTEND_URL || 'https://sistemaptt.com.br';
+    if (!origin) origin = process.env.FRONTEND_URL || 'https://sistemaptt.com.br';
     origin = origin.replace(/\/$/, '');
     return { expectedOrigin: origin, rpID: new URL(origin).hostname };
 };
 
-// 🧹 NOVA ROTA: Para apagar a biometria também da Base de Dados
+// 1. Apagar Biometria
 router.post('/biometria/remover', async (req, res) => {
     try {
         const { login } = req.body;
         const database = await connectDB();
         const user = await database.collection('usuarios').findOne({ login: login });
-        if (user) await database.collection('biometria').deleteMany({ userId: user.id });
+        if (user) {
+            await database.collection('biometria').deleteMany({ userId: user.id });
+            await database.collection('usuarios').updateOne({ id: user.id }, { $unset: { currentChallenge: "" } });
+        }
         res.json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro ao remover' }); }
 });
 
+// 2. Gerar Registo
 router.post('/biometria/gerar-registo', async (req, res) => {
     try {
         const { login } = req.body;
@@ -204,7 +208,7 @@ router.post('/biometria/gerar-registo', async (req, res) => {
             rpID,
             userID: new Uint8Array(Buffer.from(user.id, 'utf8')), 
             userName: user.login,
-            // 🔥 A MÁGICA: Retirámos o "excludeCredentials" para a Apple/Google nunca mais bloquearem a reconfiguração!
+            // Permite substituir biometrias antigas bloqueadas sem crashar
             authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
         });
 
@@ -216,6 +220,51 @@ router.post('/biometria/gerar-registo', async (req, res) => {
     }
 });
 
+// 3. Verificar Registo
+router.post('/biometria/verificar-registo', async (req, res) => {
+    try {
+        const { login, respostaBio } = req.body;
+        const { expectedOrigin, rpID } = getOriginInfo(req);
+        
+        const database = await connectDB();
+        const user = await database.collection('usuarios').findOne({ login: login });
+        if (!user || !user.currentChallenge) return res.status(400).json({ error: 'Registo inválido.' });
+
+        const verification = await verifyRegistrationResponse({
+            response: respostaBio,
+            expectedChallenge: user.currentChallenge,
+            expectedOrigin,
+            expectedRPID: rpID,
+        });
+
+        if (verification.verified) {
+            const { registrationInfo } = verification;
+            const cred = registrationInfo.credential || registrationInfo;
+            const credID = cred.id || cred.credentialID;
+            const credPublicKey = cred.publicKey || cred.credentialPublicKey;
+
+            // Apaga biometrias velhas para evitar duplicação no telemóvel
+            await database.collection('biometria').deleteMany({ userId: user.id });
+
+            await database.collection('biometria').insertOne({
+                userId: user.id,
+                credentialID: typeof credID === 'string' ? credID : Buffer.from(credID).toString('base64url'),
+                credentialPublicKey: Buffer.from(credPublicKey).toString('base64url'),
+                counter: cred.counter,
+                deviceType: registrationInfo.credentialDeviceType || 'platform',
+                dataCriacao: new Date().toISOString()
+            });
+            await database.collection('usuarios').updateOne({ id: user.id }, { $unset: { currentChallenge: "" } });
+            return res.json({ success: true, verified: true });
+        }
+        res.status(400).json({ error: 'Verificação falhou.' });
+    } catch (error) {
+        console.error(error);
+        res.status(400).json({ error: 'A verificação biométrica falhou no servidor.' });
+    }
+});
+
+// 4. Gerar Login
 router.post('/biometria/gerar-login', async (req, res) => {
     try {
         const { login } = req.body;
@@ -245,7 +294,7 @@ router.post('/biometria/gerar-login', async (req, res) => {
     }
 });
 
-// 4. O telemóvel resolveu o desafio
+// 5. Verificar Login
 router.post('/biometria/verificar-login', async (req, res) => {
     try {
         const { login, respostaBio } = req.body;
@@ -266,7 +315,6 @@ router.post('/biometria/verificar-login', async (req, res) => {
             expectedChallenge: user.currentChallenge,
             expectedOrigin,
             expectedRPID: rpID,
-            // 💡 A GRANDE CORREÇÃO DA VERSÃO 10: 'authenticator' mudou para 'credential'!
             credential: {
                 id: passkey.credentialID,
                 publicKey: new Uint8Array(Buffer.from(passkey.credentialPublicKey, 'base64url')),
@@ -284,7 +332,7 @@ router.post('/biometria/verificar-login', async (req, res) => {
             else if (!escolaIdFinal) escolaIdFinal = user.id;
 
             const token = jwt.sign({ id: user.id, tipo: user.tipo, escolaId: escolaIdFinal }, process.env.JWT_SECRET, { expiresIn: '12h' });
-            res.cookie('token_acesso', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', maxAge: 12*60*60*1000, path: '/' });
+            res.cookie('token_acesso', token, { httpOnly: true, secure: isProduction, sameSite: 'lax', maxAge: 12*60*60*1000, path: '/' });
 
             let dadosExtras = {};
             if (user.tipo === 'Aluno' && user.alunoRefId) {
