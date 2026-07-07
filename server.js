@@ -20,6 +20,7 @@ const usuariosRoutes = require('./src/routes/usuariosRoutes');
 const dataRoutes = require('./src/routes/dataRoutes');
 const workspaceRoutes = require('./src/routes/workspaceRoutes');
 const avaliacoesRoutes = require('./src/routes/avaliacoesRoutes');
+const pushRoutes = require('./src/routes/pushRoutes');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -76,6 +77,7 @@ app.use('/auth/redefinir-senha', authLimiter);
 app.get('/', (req, res) => res.status(200).json({ status: "online", message: "API Sistema Escolar PTT Modular 🚀" }));
 
 app.use('/auth', authRoutes);       // Login, Cadastro, Recuperar Senha
+app.use('/push', pushRoutes);
 app.use('/public', publicRoutes);   // Matrículas Externas (Carnês/PDFs)
 app.use('/master', masterRoutes);   // Login do Admin Master
 
