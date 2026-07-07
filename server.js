@@ -21,6 +21,7 @@ const dataRoutes = require('./src/routes/dataRoutes');
 const workspaceRoutes = require('./src/routes/workspaceRoutes');
 const avaliacoesRoutes = require('./src/routes/avaliacoesRoutes');
 const pushRoutes = require('./src/routes/pushRoutes');
+const auditoriaRoutes = require('./src/routes/auditoriaRoutes');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -93,6 +94,7 @@ app.use(verifyJWT);
 // =========================================================
 app.use('/escola', escolaRoutes);
 app.use('/usuarios', usuariosRoutes); 
+app.use('/auditoria', auditoriaRoutes);
 
 // 🚀 A rota de avaliações TEM de vir antes da rota geral do workspace!
 app.use('/workspace/avaliacoes', avaliacoesRoutes);
@@ -107,6 +109,7 @@ apiRouter.use('/workspace', workspaceRoutes);
 
 apiRouter.use('/escola', escolaRoutes);
 apiRouter.use('/usuarios', usuariosRoutes);
+apiRouter.use('/auditoria', auditoriaRoutes);
 apiRouter.use('/', dataRoutes);
 
 // Aplica o espelho
