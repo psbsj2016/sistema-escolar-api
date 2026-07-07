@@ -175,9 +175,20 @@ const getOriginInfo = (req) => {
     let origin = req.headers.origin;
     if (!origin && req.headers.referer) origin = new URL(req.headers.referer).origin;
     if (!origin) origin = FRONTEND_URL || 'https://sistemaptt.com.br';
-    origin = origin.replace(/\/$/, ''); // Remove a barra no final, se existir
+    origin = origin.replace(/\/$/, '');
     return { expectedOrigin: origin, rpID: new URL(origin).hostname };
 };
+
+// 🧹 NOVA ROTA: Para apagar a biometria também da Base de Dados
+router.post('/biometria/remover', async (req, res) => {
+    try {
+        const { login } = req.body;
+        const database = await connectDB();
+        const user = await database.collection('usuarios').findOne({ login: login });
+        if (user) await database.collection('biometria').deleteMany({ userId: user.id });
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao remover' }); }
+});
 
 router.post('/biometria/gerar-registo', async (req, res) => {
     try {
@@ -188,16 +199,12 @@ router.post('/biometria/gerar-registo', async (req, res) => {
         const user = await database.collection('usuarios').findOne({ login: login });
         if (!user) return res.status(404).json({ error: 'Utilizador não encontrado.' });
 
-        const userPasskeys = await database.collection('biometria').find({ userId: user.id }).toArray();
-
         const options = await generateRegistrationOptions({
             rpName,
             rpID,
             userID: new Uint8Array(Buffer.from(user.id, 'utf8')), 
             userName: user.login,
-            excludeCredentials: userPasskeys.filter(p => p.credentialID).map(passkey => ({ 
-                id: passkey.credentialID, type: 'public-key' 
-            })),
+            // 🔥 A MÁGICA: Retirámos o "excludeCredentials" para a Apple/Google nunca mais bloquearem a reconfiguração!
             authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
         });
 
@@ -206,46 +213,6 @@ router.post('/biometria/gerar-registo', async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Erro interno ao preparar biometria.' });
-    }
-});
-
-router.post('/biometria/verificar-registo', async (req, res) => {
-    try {
-        const { login, respostaBio } = req.body;
-        const { expectedOrigin, rpID } = getOriginInfo(req);
-        
-        const database = await connectDB();
-        const user = await database.collection('usuarios').findOne({ login: login });
-        if (!user || !user.currentChallenge) return res.status(400).json({ error: 'Registo inválido.' });
-
-        const verification = await verifyRegistrationResponse({
-            response: respostaBio,
-            expectedChallenge: user.currentChallenge,
-            expectedOrigin,
-            expectedRPID: rpID,
-        });
-
-        if (verification.verified) {
-            const { registrationInfo } = verification;
-            const cred = registrationInfo.credential || registrationInfo;
-            const credID = cred.id || cred.credentialID;
-            const credPublicKey = cred.publicKey || cred.credentialPublicKey;
-
-            await database.collection('biometria').insertOne({
-                userId: user.id,
-                credentialID: typeof credID === 'string' ? credID : Buffer.from(credID).toString('base64url'),
-                credentialPublicKey: Buffer.from(credPublicKey).toString('base64url'),
-                counter: cred.counter,
-                deviceType: registrationInfo.credentialDeviceType || 'platform',
-                dataCriacao: new Date().toISOString()
-            });
-            await database.collection('usuarios').updateOne({ id: user.id }, { $unset: { currentChallenge: "" } });
-            return res.json({ success: true, verified: true });
-        }
-        res.status(400).json({ error: 'Verificação falhou.' });
-    } catch (error) {
-        console.error(error);
-        res.status(400).json({ error: 'A verificação biométrica falhou no servidor.' });
     }
 });
 
