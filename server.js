@@ -22,6 +22,7 @@ const workspaceRoutes = require('./src/routes/workspaceRoutes');
 const avaliacoesRoutes = require('./src/routes/avaliacoesRoutes');
 const pushRoutes = require('./src/routes/pushRoutes');
 const auditoriaRoutes = require('./src/routes/auditoriaRoutes');
+const iniciarAutomacao = require('./src/services/automacao');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -119,10 +120,14 @@ app.use('/api', apiRouter);
 app.use('/', dataRoutes); 
 
 // =========================================================
+// ⏰ LIGAR O MOTOR DE AUTOMAÇÃO DE SEGUNDO PLANO
+// =========================================================
+iniciarAutomacao();
+
+// =========================================================
 // 🚀 INICIALIZAÇÃO DO SERVIDOR
 // =========================================================
 const PORT = process.env.PORT || 10000;
-// 🚀 O '0.0.0.0' diz ao Render: "Estou aberto à internet!"
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 API Sistema Escolar Modular ligada na porta ${PORT}`);
 });

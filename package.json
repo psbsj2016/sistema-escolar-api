@@ -19,6 +19,7 @@
     "mongodb": "^6.3.0",
     "multer": "^2.2.0",
     "multer-storage-cloudinary": "^2.2.1",
+    "node-cron": "^4.6.0",
     "resend": "^6.12.4",
     "web-push": "^3.6.7",
     "xss": "^1.0.15",
