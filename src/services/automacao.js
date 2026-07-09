@@ -11,7 +11,7 @@ webpush.setVapidDetails(
 
 const iniciarAutomacao = () => {
     // ⏰ CRON JOB: Relógio oficial definido para Todos os dias às 08:00 da manhã
-    cron.schedule('0 8 * * *', async () => {
+    cron.schedule('* * * * *', async () => {
         console.log('⏰ [CRON] A iniciar a varredura matinal de mensalidades...');
         
         try {
