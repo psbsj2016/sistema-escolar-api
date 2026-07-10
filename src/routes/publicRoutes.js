@@ -2,11 +2,19 @@ const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 const connectDB = require('../config/db');
+const webpush = require('web-push');
 
 const { Resend } = require('resend');
 
 // Inicialize o Resend com a chave segura do .env
 const resend = new Resend(process.env.RESEND_API_KEY); 
+
+// 🔑 Configuração do Web Push para Alertas Instantâneos
+webpush.setVapidDetails(
+    'mailto:contato@sistemaptt.com.br',
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+);
 
 // ============================================================================
 // 📄 FUNÇÕES GERADORAS DE PDF (VIA API EXTERNA - API2PDF)
@@ -318,6 +326,37 @@ router.post('/receber-matricula', async (req, res) => {
             lida: false,
             dataCriacao: new Date().toISOString()
         });
+
+        // ====================================================================
+        // 🔥 5.1 GATILHO DE PUSH INSTANTÂNEO PARA O TELEMÓVEL DO GESTOR 🔥
+        // ====================================================================
+        try {
+            console.log("A disparar notificação push instantânea para a escola...");
+            const aparelhos = await database.collection('push_subscriptions').find({ escolaId: escolaId }).toArray();
+            
+            if (aparelhos.length > 0) {
+                const payloadPush = JSON.stringify({
+                    title: '🎉 Nova Matrícula Recebida!',
+                    body: `${nome} acabou de se matricular no curso ${planoCurso || 'selecionado'}.`,
+                    url: '/' // Atira o gestor para o painel inicial onde a notificação vermelha estará à espera
+                });
+
+                for (let aparelho of aparelhos) {
+                    try {
+                        await webpush.sendNotification(aparelho.subscription, payloadPush);
+                        console.log("📲 Push instantâneo enviado com sucesso!");
+                    } catch (err) {
+                        // Se o diretor bloqueou notificações no telemóvel, limpamos o registo
+                        if (err.statusCode === 410 || err.statusCode === 404) {
+                            await database.collection('push_subscriptions').deleteOne({ _id: aparelho._id });
+                        }
+                    }
+                }
+            }
+        } catch (pushErr) {
+            console.error("Aviso: Falha ao enviar push instantâneo (não impede a matrícula):", pushErr);
+        }
+        // ====================================================================
 
         // 6. GERAÇÃO DOS PDFS E ENVIO DE E-MAIL
         if (email) {
