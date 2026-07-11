@@ -64,12 +64,23 @@ router.post('/validar-cadastro', async (req, res) => {
 });
 
 router.post('/login', async (req, res) => {
-    let { login, senha } = req.body;
+    // 1. Extraímos o parâmetro 'sistema' para saber de onde vem o pedido
+    let { login, senha, sistema } = req.body;
     const database = await connectDB();
     const user = await database.collection('usuarios').findOne({ login: new RegExp(`^${login.replace('*FORCAR','')}$`, 'i') });
     
-    if (!user || !(await bcrypt.compare(senha, user.senha))) return res.status(401).json({ error: 'Credenciais inválidas.' });
+    // Verifica se o utilizador existe e a senha está correta
+    if (!user || !(await bcrypt.compare(senha, user.senha))) {
+        return res.status(401).json({ error: 'Credenciais inválidas.' });
+    }
     
+    // ====================================================================
+    // 🛑 PROTEÇÃO RBAC: IMPEDE ALUNOS DE ACEDEREM AO PAINEL ADMINISTRATIVO
+    // ====================================================================
+    if (user.tipo === 'Aluno' && sistema !== 'workspace') {
+        return res.status(403).json({ error: 'Acesso negado. Área restrita. Faça login através do Portal do Aluno.' });
+    }
+
     let escolaIdFinal = user.escolaId;
     const escolaVinculada = await database.collection('escola').findOne({ $or: [{ escolaId: user.escolaId }, { email: new RegExp(`^${user.login}$`, 'i') }, { donoId: user.id }] });
 
