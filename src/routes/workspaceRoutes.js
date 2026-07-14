@@ -289,6 +289,41 @@ router.post('/chat/:turmaId/digitando', verificarToken, (req, res) => {
     });
     res.status(200).json({ success: true });
 });
+// ============================================================================
+// 🖼️ IDENTIDADE VISUAL DO GRUPO (FOTO E NOME DA TURMA)
+// ============================================================================
+
+// 1. Ler a foto e nome atuais do grupo
+router.get('/chat/info/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const turma = await database.collection('turmas').findOne({ id: req.params.turmaId });
+        if (!turma) return res.status(404).json({ error: 'Grupo não encontrado.' });
+        res.status(200).json({ nome: turma.nome, foto: turma.foto });
+    } catch (error) { res.status(500).json({ error: 'Erro ao buscar informações do grupo.' }); }
+});
+
+// 2. Atualizar a foto e nome do grupo (Apenas Gestores/Professores)
+router.put('/chat/info/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const { nome, foto } = req.body;
+        const database = await connectDB();
+        
+        await database.collection('turmas').updateOne(
+            { id: req.params.turmaId },
+            { $set: { nome: nome, foto: foto } }
+        );
+
+        // ⚡ GATILHO EM TEMPO REAL: Avisa todos os alunos do grupo que a foto/nome mudou!
+        workspaceStream.emit('evento_realtime', {
+            type: 'SALA_UPDATE',
+            turmaId: req.params.turmaId,
+            escolaId: 'DEFAULT'
+        });
+
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao atualizar grupo.' }); }
+});
 router.put('/perfil', verificarToken, async (req, res) => {
     try {
         const { id, senhaAtual, novaSenha } = req.body;
