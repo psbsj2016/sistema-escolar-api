@@ -50,7 +50,6 @@ router.get('/stream', (req, res) => {
     const escolaId = req.query.escolaId;
 
     const enviarEvento = (data) => {
-        // Envia o evento instantaneamente apenas para utilizadores da mesma escola
         if (data.escolaId === escolaId || data.escolaId === 'DEFAULT') {
             res.write(`data: ${JSON.stringify(data)}\n\n`);
         }
@@ -60,235 +59,6 @@ router.get('/stream', (req, res) => {
     req.on('close', () => workspaceStream.off('evento_realtime', enviarEvento));
 });
 
-// 1. UPLOAD
-router.post('/upload', verificarToken, upload.array('anexos', 10), async (req, res) => {
-    try {
-        if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'Nenhum ficheiro.' });
-        const urls = req.files.map(file => ({ url: file.path, nome: file.originalname, tipo: file.mimetype }));
-        res.status(200).json({ success: true, anexos: urls });
-    } catch (error) { res.status(500).json({ error: 'Erro na Nuvem.' }); }
-});
-
-// 2. CRIAR POST
-router.post('/posts', verificarToken, async (req, res) => {
-    try {
-        const { texto, autorNome, autorTipo, escolaId, anexos, destino, destinoNome } = req.body;
-        if (!texto && (!anexos || anexos.length === 0)) return res.status(400).json({ error: 'Vazio.' });
-
-        const database = await connectDB();
-        const novoPost = {
-            id: crypto.randomUUID(), escolaId: escolaId || 'DEFAULT', autorNome: autorNome || 'Desconhecido',
-            autorTipo: autorTipo || 'Professor', destino: destino || 'global', destinoNome: destinoNome || 'Público Geral',
-            texto: texto, anexos: anexos || [], dataCriacao: new Date().toISOString(), comentarios: [], likes: [], dislikes: []
-        };
-
-        await database.collection('workspace_posts').insertOne(novoPost);
-        
-        // ⚡ GATILHO EM TEMPO REAL: Avisa a todos que há um post novo
-        workspaceStream.emit('evento_realtime', { type: 'NOVO_POST', escolaId: novoPost.escolaId });
-
-        res.status(201).json({ success: true, post: novoPost });
-    } catch (error) { res.status(500).json({ error: 'Erro ao publicar.' }); }
-});
-
-// 3. BUSCAR TODOS OS POSTS (Feed)
-router.get('/posts', verificarToken, async (req, res) => {
-    try {
-        const alunoRefId = req.query.alunoRefId;
-        const database = await connectDB();
-        let filtro = {}; 
-
-        if (alunoRefId && alunoRefId !== 'undefined') {
-            const aluno = await database.collection('alunos').findOne({ id: alunoRefId });
-            if (aluno) {
-                let minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas || aluno.turma];
-                filtro = { $or: [{ destino: 'global' }, { destino: { $in: minhasTurmas } }, { destinoNome: { $in: minhasTurmas } }] };
-            }
-        }
-        const posts = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(50).toArray();
-        res.status(200).json(posts);
-    } catch (error) { res.status(500).json({ error: 'Erro ao carregar.' }); }
-});
-
-// 🚀 3.1 BUSCAR UM ÚNICO POST (Sincronização em Tempo Real)
-router.get('/posts/:id', verificarToken, async (req, res) => {
-    try {
-        const database = await connectDB();
-        const post = await database.collection('workspace_posts').findOne({ id: req.params.id });
-        if (!post) return res.status(404).json({ error: 'Não encontrado.' });
-        res.status(200).json(post);
-    } catch (error) { res.status(500).json({ error: 'Erro ao sincronizar.' }); }
-});
-
-// 4. COMENTAR E GERAR NOTIFICAÇÃO 🔔
-router.post('/posts/:id/comentarios', verificarToken, async (req, res) => {
-    try {
-        const postId = req.params.id;
-        const { texto, autorNome } = req.body;
-        const database = await connectDB();
-        const novoComentario = { id: crypto.randomUUID(), autorNome: autorNome, texto: texto, dataCriacao: new Date().toISOString() };
-
-        const postOriginal = await database.collection('workspace_posts').findOne({ id: postId });
-        const result = await database.collection('workspace_posts').updateOne({ id: postId }, { $push: { comentarios: novoComentario } });
-
-        if (result.modifiedCount === 0) return res.status(404).json({ error: 'Não encontrado.' });
-
-        // ⚡ GATILHO EM TEMPO REAL: Atualiza o post na tela de todos instantaneamente
-        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: postId, escolaId: postOriginal.escolaId });
-
-        if (postOriginal) {
-            const usuariosNotificar = new Set();
-            if (postOriginal.autorNome !== autorNome) usuariosNotificar.add(postOriginal.autorNome);
-            if (postOriginal.comentarios) postOriginal.comentarios.forEach(c => { if (c.autorNome !== autorNome) usuariosNotificar.add(c.autorNome); });
-            
-            const notificacoesArray = Array.from(usuariosNotificar).map(destinatario => ({
-                id: crypto.randomUUID(), escolaId: postOriginal.escolaId, destinatarioNome: destinatario, remetenteNome: autorNome,
-                mensagem: `comentou na publicação: "${texto.substring(0, 20)}..."`, origem: 'post', origemId: postId, lida: false, data: new Date().toISOString()
-            }));
-
-            if (notificacoesArray.length > 0) {
-                await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
-                // ⚡ GATILHO EM TEMPO REAL: Aciona a notificação (sininho e gaveta)
-                workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: Array.from(usuariosNotificar), escolaId: postOriginal.escolaId });
-            }
-        }
-        res.status(201).json({ success: true, comentario: novoComentario });
-    } catch (error) { res.status(500).json({ error: 'Erro ao comentar.' }); }
-});
-
-// 5. BUSCAR NOTIFICAÇÕES NÃO LIDAS 🔔
-router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
-    try {
-        const database = await connectDB();
-        const notificacoes = await database.collection('workspace_notificacoes').find({ destinatarioNome: req.params.nomeDono, lida: false }).sort({ data: -1 }).toArray();
-        res.status(200).json(notificacoes);
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
-});
-
-// 6. MARCAR COMO LIDA
-router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
-    try {
-        const database = await connectDB();
-        await database.collection('workspace_notificacoes').updateOne({ id: req.params.id }, { $set: { lida: true } });
-        res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
-});
-
-// 7. REAGIR A UMA PUBLICAÇÃO (LIKE / DISLIKE) 👍👎
-router.put('/posts/:id/reagir', verificarToken, async (req, res) => {
-    try {
-        const postId = req.params.id;
-        const { userId, tipo, autorNome } = req.body; 
-        if (!userId) return res.status(400).json({ error: 'Obrigatório.' });
-
-        const database = await connectDB();
-        const post = await database.collection('workspace_posts').findOne({ id: postId });
-        if (!post) return res.status(404).json({ error: 'Não encontrada.' });
-
-        let likes = Array.isArray(post.likes) ? post.likes : [];
-        let dislikes = Array.isArray(post.dislikes) ? post.dislikes : [];
-
-        likes = likes.filter(id => id !== userId);
-        dislikes = dislikes.filter(id => id !== userId);
-
-        if (tipo === 'like') likes.push(userId);
-        if (tipo === 'dislike') dislikes.push(userId);
-
-        await database.collection('workspace_posts').updateOne({ id: postId }, { $set: { likes: likes, dislikes: dislikes } });
-
-        // ⚡ GATILHO EM TEMPO REAL: Atualiza os números de reações no feed de todos
-        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: postId, escolaId: post.escolaId });
-
-        if (autorNome && post.autorNome !== autorNome) { 
-            await database.collection('workspace_notificacoes').insertOne({
-                id: crypto.randomUUID(), escolaId: post.escolaId, destinatarioNome: post.autorNome, remetenteNome: autorNome,
-                mensagem: `reagiu à sua publicação.`, origem: 'post', origemId: postId, lida: false, data: new Date().toISOString()
-            });
-            // ⚡ GATILHO EM TEMPO REAL: Notifica o dono da publicação
-            workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: [post.autorNome], escolaId: post.escolaId });
-        }
-        res.status(200).json({ success: true, likes, dislikes });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
-});
-
-// APAGAR E EDITAR UMA PUBLICAÇÃO
-router.delete('/posts/:id', verificarToken, async (req, res) => {
-    try {
-        const database = await connectDB();
-        await database.collection('workspace_posts').deleteOne({ id: req.params.id });
-        res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
-});
-router.put('/posts/:id', verificarToken, async (req, res) => {
-    try {
-        const database = await connectDB();
-        await database.collection('workspace_posts').updateOne({ id: req.params.id }, { $set: { texto: req.body.texto } });
-        res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
-});
-
-// APAGAR E EDITAR COMENTÁRIO
-router.delete('/posts/:postId/comentarios/:comentarioId', verificarToken, async (req, res) => {
-    try {
-        const database = await connectDB();
-        await database.collection('workspace_posts').updateOne({ id: req.params.postId }, { $pull: { comentarios: { id: req.params.comentarioId } } });
-        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: req.params.postId, escolaId: 'DEFAULT' }); // Força atualização
-        res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
-});
-router.put('/posts/:postId/comentarios/:comentarioId', verificarToken, async (req, res) => {
-    try {
-        const database = await connectDB();
-        await database.collection('workspace_posts').updateOne({ id: req.params.postId, "comentarios.id": req.params.comentarioId }, { $set: { "comentarios.$.texto": req.body.texto } });
-        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: req.params.postId, escolaId: 'DEFAULT' }); // Força atualização
-        res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
-});
-
-// ============================================================================
-// 💬 CHAT DO FÓRUM (COM TEMPO REAL E INDICADOR DE DIGITAÇÃO)
-// ============================================================================
-
-router.get('/chat/:turmaId', verificarToken, async (req, res) => {
-    try {
-        const database = await connectDB();
-        const mensagens = await database.collection('workspace_chats').find({ turmaId: req.params.turmaId }).sort({ data: 1 }).toArray();
-        res.status(200).json(mensagens);
-    } catch (error) { res.status(500).json({ error: 'Erro ao carregar o chat.' }); }
-});
-
-router.post('/chat/:turmaId', verificarToken, async (req, res) => {
-    try {
-        const { texto, autorNome } = req.body;
-        const database = await connectDB();
-        const novaMensagem = { id: crypto.randomUUID(), turmaId: req.params.turmaId, autorNome: autorNome || 'Desconhecido', texto: texto, data: new Date().toISOString() };
-        
-        await database.collection('workspace_chats').insertOne(novaMensagem);
-        
-        // ⚡ GATILHO EM TEMPO REAL: Dispara a mensagem instantaneamente pelo túnel
-        workspaceStream.emit('evento_realtime', { 
-            type: 'NOVA_MENSAGEM', 
-            turmaId: req.params.turmaId,
-            mensagem: novaMensagem,
-            escolaId: 'DEFAULT' // Emitido globalmente para a escola
-        });
-
-        res.status(201).json({ success: true, mensagem: novaMensagem });
-    } catch (error) { res.status(500).json({ error: 'Erro ao enviar mensagem.' }); }
-});
-
-// ⚡ NOVA ROTA: Captura o evento de "Digitando..."
-router.post('/chat/:turmaId/digitando', verificarToken, (req, res) => {
-    const { autorNome, isTyping } = req.body;
-    workspaceStream.emit('evento_realtime', {
-        type: 'DIGITANDO',
-        turmaId: req.params.turmaId,
-        autorNome: autorNome,
-        isTyping: isTyping,
-        escolaId: 'DEFAULT'
-    });
-    res.status(200).json({ success: true });
-});
 // ============================================================================
 // 🖼️ IDENTIDADE VISUAL DO GRUPO (FOTO E NOME DA TURMA)
 // ============================================================================
@@ -314,7 +84,7 @@ router.put('/chat/info/:turmaId', verificarToken, async (req, res) => {
             { $set: { nome: nome, foto: foto } }
         );
 
-        // ⚡ GATILHO EM TEMPO REAL: Avisa todos os alunos do grupo que a foto/nome mudou!
+        // ⚡ GATILHO EM TEMPO REAL: Avisa todos os alunos que a foto/nome mudou!
         workspaceStream.emit('evento_realtime', {
             type: 'SALA_UPDATE',
             turmaId: req.params.turmaId,
@@ -324,6 +94,226 @@ router.put('/chat/info/:turmaId', verificarToken, async (req, res) => {
         res.status(200).json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro ao atualizar grupo.' }); }
 });
+
+// ============================================================================
+// 💬 CHAT DO FÓRUM (COM TEMPO REAL E INDICADOR DE DIGITAÇÃO)
+// ============================================================================
+
+router.get('/chat/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const mensagens = await database.collection('workspace_chats').find({ turmaId: req.params.turmaId }).sort({ data: 1 }).toArray();
+        res.status(200).json(mensagens);
+    } catch (error) { res.status(500).json({ error: 'Erro ao carregar o chat.' }); }
+});
+
+router.post('/chat/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const { texto, autorNome } = req.body;
+        const database = await connectDB();
+        const novaMensagem = { id: crypto.randomUUID(), turmaId: req.params.turmaId, autorNome: autorNome || 'Desconhecido', texto: texto, data: new Date().toISOString() };
+        
+        await database.collection('workspace_chats').insertOne(novaMensagem);
+        
+        // ⚡ GATILHO EM TEMPO REAL: Dispara a mensagem instantaneamente
+        workspaceStream.emit('evento_realtime', { 
+            type: 'NOVA_MENSAGEM', 
+            turmaId: req.params.turmaId,
+            mensagem: novaMensagem,
+            escolaId: 'DEFAULT'
+        });
+
+        res.status(201).json({ success: true, mensagem: novaMensagem });
+    } catch (error) { res.status(500).json({ error: 'Erro ao enviar mensagem.' }); }
+});
+
+// Captura o evento de "Digitando..."
+router.post('/chat/:turmaId/digitando', verificarToken, (req, res) => {
+    const { autorNome, isTyping } = req.body;
+    workspaceStream.emit('evento_realtime', {
+        type: 'DIGITANDO', turmaId: req.params.turmaId, autorNome: autorNome, isTyping: isTyping, escolaId: 'DEFAULT'
+    });
+    res.status(200).json({ success: true });
+});
+
+// ============================================================================
+// 📝 FEED, REAÇÕES E UPLOADS
+// ============================================================================
+
+router.post('/upload', verificarToken, upload.array('anexos', 10), async (req, res) => {
+    try {
+        if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'Nenhum ficheiro.' });
+        const urls = req.files.map(file => ({ url: file.path, nome: file.originalname, tipo: file.mimetype }));
+        res.status(200).json({ success: true, anexos: urls });
+    } catch (error) { res.status(500).json({ error: 'Erro na Nuvem.' }); }
+});
+
+router.post('/posts', verificarToken, async (req, res) => {
+    try {
+        const { texto, autorNome, autorTipo, escolaId, anexos, destino, destinoNome } = req.body;
+        if (!texto && (!anexos || anexos.length === 0)) return res.status(400).json({ error: 'Vazio.' });
+
+        const database = await connectDB();
+        const novoPost = {
+            id: crypto.randomUUID(), escolaId: escolaId || 'DEFAULT', autorNome: autorNome || 'Desconhecido',
+            autorTipo: autorTipo || 'Professor', destino: destino || 'global', destinoNome: destinoNome || 'Público Geral',
+            texto: texto, anexos: anexos || [], dataCriacao: new Date().toISOString(), comentarios: [], likes: [], dislikes: []
+        };
+
+        await database.collection('workspace_posts').insertOne(novoPost);
+        workspaceStream.emit('evento_realtime', { type: 'NOVO_POST', escolaId: novoPost.escolaId });
+
+        res.status(201).json({ success: true, post: novoPost });
+    } catch (error) { res.status(500).json({ error: 'Erro ao publicar.' }); }
+});
+
+router.get('/posts', verificarToken, async (req, res) => {
+    try {
+        const alunoRefId = req.query.alunoRefId;
+        const database = await connectDB();
+        let filtro = {}; 
+
+        if (alunoRefId && alunoRefId !== 'undefined') {
+            const aluno = await database.collection('alunos').findOne({ id: alunoRefId });
+            if (aluno) {
+                let minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas || aluno.turma];
+                filtro = { $or: [{ destino: 'global' }, { destino: { $in: minhasTurmas } }, { destinoNome: { $in: minhasTurmas } }] };
+            }
+        }
+        const posts = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(50).toArray();
+        res.status(200).json(posts);
+    } catch (error) { res.status(500).json({ error: 'Erro ao carregar.' }); }
+});
+
+router.get('/posts/:id', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const post = await database.collection('workspace_posts').findOne({ id: req.params.id });
+        if (!post) return res.status(404).json({ error: 'Não encontrado.' });
+        res.status(200).json(post);
+    } catch (error) { res.status(500).json({ error: 'Erro ao sincronizar.' }); }
+});
+
+router.post('/posts/:id/comentarios', verificarToken, async (req, res) => {
+    try {
+        const postId = req.params.id;
+        const { texto, autorNome } = req.body;
+        const database = await connectDB();
+        const novoComentario = { id: crypto.randomUUID(), autorNome: autorNome, texto: texto, dataCriacao: new Date().toISOString() };
+
+        const postOriginal = await database.collection('workspace_posts').findOne({ id: postId });
+        const result = await database.collection('workspace_posts').updateOne({ id: postId }, { $push: { comentarios: novoComentario } });
+
+        if (result.modifiedCount === 0) return res.status(404).json({ error: 'Não encontrado.' });
+
+        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: postId, escolaId: postOriginal.escolaId });
+
+        if (postOriginal) {
+            const usuariosNotificar = new Set();
+            if (postOriginal.autorNome !== autorNome) usuariosNotificar.add(postOriginal.autorNome);
+            if (postOriginal.comentarios) postOriginal.comentarios.forEach(c => { if (c.autorNome !== autorNome) usuariosNotificar.add(c.autorNome); });
+            
+            const notificacoesArray = Array.from(usuariosNotificar).map(destinatario => ({
+                id: crypto.randomUUID(), escolaId: postOriginal.escolaId, destinatarioNome: destinatario, remetenteNome: autorNome,
+                mensagem: `comentou na publicação: "${texto.substring(0, 20)}..."`, origem: 'post', origemId: postId, lida: false, data: new Date().toISOString()
+            }));
+
+            if (notificacoesArray.length > 0) {
+                await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: Array.from(usuariosNotificar), escolaId: postOriginal.escolaId });
+            }
+        }
+        res.status(201).json({ success: true, comentario: novoComentario });
+    } catch (error) { res.status(500).json({ error: 'Erro ao comentar.' }); }
+});
+
+router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const notificacoes = await database.collection('workspace_notificacoes').find({ destinatarioNome: req.params.nomeDono, lida: false }).sort({ data: -1 }).toArray();
+        res.status(200).json(notificacoes);
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_notificacoes').updateOne({ id: req.params.id }, { $set: { lida: true } });
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+router.put('/posts/:id/reagir', verificarToken, async (req, res) => {
+    try {
+        const postId = req.params.id;
+        const { userId, tipo, autorNome } = req.body; 
+        if (!userId) return res.status(400).json({ error: 'Obrigatório.' });
+
+        const database = await connectDB();
+        const post = await database.collection('workspace_posts').findOne({ id: postId });
+        if (!post) return res.status(404).json({ error: 'Não encontrada.' });
+
+        let likes = Array.isArray(post.likes) ? post.likes : [];
+        let dislikes = Array.isArray(post.dislikes) ? post.dislikes : [];
+
+        likes = likes.filter(id => id !== userId);
+        dislikes = dislikes.filter(id => id !== userId);
+
+        if (tipo === 'like') likes.push(userId);
+        if (tipo === 'dislike') dislikes.push(userId);
+
+        await database.collection('workspace_posts').updateOne({ id: postId }, { $set: { likes: likes, dislikes: dislikes } });
+        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: postId, escolaId: post.escolaId });
+
+        if (autorNome && post.autorNome !== autorNome) { 
+            await database.collection('workspace_notificacoes').insertOne({
+                id: crypto.randomUUID(), escolaId: post.escolaId, destinatarioNome: post.autorNome, remetenteNome: autorNome,
+                mensagem: `reagiu à sua publicação.`, origem: 'post', origemId: postId, lida: false, data: new Date().toISOString()
+            });
+            workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: [post.autorNome], escolaId: post.escolaId });
+        }
+        res.status(200).json({ success: true, likes, dislikes });
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+router.delete('/posts/:id', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_posts').deleteOne({ id: req.params.id });
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+router.put('/posts/:id', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_posts').updateOne({ id: req.params.id }, { $set: { texto: req.body.texto } });
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+router.delete('/posts/:postId/comentarios/:comentarioId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_posts').updateOne({ id: req.params.postId }, { $pull: { comentarios: { id: req.params.comentarioId } } });
+        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: req.params.postId, escolaId: 'DEFAULT' });
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+router.put('/posts/:postId/comentarios/:comentarioId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_posts').updateOne({ id: req.params.postId, "comentarios.id": req.params.comentarioId }, { $set: { "comentarios.$.texto": req.body.texto } });
+        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: req.params.postId, escolaId: 'DEFAULT' });
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+// ============================================================================
+// ⚙️ OUTRAS ROTAS GERAIS (Perfil, Avatares, Entregas)
+// ============================================================================
+
 router.put('/perfil', verificarToken, async (req, res) => {
     try {
         const { id, senhaAtual, novaSenha } = req.body;
@@ -334,6 +324,7 @@ router.put('/perfil', verificarToken, async (req, res) => {
         res.status(200).json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
+
 router.put('/perfil/avatar', verificarToken, async (req, res) => {
     try {
         const { id, alunoRefId, avatarUrl } = req.body;
@@ -343,6 +334,7 @@ router.put('/perfil/avatar', verificarToken, async (req, res) => {
         res.status(200).json({ success: true, avatar: avatarUrl });
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
+
 router.post('/entregas', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -351,6 +343,7 @@ router.post('/entregas', verificarToken, async (req, res) => {
         res.status(201).json({ success: true, entrega: novaEntrega });
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
+
 router.get('/entregas/verificar/:eventoId/:alunoId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -358,6 +351,7 @@ router.get('/entregas/verificar/:eventoId/:alunoId', verificarToken, async (req,
         res.status(200).json(entrega ? { entregue: true, detalhes: entrega } : { entregue: false });
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
+
 router.get('/entregas/tarefa/:eventoId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -365,6 +359,7 @@ router.get('/entregas/tarefa/:eventoId', verificarToken, async (req, res) => {
         res.status(200).json(entregas);
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
+
 router.get('/avatars', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -376,6 +371,7 @@ router.get('/avatars', verificarToken, async (req, res) => {
         res.status(200).json(mapaAvatars);
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
+
 router.put('/eventos/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -383,6 +379,7 @@ router.put('/eventos/:id', verificarToken, async (req, res) => {
         res.status(200).json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
+
 router.delete('/eventos/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
