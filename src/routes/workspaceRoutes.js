@@ -77,7 +77,7 @@ router.post('/upload', verificarToken, (req, res) => {
         if (err) {
             if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
                 console.log('⚠️ Upload ignorado: O utilizador perdeu a ligação ou cancelou o envio.');
-                return res.status(400).json({ error: 'Upload interrompido pela rede.' });
+                return res.end()
             }
             if (err.code === 'LIMIT_FILE_SIZE') {
                 return res.status(400).json({ error: 'O ficheiro é maior que o limite permitido de 50MB.' });
