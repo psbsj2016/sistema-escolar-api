@@ -30,7 +30,15 @@ const storage = new CloudinaryStorage({
     },
 });
 
-const upload = multer({ storage: storage });
+// ============================================================================
+// 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA
+// ============================================================================
+const upload = multer({ 
+    storage: storage,
+    limits: { 
+        fileSize: 55 * 1024 * 1024 // Limite rígido de 55MB para proteger a memória do servidor Render
+    }
+});
 
 const verificarToken = (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
@@ -60,10 +68,40 @@ router.get('/stream', (req, res) => {
 });
 
 // ============================================================================
+// 1. UPLOAD PROTEGIDO CONTRA QUEDAS DE CONEXÃO ("REQUEST ABORTED")
+// ============================================================================
+router.post('/upload', verificarToken, (req, res) => {
+    const uploadProcess = upload.array('anexos', 10);
+    
+    uploadProcess(req, res, async (err) => {
+        if (err) {
+            if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
+                console.log('⚠️ Upload ignorado: O utilizador perdeu a ligação ou cancelou o envio.');
+                return res.status(400).json({ error: 'Upload interrompido pela rede.' });
+            }
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({ error: 'O ficheiro é maior que o limite permitido de 50MB.' });
+            }
+            console.error('🚨 Erro interno no Multer:', err.message);
+            return res.status(500).json({ error: 'Falha no servidor ao processar o ficheiro.' });
+        }
+
+        try {
+            if (!req.files || req.files.length === 0) {
+                return res.status(400).json({ error: 'Nenhum ficheiro recebido.' });
+            }
+            const urls = req.files.map(file => ({ url: file.path, nome: file.originalname, tipo: file.mimetype }));
+            res.status(200).json({ success: true, anexos: urls });
+        } catch (processError) {
+            console.error('🚨 Erro ao organizar ficheiros no Cloudinary:', processError);
+            res.status(500).json({ error: 'Erro ao guardar ficheiro na nuvem.' });
+        }
+    });
+});
+
+// ============================================================================
 // 🖼️ IDENTIDADE VISUAL DO GRUPO (FOTO E NOME DA TURMA)
 // ============================================================================
-
-// 1. Ler a foto e nome atuais do grupo
 router.get('/chat/info/:turmaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -73,7 +111,6 @@ router.get('/chat/info/:turmaId', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao buscar informações do grupo.' }); }
 });
 
-// 2. Atualizar a foto e nome do grupo (Apenas Gestores/Professores)
 router.put('/chat/info/:turmaId', verificarToken, async (req, res) => {
     try {
         const { nome, foto } = req.body;
@@ -84,7 +121,6 @@ router.put('/chat/info/:turmaId', verificarToken, async (req, res) => {
             { $set: { nome: nome, foto: foto } }
         );
 
-        // ⚡ GATILHO EM TEMPO REAL: Avisa todos os alunos que a foto/nome mudou!
         workspaceStream.emit('evento_realtime', {
             type: 'SALA_UPDATE',
             turmaId: req.params.turmaId,
@@ -98,7 +134,6 @@ router.put('/chat/info/:turmaId', verificarToken, async (req, res) => {
 // ============================================================================
 // 💬 CHAT DO FÓRUM (COM TEMPO REAL E INDICADOR DE DIGITAÇÃO)
 // ============================================================================
-
 router.get('/chat/:turmaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -115,7 +150,6 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
         
         await database.collection('workspace_chats').insertOne(novaMensagem);
         
-        // ⚡ GATILHO EM TEMPO REAL: Dispara a mensagem instantaneamente
         workspaceStream.emit('evento_realtime', { 
             type: 'NOVA_MENSAGEM', 
             turmaId: req.params.turmaId,
@@ -127,7 +161,6 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao enviar mensagem.' }); }
 });
 
-// Captura o evento de "Digitando..."
 router.post('/chat/:turmaId/digitando', verificarToken, (req, res) => {
     const { autorNome, isTyping } = req.body;
     workspaceStream.emit('evento_realtime', {
@@ -137,17 +170,8 @@ router.post('/chat/:turmaId/digitando', verificarToken, (req, res) => {
 });
 
 // ============================================================================
-// 📝 FEED, REAÇÕES E UPLOADS
+// 📝 FEED, REAÇÕES E COMENTÁRIOS
 // ============================================================================
-
-router.post('/upload', verificarToken, upload.array('anexos', 10), async (req, res) => {
-    try {
-        if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'Nenhum ficheiro.' });
-        const urls = req.files.map(file => ({ url: file.path, nome: file.originalname, tipo: file.mimetype }));
-        res.status(200).json({ success: true, anexos: urls });
-    } catch (error) { res.status(500).json({ error: 'Erro na Nuvem.' }); }
-});
-
 router.post('/posts', verificarToken, async (req, res) => {
     try {
         const { texto, autorNome, autorTipo, escolaId, anexos, destino, destinoNome } = req.body;
@@ -227,22 +251,6 @@ router.post('/posts/:id/comentarios', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao comentar.' }); }
 });
 
-router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
-    try {
-        const database = await connectDB();
-        const notificacoes = await database.collection('workspace_notificacoes').find({ destinatarioNome: req.params.nomeDono, lida: false }).sort({ data: -1 }).toArray();
-        res.status(200).json(notificacoes);
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
-});
-
-router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
-    try {
-        const database = await connectDB();
-        await database.collection('workspace_notificacoes').updateOne({ id: req.params.id }, { $set: { lida: true } });
-        res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
-});
-
 router.put('/posts/:id/reagir', verificarToken, async (req, res) => {
     try {
         const postId = req.params.id;
@@ -311,8 +319,23 @@ router.put('/posts/:postId/comentarios/:comentarioId', verificarToken, async (re
 });
 
 // ============================================================================
-// ⚙️ OUTRAS ROTAS GERAIS (Perfil, Avatares, Entregas)
+// ⚙️ OUTRAS ROTAS GERAIS (Notificações, Perfil, Entregas, Avatares)
 // ============================================================================
+router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const notificacoes = await database.collection('workspace_notificacoes').find({ destinatarioNome: req.params.nomeDono, lida: false }).sort({ data: -1 }).toArray();
+        res.status(200).json(notificacoes);
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_notificacoes').updateOne({ id: req.params.id }, { $set: { lida: true } });
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
 
 router.put('/perfil', verificarToken, async (req, res) => {
     try {
