@@ -19,18 +19,20 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+// 🛡️ BLINDAGEM DO CLOUDINARY: Protege contra crash (Erro 502) se a imagem não tiver nome
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: async (req, file) => {
-        const originalName = file.originalname || 'imagem_perfil.jpg';
-        const ehDocumento = originalName.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
+        // O NOSSO ESCUDO: Se vier um Blob sem nome, chamamos-lhe 'imagem_comprimida'
+        const nomeSeguro = file.originalname || `imagem_comprimida_${Date.now()}.jpg`;
+        const ehDocumento = nomeSeguro.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
+        
         if (ehDocumento) {
-            return { folder: 'workspace_escola', resource_type: 'raw', public_id: `${Date.now()}_${originalName}` };
+            return { folder: 'workspace_escola', resource_type: 'raw', public_id: `${Date.now()}_${nomeSeguro}` };
         }
-        return { folder: 'workspace_escola', resource_type: 'auto', public_id: `${Date.now()}_${originalName.split('.')[0]}` };
+        return { folder: 'workspace_escola', resource_type: 'auto', public_id: `${Date.now()}_${nomeSeguro.split('.')[0]}` };
     },
 });
-
 // ============================================================================
 // 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA (100MB)
 // ============================================================================
