@@ -245,7 +245,10 @@ router.put('/posts/:postId/comentarios/:comentarioId', verificarToken, async (re
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
 
-// CHAT, PERFIL E DEMAIS ROTAS (Mantidas Inalteradas para segurança) ...
+// ============================================================================
+// 💬 CHAT DO FÓRUM (COM TEMPO REAL E INDICADOR DE DIGITAÇÃO)
+// ============================================================================
+
 router.get('/chat/:turmaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -253,14 +256,38 @@ router.get('/chat/:turmaId', verificarToken, async (req, res) => {
         res.status(200).json(mensagens);
     } catch (error) { res.status(500).json({ error: 'Erro ao carregar o chat.' }); }
 });
+
 router.post('/chat/:turmaId', verificarToken, async (req, res) => {
     try {
         const { texto, autorNome } = req.body;
         const database = await connectDB();
         const novaMensagem = { id: crypto.randomUUID(), turmaId: req.params.turmaId, autorNome: autorNome || 'Desconhecido', texto: texto, data: new Date().toISOString() };
+        
         await database.collection('workspace_chats').insertOne(novaMensagem);
+        
+        // ⚡ GATILHO EM TEMPO REAL: Dispara a mensagem instantaneamente pelo túnel
+        workspaceStream.emit('evento_realtime', { 
+            type: 'NOVA_MENSAGEM', 
+            turmaId: req.params.turmaId,
+            mensagem: novaMensagem,
+            escolaId: 'DEFAULT' // Emitido globalmente para a escola
+        });
+
         res.status(201).json({ success: true, mensagem: novaMensagem });
     } catch (error) { res.status(500).json({ error: 'Erro ao enviar mensagem.' }); }
+});
+
+// ⚡ NOVA ROTA: Captura o evento de "Digitando..."
+router.post('/chat/:turmaId/digitando', verificarToken, (req, res) => {
+    const { autorNome, isTyping } = req.body;
+    workspaceStream.emit('evento_realtime', {
+        type: 'DIGITANDO',
+        turmaId: req.params.turmaId,
+        autorNome: autorNome,
+        isTyping: isTyping,
+        escolaId: 'DEFAULT'
+    });
+    res.status(200).json({ success: true });
 });
 router.put('/perfil', verificarToken, async (req, res) => {
     try {
