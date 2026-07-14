@@ -19,13 +19,11 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// 🛡️ BLINDAGEM DO CLOUDINARY: Protege contra crash (Erro 502) se a imagem não tiver nome
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: async (req, file) => {
-        const originalName = file.originalname || 'avatar_comprimido.jpg'; // O nosso escudo salva-vidas!
+        const originalName = file.originalname || 'imagem_perfil.jpg';
         const ehDocumento = originalName.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
-        
         if (ehDocumento) {
             return { folder: 'workspace_escola', resource_type: 'raw', public_id: `${Date.now()}_${originalName}` };
         }
@@ -34,12 +32,12 @@ const storage = new CloudinaryStorage({
 });
 
 // ============================================================================
-// 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA
+// 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA (100MB)
 // ============================================================================
 const upload = multer({ 
     storage: storage,
     limits: { 
-        fileSize: 55 * 1024 * 1024 // Limite rígido de 55MB para proteger a memória do servidor Render
+        fileSize: 100 * 1024 * 1024 // Limite expandido para 100MB conforme solicitado
     }
 });
 
@@ -71,7 +69,7 @@ router.get('/stream', (req, res) => {
 });
 
 // ============================================================================
-// 1. UPLOAD PROTEGIDO CONTRA QUEDAS DE CONEXÃO ("REQUEST ABORTED")
+// 1. UPLOAD PROTEGIDO CONTRA QUEDAS DE CONEXÃO E CRASHES
 // ============================================================================
 router.post('/upload', verificarToken, (req, res) => {
     const uploadProcess = upload.array('anexos', 10);
@@ -79,11 +77,11 @@ router.post('/upload', verificarToken, (req, res) => {
     uploadProcess(req, res, async (err) => {
         if (err) {
             if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
-                console.log('⚠️ Upload ignorado: O utilizador perdeu a ligação ou cancelou o envio.');
-                return res.end(); // Encerra silenciosamente
+                console.log('⚠️ Upload ignorado: O utilizador perdeu a ligação.');
+                return res.end(); 
             }
             if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({ error: 'O ficheiro é maior que o limite permitido de 50MB.' });
+                return res.status(400).json({ error: 'O ficheiro excede o limite de 100MB.' });
             }
             console.error('🚨 Erro interno no Multer:', err.message);
             return res.status(500).json({ error: 'Falha no servidor ao processar o ficheiro.' });
@@ -322,7 +320,7 @@ router.put('/posts/:postId/comentarios/:comentarioId', verificarToken, async (re
 });
 
 // ============================================================================
-// ⚙️ OUTRAS ROTAS GERAIS (Notificações, Perfil, Entregas, Avatares)
+// ⚙️ OUTRAS ROTAS GERAIS
 // ============================================================================
 router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
     try {
