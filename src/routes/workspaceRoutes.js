@@ -19,14 +19,17 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+// 🛡️ BLINDAGEM DO CLOUDINARY: Protege contra crash (Erro 502) se a imagem não tiver nome
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: async (req, file) => {
-        const ehDocumento = file.originalname.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
+        const originalName = file.originalname || 'avatar_comprimido.jpg'; // O nosso escudo salva-vidas!
+        const ehDocumento = originalName.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
+        
         if (ehDocumento) {
-            return { folder: 'workspace_escola', resource_type: 'raw', public_id: `${Date.now()}_${file.originalname}` };
+            return { folder: 'workspace_escola', resource_type: 'raw', public_id: `${Date.now()}_${originalName}` };
         }
-        return { folder: 'workspace_escola', resource_type: 'auto', public_id: `${Date.now()}_${file.originalname.split('.')[0]}` };
+        return { folder: 'workspace_escola', resource_type: 'auto', public_id: `${Date.now()}_${originalName.split('.')[0]}` };
     },
 });
 
@@ -77,7 +80,7 @@ router.post('/upload', verificarToken, (req, res) => {
         if (err) {
             if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
                 console.log('⚠️ Upload ignorado: O utilizador perdeu a ligação ou cancelou o envio.');
-                return res.end()
+                return res.end(); // Encerra silenciosamente
             }
             if (err.code === 'LIMIT_FILE_SIZE') {
                 return res.status(400).json({ error: 'O ficheiro é maior que o limite permitido de 50MB.' });
