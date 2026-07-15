@@ -415,4 +415,52 @@ router.delete('/eventos/:id', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
 
+// ============================================================================
+// 🧹 ROTAS DE DESTRUIÇÃO E REATIVAÇÃO (DELETE)
+// ============================================================================
+
+// 1. Limpar todo o Chat de uma turma
+router.delete('/chat/:turmaId/limpar', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        
+        // Comanda a base de dados para apagar todas as mensagens daquela turma
+        await database.collection('workspace_chats').deleteMany({ turmaId: req.params.turmaId });
+        
+        // Avisa os telemóveis/computadores conectados para atualizarem o ecrã em tempo real
+        workspaceStream.emit('evento_realtime', { 
+            type: 'SALA_UPDATE', 
+            turmaId: req.params.turmaId, 
+            escolaId: 'DEFAULT' 
+        });
+
+        res.status(200).json({ success: true, message: "Chat limpo com sucesso!" });
+    } catch (error) { 
+        console.error("Erro ao limpar chat:", error);
+        res.status(500).json({ error: 'Erro ao limpar o chat.' }); 
+    }
+});
+
+// 2. Reativar Acesso de 1 Aluno na Sala Online (Apaga uma presença específica)
+router.delete('/entregas/:entregaId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_entregas').deleteOne({ id: req.params.entregaId });
+        res.status(200).json({ success: true, message: "Acesso reativado!" });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao reativar aluno.' }); 
+    }
+});
+
+// 3. Reativar Sala para Todos os Alunos (Apaga todas as presenças daquela sala)
+router.delete('/avaliacoes/:id/entregas', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_entregas').deleteMany({ avaliacaoId: req.params.id });
+        res.status(200).json({ success: true, message: "Sala reativada para todos!" });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao limpar presenças.' }); 
+    }
+});
+
 module.exports = router;
