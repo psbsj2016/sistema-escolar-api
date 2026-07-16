@@ -23,8 +23,13 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: async (req, file) => {
-        // O NOSSO ESCUDO: Se vier um Blob sem nome, chamamos-lhe 'imagem_comprimida'
-        const nomeSeguro = file.originalname || `imagem_comprimida_${Date.now()}.jpg`;
+        
+        let nomeOriginal = file.originalname || `imagem_comprimida_${Date.now()}.jpg`;
+        
+        // 🚀 O ESCUDO ANTI-CRASH: Remove espaços, acentos e caracteres especiais do nome!
+        // "Foto da Turma (1).jpg" transforma-se em "Foto_da_Turma__1_.jpg"
+        let nomeSeguro = nomeOriginal.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        
         const ehDocumento = nomeSeguro.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
         
         if (ehDocumento) {
@@ -33,6 +38,7 @@ const storage = new CloudinaryStorage({
         return { folder: 'workspace_escola', resource_type: 'auto', public_id: `${Date.now()}_${nomeSeguro.split('.')[0]}` };
     },
 });
+
 // ============================================================================
 // 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA (100MB)
 // ============================================================================
