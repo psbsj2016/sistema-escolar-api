@@ -1,5 +1,13 @@
 const express = require('express');
 const router = express.Router();
+// Aumenta o tempo limite de espera do servidor para 2 minutos (120000ms)
+// para evitar que o Render corte a conexão em ficheiros um pouco maiores.
+router.use((req, res, next) => {
+    res.setTimeout(120000, () => {
+        console.log('⚠️ Timeout na requisição.');
+    });
+    next();
+});
 const crypto = require('crypto');
 const connectDB = require('../config/db');
 const multer = require('multer');
@@ -42,10 +50,11 @@ const storage = new CloudinaryStorage({
 // ============================================================================
 // 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA (100MB)
 // ============================================================================
+// Configuração de segurança com timeout explicito
 const upload = multer({ 
     storage: storage,
     limits: { 
-        fileSize: 100 * 1024 * 1024 // Limite expandido para 100MB conforme solicitado
+        fileSize: 100 * 1024 * 1024 
     }
 });
 
