@@ -1,14 +1,15 @@
 const express = require('express');
 const router = express.Router();
-// Aumenta o tempo limite de espera do servidor para 2 minutos (120000ms)
-// para evitar que o Render corte a conexão em ficheiros um pouco maiores.
+// 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 90 segundos, antes do Render cortar a ligação aos 100s.
 router.use((req, res, next) => {
-    res.setTimeout(120000, () => {
-        console.log('⚠️ Timeout na requisição.');
+    res.setTimeout(90000, () => {
+        console.log('⚠️ Timeout na requisição atingido (90s). Respondendo antes do Render cortar.');
+        if (!res.headersSent) {
+            res.status(408).json({ error: 'A internet está lenta ou o ficheiro é muito pesado. O tempo de envio esgotou.' });
+        }
     });
     next();
-});
-const crypto = require('crypto');
+});const crypto = require('crypto');
 const connectDB = require('../config/db');
 const multer = require('multer');
 const { v2: cloudinary } = require('cloudinary');
@@ -54,7 +55,7 @@ const storage = new CloudinaryStorage({
 const upload = multer({ 
     storage: storage,
     limits: { 
-        fileSize: 100 * 1024 * 1024 
+        fileSize: 20 * 1024 * 1024 
     }
 });
 
