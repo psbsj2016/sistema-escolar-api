@@ -1,15 +1,18 @@
 const express = require('express');
 const router = express.Router();
-// 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 90 segundos, antes do Render cortar a ligação aos 100s.
+// 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 90 segundos e liberta a memória!
 router.use((req, res, next) => {
-    res.setTimeout(90000, () => {
-        console.log('⚠️ Timeout na requisição atingido (90s). Respondendo antes do Render cortar.');
+    // Usamos req.setTimeout para poder destruir a conexão física se congelar
+    req.setTimeout(90000, () => {
+        console.log('⚠️ Timeout na requisição atingido (90s). Destruindo conexão.');
         if (!res.headersSent) {
-            res.status(408).json({ error: 'A internet está lenta ou o ficheiro é muito pesado. O tempo de envio esgotou.' });
+            res.status(408).json({ error: 'Tempo esgotado. O ficheiro é demasiado pesado para a nuvem.' });
         }
+        req.destroy(); // <--- O SEGREDO: Corta a linha fisicamente antes do Render!
     });
     next();
-});const crypto = require('crypto');
+});
+const crypto = require('crypto');
 const connectDB = require('../config/db');
 const multer = require('multer');
 const { v2: cloudinary } = require('cloudinary');
@@ -49,13 +52,14 @@ const storage = new CloudinaryStorage({
 });
 
 // ============================================================================
-// 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA (100MB)
+// 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA (10MB)
 // ============================================================================
-// Configuração de segurança com timeout explicito
+// Configuração de segurança com timeout explicito e limite estrito da nuvem
 const upload = multer({ 
     storage: storage,
     limits: { 
-        fileSize: 20 * 1024 * 1024 
+        // 🛡️ REDUZIDO PARA 10MB: Evita que o Cloudinary rejeite ficheiros Raw e congele o servidor
+        fileSize: 10 * 1024 * 1024 
     }
 });
 
