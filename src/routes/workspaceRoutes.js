@@ -77,35 +77,53 @@ router.get('/stream', (req, res) => {
 });
 
 // ============================================================================
-// 1. UPLOAD PROTEGIDO CONTRA QUEDAS DE CONEXÃO E CRASHES
+// 1. UPLOAD BLINDADO COM PROTEÇÃO ANTI-CRASH (PREVENÇÃO DE ERRO 502)
 // ============================================================================
 router.post('/upload', verificarToken, (req, res) => {
-    const uploadProcess = upload.array('anexos', 10);
-    
-    uploadProcess(req, res, async (err) => {
-        if (err) {
-            if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
-                console.log('⚠️ Upload ignorado: O utilizador perdeu a ligação.');
-                return res.end(); 
+    // 🛡️ O Cofre de Segurança: Envolvemos tudo num Try/Catch para impedir o crash
+    try {
+        const uploadProcess = upload.array('anexos', 10);
+        
+        uploadProcess(req, res, async (err) => {
+            // 🚨 Captura de erros do Multer ou de falhas de credenciais no Cloudinary
+            if (err) {
+                if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
+                    console.log('⚠️ Upload ignorado: O utilizador perdeu a ligação.');
+                    return res.status(400).json({ error: 'A ligação foi interrompida.' }); 
+                }
+                if (err.code === 'LIMIT_FILE_SIZE') {
+                    return res.status(400).json({ error: 'O ficheiro excede o limite de tamanho permitido.' });
+                }
+                
+                // Se as chaves do Cloudinary estiverem erradas, o erro cai aqui sem matar o servidor!
+                console.error('🚨 Erro interno de Upload na Nuvem:', err);
+                return res.status(500).json({ error: 'Falha na nuvem. Verifique as credenciais do Cloudinary no Render.' });
             }
-            if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({ error: 'O ficheiro excede o limite de 100MB.' });
-            }
-            console.error('🚨 Erro interno no Multer:', err.message);
-            return res.status(500).json({ error: 'Falha no servidor ao processar o ficheiro.' });
-        }
 
-        try {
+            // 📦 Validação da presença de ficheiros
             if (!req.files || req.files.length === 0) {
-                return res.status(400).json({ error: 'Nenhum ficheiro recebido.' });
+                return res.status(400).json({ error: 'Nenhum ficheiro recebido pelo servidor.' });
             }
-            const urls = req.files.map(file => ({ url: file.path, nome: file.originalname, tipo: file.mimetype }));
-            res.status(200).json({ success: true, anexos: urls });
-        } catch (processError) {
-            console.error('🚨 Erro ao organizar ficheiros no Cloudinary:', processError);
-            res.status(500).json({ error: 'Erro ao guardar ficheiro na nuvem.' });
-        }
-    });
+
+            // ✅ Sucesso: Mapeamos e devolvemos os dados
+            try {
+                const urls = req.files.map(file => ({ 
+                    url: file.path, 
+                    nome: file.originalname, 
+                    tipo: file.mimetype 
+                }));
+                res.status(200).json({ success: true, anexos: urls });
+            } catch (processError) {
+                console.error('🚨 Erro ao organizar resposta dos ficheiros:', processError);
+                res.status(500).json({ error: 'Erro ao processar as URLs dos ficheiros.' });
+            }
+        });
+        
+    } catch (erroGlobal) {
+        // Se ocorrer uma exceção extrema, o servidor sobrevive e devolve erro 500
+        console.error('🚨 Erro crítico e inesperado no processo de Upload:', erroGlobal);
+        res.status(500).json({ error: 'Ocorreu um erro interno grave no servidor.' });
+    }
 });
 
 // ============================================================================
