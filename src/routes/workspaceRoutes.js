@@ -31,38 +31,21 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// 🛡️ BLINDAGEM DO CLOUDINARY: Protege contra crash (Erro 502) se a imagem não tiver nome
-const storage = new CloudinaryStorage({
-    cloudinary: cloudinary,
-    params: async (req, file) => {
-        
-        let nomeOriginal = file.originalname || `imagem_comprimida_${Date.now()}.jpg`;
-        
-        // 🚀 O ESCUDO ANTI-CRASH: Remove espaços, acentos e caracteres especiais do nome!
-        // "Foto da Turma (1).jpg" transforma-se em "Foto_da_Turma__1_.jpg"
-        let nomeSeguro = nomeOriginal.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
-        
-        const ehDocumento = nomeSeguro.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
-        
-        if (ehDocumento) {
-            return { folder: 'workspace_escola', resource_type: 'raw', public_id: `${Date.now()}_${nomeSeguro}` };
-        }
-        return { folder: 'workspace_escola', resource_type: 'auto', public_id: `${Date.now()}_${nomeSeguro.split('.')[0]}` };
-    },
-});
+// ============================================================================
+// 🛡️ CONFIGURAÇÃO DE UPLOAD SEGURO (USANDO MEMÓRIA TEMPORÁRIA)
+// ============================================================================
+// Em vez de enviar direto, guardamos na memória rápida do Render primeiro
+const storage = multer.memoryStorage();
 
 // ============================================================================
 // 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA (10MB)
 // ============================================================================
-// Configuração de segurança com timeout explicito e limite estrito da nuvem
 const upload = multer({ 
     storage: storage,
     limits: { 
-        // 🛡️ REDUZIDO PARA 10MB: Evita que o Cloudinary rejeite ficheiros Raw e congele o servidor
-        fileSize: 10 * 1024 * 1024 
+        fileSize: 10 * 1024 * 1024 // Limite estrito de 10MB
     }
 });
-
 const verificarToken = (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
@@ -91,57 +74,72 @@ router.get('/stream', (req, res) => {
 });
 
 // ============================================================================
-// 1. UPLOAD BLINDADO COM PROTEÇÃO ANTI-CRASH (PREVENÇÃO DE ERRO DUPLO)
+// 1. UPLOAD BLINDADO COM ENVIO MANUAL PARA O CLOUDINARY
 // ============================================================================
 router.post('/upload', verificarToken, (req, res) => {
-    // 🛡️ O Cofre de Segurança: Envolvemos tudo num Try/Catch para impedir o crash
     try {
         const uploadProcess = upload.array('anexos', 10);
         
         uploadProcess(req, res, async (err) => {
-            // 🛑 O SINALEIRO MÁGICO: Se a resposta já foi enviada pelo Timeout, paramos aqui!
-            if (res.headersSent) {
-                console.log('⚠️ Processo de upload abortado pacificamente pois o Timeout já respondeu ao utilizador.');
-                return; // O return faz com que a função pare imediatamente, prevenindo o crash.
-            }
+            if (res.headersSent) return; // Se o timeout (90s) já respondeu, paramos aqui.
 
-            // 🚨 Captura de erros do Multer ou de falhas de credenciais no Cloudinary
             if (err) {
                 if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
-                    console.log('⚠️ Upload ignorado: O utilizador perdeu a ligação.');
-                    return res.status(400).json({ error: 'A ligação foi interrompida.' }); 
+                    return res.status(400).json({ error: 'A ligação do aluno foi interrompida.' }); 
                 }
                 if (err.code === 'LIMIT_FILE_SIZE') {
-                    return res.status(400).json({ error: 'O ficheiro excede o limite de tamanho permitido.' });
+                    return res.status(400).json({ error: 'O ficheiro excede o limite de 10MB.' });
                 }
-                
-                console.error('🚨 Erro interno de Upload na Nuvem:', err);
-                return res.status(500).json({ error: 'Falha na nuvem. Verifique as credenciais do Cloudinary no Render.' });
+                console.error('🚨 Erro ao receber ficheiro:', err);
+                return res.status(500).json({ error: 'Falha ao processar o ficheiro no servidor.' });
             }
 
-            // 📦 Validação da presença de ficheiros
             if (!req.files || req.files.length === 0) {
-                return res.status(400).json({ error: 'Nenhum ficheiro recebido pelo servidor.' });
+                return res.status(400).json({ error: 'Nenhum ficheiro recebido.' });
             }
 
-            // ✅ Sucesso: Mapeamos e devolvemos os dados
             try {
-                const urls = req.files.map(file => ({ 
-                    url: file.path, 
-                    nome: file.originalname, 
-                    tipo: file.mimetype 
-                }));
-                res.status(200).json({ success: true, anexos: urls });
+                // 🚀 O NOVO MOTOR: Envia ficheiros da memória para o Cloudinary de forma segura
+                const promessasUpload = req.files.map(file => {
+                    return new Promise((resolve, reject) => {
+                        // Limpa o nome do ficheiro (remove acentos e espaços)
+                        let nomeOriginal = file.originalname || `ficheiro_${Date.now()}.jpg`;
+                        let nomeSeguro = String(nomeOriginal).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                        
+                        const ehDocumento = nomeSeguro.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
+                        
+                        // Configura o destino
+                        let recursoTipo = ehDocumento ? 'raw' : 'auto';
+                        let publicId = ehDocumento ? `${Date.now()}_${nomeSeguro}` : `${Date.now()}_${nomeSeguro.split('.')[0]}`;
+
+                        // Abre o canal de envio com o Cloudinary
+                        const streamEnvio = cloudinary.uploader.upload_stream(
+                            { folder: 'workspace_escola', resource_type: recursoTipo, public_id: publicId },
+                            (error, result) => {
+                                if (error) reject(error);
+                                else resolve({ url: result.secure_url, nome: file.originalname, tipo: file.mimetype });
+                            }
+                        );
+                        
+                        // Despeja o ficheiro da memória para o Cloudinary de uma só vez!
+                        streamEnvio.end(file.buffer);
+                    });
+                });
+
+                // Espera que todos os ficheiros terminem o envio
+                const urls = await Promise.all(promessasUpload);
+                
+                if (!res.headersSent) res.status(200).json({ success: true, anexos: urls });
+                
             } catch (processError) {
-                console.error('🚨 Erro ao organizar resposta dos ficheiros:', processError);
-                if (!res.headersSent) res.status(500).json({ error: 'Erro ao processar as URLs dos ficheiros.' });
+                console.error('🚨 Erro no envio direto para o Cloudinary:', processError);
+                if (!res.headersSent) res.status(500).json({ error: 'Erro ao transferir ficheiro para a nuvem.' });
             }
         });
         
     } catch (erroGlobal) {
-        // Se ocorrer uma exceção extrema, o servidor sobrevive e devolve erro 500
-        console.error('🚨 Erro crítico e inesperado no processo de Upload:', erroGlobal);
-        if (!res.headersSent) res.status(500).json({ error: 'Ocorreu um erro interno grave no servidor.' });
+        console.error('🚨 Erro inesperado na rota de upload:', erroGlobal);
+        if (!res.headersSent) res.status(500).json({ error: 'Ocorreu um erro interno.' });
     }
 });
 
