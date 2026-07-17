@@ -91,7 +91,7 @@ router.get('/stream', (req, res) => {
 });
 
 // ============================================================================
-// 1. UPLOAD BLINDADO COM PROTEÇÃO ANTI-CRASH (PREVENÇÃO DE ERRO 502)
+// 1. UPLOAD BLINDADO COM PROTEÇÃO ANTI-CRASH (PREVENÇÃO DE ERRO DUPLO)
 // ============================================================================
 router.post('/upload', verificarToken, (req, res) => {
     // 🛡️ O Cofre de Segurança: Envolvemos tudo num Try/Catch para impedir o crash
@@ -99,6 +99,12 @@ router.post('/upload', verificarToken, (req, res) => {
         const uploadProcess = upload.array('anexos', 10);
         
         uploadProcess(req, res, async (err) => {
+            // 🛑 O SINALEIRO MÁGICO: Se a resposta já foi enviada pelo Timeout, paramos aqui!
+            if (res.headersSent) {
+                console.log('⚠️ Processo de upload abortado pacificamente pois o Timeout já respondeu ao utilizador.');
+                return; // O return faz com que a função pare imediatamente, prevenindo o crash.
+            }
+
             // 🚨 Captura de erros do Multer ou de falhas de credenciais no Cloudinary
             if (err) {
                 if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
@@ -109,7 +115,6 @@ router.post('/upload', verificarToken, (req, res) => {
                     return res.status(400).json({ error: 'O ficheiro excede o limite de tamanho permitido.' });
                 }
                 
-                // Se as chaves do Cloudinary estiverem erradas, o erro cai aqui sem matar o servidor!
                 console.error('🚨 Erro interno de Upload na Nuvem:', err);
                 return res.status(500).json({ error: 'Falha na nuvem. Verifique as credenciais do Cloudinary no Render.' });
             }
@@ -129,14 +134,14 @@ router.post('/upload', verificarToken, (req, res) => {
                 res.status(200).json({ success: true, anexos: urls });
             } catch (processError) {
                 console.error('🚨 Erro ao organizar resposta dos ficheiros:', processError);
-                res.status(500).json({ error: 'Erro ao processar as URLs dos ficheiros.' });
+                if (!res.headersSent) res.status(500).json({ error: 'Erro ao processar as URLs dos ficheiros.' });
             }
         });
         
     } catch (erroGlobal) {
         // Se ocorrer uma exceção extrema, o servidor sobrevive e devolve erro 500
         console.error('🚨 Erro crítico e inesperado no processo de Upload:', erroGlobal);
-        res.status(500).json({ error: 'Ocorreu um erro interno grave no servidor.' });
+        if (!res.headersSent) res.status(500).json({ error: 'Ocorreu um erro interno grave no servidor.' });
     }
 });
 
