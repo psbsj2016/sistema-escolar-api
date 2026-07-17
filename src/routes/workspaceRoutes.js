@@ -178,6 +178,31 @@ router.put('/chat/info/:turmaId', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
+// 🩺 ROTA DE DIAGNÓSTICO: TESTAR CONEXÃO COM CLOUDINARY
+// ============================================================================
+router.get('/testar-cloudinary', async (req, res) => {
+    try {
+        // Tenta fazer um "ping" simples ao servidor do Cloudinary
+        const resultado = await cloudinary.api.ping();
+        
+        // Se a resposta for positiva, as credenciais estão perfeitas!
+        res.status(200).json({
+            success: true,
+            mensagem: "✅ Conexão com o Cloudinary estabelecida com sucesso!",
+            detalhes: resultado
+        });
+    } catch (error) {
+        // Se der erro, as chaves no Render estão incorretas ou com espaços invisíveis.
+        console.error("🚨 Erro no Ping do Cloudinary:", error);
+        res.status(500).json({
+            success: false,
+            mensagem: "❌ Falha de comunicação com o Cloudinary. Verifique as chaves no Render.",
+            erro: error.message || error
+        });
+    }
+});
+
+// ============================================================================
 // 💬 CHAT DO FÓRUM (COM TEMPO REAL E INDICADOR DE DIGITAÇÃO)
 // ============================================================================
 router.get('/chat/:turmaId', verificarToken, async (req, res) => {
