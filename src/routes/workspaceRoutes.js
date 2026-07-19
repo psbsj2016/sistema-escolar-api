@@ -425,6 +425,27 @@ router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
+// 🧹 LIMPAR TODAS AS NOTIFICAÇÕES DE UMA VEZ
+// ============================================================================
+router.put('/notificacoes/usuario/:nomeDono/ler-todas', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        
+        // Procura todas as notificações do utilizador que ainda não foram lidas
+        // e atualiza todas de uma vez para lida: true
+        await database.collection('workspace_notificacoes').updateMany(
+            { destinatarioNome: req.params.nomeDono, lida: false },
+            { $set: { lida: true } }
+        );
+        
+        res.status(200).json({ success: true });
+    } catch (error) { 
+        console.error("🚨 Erro ao limpar todas as notificações:", error);
+        res.status(500).json({ error: 'Erro ao limpar notificações.' }); 
+    }
+});
+
+// ============================================================================
 // ⚙️ ROTA DE ALTERAÇÃO DE SENHA (PERFIL) - COM CRIPTOGRAFIA
 // ============================================================================
 router.put('/perfil', verificarToken, async (req, res) => {
