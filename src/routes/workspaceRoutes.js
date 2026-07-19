@@ -425,58 +425,77 @@ router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// ⚙️ ROTA DE ALTERAÇÃO DE SENHA (PERFIL À PROVA DE FALHAS)
+// ⚙️ ROTA DE ALTERAÇÃO DE SENHA (PERFIL) - SUPORTE A SENHA PROVISÓRIA
 // ============================================================================
 router.put('/perfil', verificarToken, async (req, res) => {
     try {
         const { id, alunoRefId, senhaAtual, novaSenha } = req.body;
         const database = await connectDB();
         
-        // 1. Limpeza final e segurança contra tipos de dados (String vs Number)
         const senhaLimpa = String(senhaAtual).trim();
         const novaSenhaLimpa = String(novaSenha).trim();
-        
-        // O servidor procura a senha em formato de Texto ou em formato de Número
-        const filtroSenha = { $in: [senhaLimpa, Number(senhaLimpa), senhaAtual] };
 
-        // 2. Procuramos primeiro na gaveta dos Professores/Gestores
-        let user = await database.collection('usuarios').findOne({ id: id, senha: filtroSenha });
-        let nomeDaColecao = 'usuarios';
-        let idAlvo = id;
+        // 1. A BUSCA CEGA: Encontramos o utilizador APENAS pelo ID (Não filtramos a senha aqui)
+        let user = null;
+        let nomeDaColecao = '';
+        let idAlvo = null;
 
-        // 3. Se não for Professor, procuramos na gaveta dos Alunos usando o ID principal
-        if (!user) {
-            user = await database.collection('alunos').findOne({ id: id, senha: filtroSenha });
-            nomeDaColecao = 'alunos';
-            idAlvo = id;
+        // Tenta achar nos alunos primeiro (usando a referência do aluno)
+        if (alunoRefId) {
+            user = await database.collection('alunos').findOne({ id: alunoRefId });
+            if (user) { nomeDaColecao = 'alunos'; idAlvo = alunoRefId; }
         }
 
-        // 4. A bala de prata para os Alunos! Usamos o alunoRefId se as opções anteriores falharem
-        if (!user && alunoRefId) {
-            user = await database.collection('alunos').findOne({ id: alunoRefId, senha: filtroSenha });
-            nomeDaColecao = 'alunos';
-            idAlvo = alunoRefId;
+        // Se não achou pelo alunoRefId, tenta pelo id normal na coleção alunos
+        if (!user) {
+            user = await database.collection('alunos').findOne({ id: id });
+            if (user) { nomeDaColecao = 'alunos'; idAlvo = id; }
         }
 
-        // 🚀 A CORREÇÃO MÁGICA ESTÁ AQUI: Trocámos o 401 pelo 400!
-        // Com o Erro 400, o frontend exibe o aviso sem quebrar a tela e sem puxar o Login.
+        // Se não é aluno, tenta na coleção de usuarios (Professores/Gestores)
         if (!user) {
+            user = await database.collection('usuarios').findOne({ id: id });
+            if (user) { nomeDaColecao = 'usuarios'; idAlvo = id; }
+        }
+
+        // Se mesmo assim não achou ninguém, a conta não existe
+        if (!user) {
+            return res.status(404).json({ error: 'Conta não encontrada no sistema.' });
+        }
+
+        // 2. A VERIFICAÇÃO INTELIGENTE DA SENHA PROVISÓRIA (NO JAVASCRIPT)
+        // Reunimos todos os campos onde o sistema possa ter gerado a senha inicial
+        const senhasValidas = [
+            String(user.senha).trim(),
+            String(user.senha_provisoria).trim(),
+            String(user.senhaProvisoria).trim(),
+            String(user.password).trim()
+        ];
+
+        // Comparamos a senha digitada com a base de dados (permitindo match como texto ou número)
+        const senhaCorreta = senhasValidas.includes(senhaLimpa) || senhasValidas.includes(String(Number(senhaLimpa)));
+
+        // Se a senha não bater certo com nenhum dos campos provisórios ou oficiais...
+        if (!senhaCorreta) {
             return res.status(400).json({ error: 'A senha atual está incorreta. Verifique e tente novamente.' });
         }
 
-        // 5. Sincronização Dupla! Guarda a senha nova em todas as gavetas
-        await database.collection(nomeDaColecao).updateOne(
-            { id: idAlvo }, 
-            { $set: { senha: novaSenhaLimpa } }
-        );
+        // 3. ATUALIZAÇÃO DA SENHA E LIMPEZA
+        // Guardamos a senha oficial e removemos as provisórias para ativar a conta definitivamente
+        const updateDoc = {
+            $set: { senha: novaSenhaLimpa },
+            $unset: { senha_provisoria: "", senhaProvisoria: "" } 
+        };
 
+        await database.collection(nomeDaColecao).updateOne({ id: idAlvo }, updateDoc);
+
+        // Sincronização dupla (Mantém ambas as gavetas iguais)
         if (nomeDaColecao === 'alunos') {
-            await database.collection('usuarios').updateOne({ id: id }, { $set: { senha: novaSenhaLimpa } });
+            await database.collection('usuarios').updateOne({ id: id }, updateDoc);
         } else if (alunoRefId) {
-            await database.collection('alunos').updateOne({ id: alunoRefId }, { $set: { senha: novaSenhaLimpa } });
+            await database.collection('alunos').updateOne({ id: alunoRefId }, updateDoc);
         }
 
-        // Devolvemos o sinal verde para o ecrã
         res.status(200).json({ success: true });
         
     } catch (error) { 
