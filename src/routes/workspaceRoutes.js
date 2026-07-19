@@ -425,7 +425,7 @@ router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// ⚙️ ROTA DE ALTERAÇÃO DE SENHA (PERFIL) - SUPORTE A SENHA PROVISÓRIA
+// ⚙️ ROTA DE ALTERAÇÃO DE SENHA (PERFIL) - COM CRIPTOGRAFIA
 // ============================================================================
 router.put('/perfil', verificarToken, async (req, res) => {
     try {
@@ -435,41 +435,54 @@ router.put('/perfil', verificarToken, async (req, res) => {
         const senhaLimpa = String(senhaAtual).trim();
         const novaSenhaLimpa = String(novaSenha).trim();
 
-        // 1. A BUSCA CORRETA: O script de Admin cria sempre as credenciais na coleção 'usuarios'.
-        // Portanto, a senha verdadeira de login (mesmo a dos alunos) está sempre aqui!
+        // 1. Encontra a ficha do aluno na gaveta de acessos
         const user = await database.collection('usuarios').findOne({ id: id });
 
-        // Se não encontrou a conta de login, aborta.
         if (!user) {
-            return res.status(404).json({ error: 'Conta de acesso não encontrada no sistema.' });
+            return res.status(404).json({ error: 'Conta de acesso não encontrada.' });
         }
 
-        // 2. A VERIFICAÇÃO INTELIGENTE (Provisória ou Oficial)
-        // Reunimos todos os formatos onde a senha inicial possa estar guardada
-        const senhasValidas = [
-            String(user.senha).trim(),
-            String(user.senha_provisoria).trim(),
-            String(user.senhaProvisoria).trim()
-        ];
+        // 2. 🚀 O DESCODIFICADOR: Importamos a biblioteca de segurança (tentando as duas versões mais comuns no Node.js)
+        let bcrypt;
+        try { bcrypt = require('bcrypt'); } catch(e) { try { bcrypt = require('bcryptjs'); } catch(e) { bcrypt = null; } }
 
-        // Verificamos se o que o aluno digitou bate certo (como texto ou como número)
-        const senhaCorreta = senhasValidas.includes(senhaLimpa) || senhasValidas.includes(String(Number(senhaLimpa)));
+        let senhaCorreta = false;
+        let novaSenhaParaGuardar = novaSenhaLimpa; // Por defeito é texto normal
+
+        // 3. A VERIFICAÇÃO INTELIGENTE (Criptografada vs Texto Normal)
+        // Se o sistema usa bcrypt, a senha na Base de Dados começa sempre por "$2"
+        if (bcrypt && user.senha && String(user.senha).startsWith('$2')) {
+            // A senha está criptografada! Usamos o motor para comparar
+            senhaCorreta = await bcrypt.compare(senhaLimpa, user.senha);
+            
+            // Se estiver correta, CRIPTOGRAFAMOS a senha nova antes de guardar para não quebrar o login
+            if (senhaCorreta) {
+                novaSenhaParaGuardar = await bcrypt.hash(novaSenhaLimpa, 10);
+            }
+        } else {
+            // Plano B: Se a senha estiver em texto normal (sistemas mais antigos)
+            const senhasValidas = [
+                String(user.senha).trim(),
+                String(user.senha_provisoria).trim(),
+                String(user.senhaProvisoria).trim()
+            ];
+            senhaCorreta = senhasValidas.includes(senhaLimpa) || senhasValidas.includes(String(Number(senhaLimpa)));
+        }
 
         if (!senhaCorreta) {
             return res.status(400).json({ error: 'A senha atual está incorreta. Verifique e tente novamente.' });
         }
 
-        // 3. ATUALIZAÇÃO DA SENHA E LIMPEZA
-        // Criamos o pacote de atualização: define a nova senha e apaga vestígios de senhas provisórias
+        // 4. ATUALIZAÇÃO DA SENHA SEGURA E LIMPEZA
         const updateDoc = {
-            $set: { senha: novaSenhaLimpa },
+            $set: { senha: novaSenhaParaGuardar },
             $unset: { senha_provisoria: "", senhaProvisoria: "" } 
         };
 
-        // Atualiza obrigatoriamente a coleção de usuários (onde o login funciona)
+        // Guarda a senha secreta (Hash) na coleção principal
         await database.collection('usuarios').updateOne({ id: id }, updateDoc);
 
-        // 4. SINCRONIZAÇÃO DUPLA: Se for um aluno, espelha a alteração na coleção 'alunos'
+        // Espelha para a coleção de alunos (para coerência de dados)
         if (alunoRefId) {
             await database.collection('alunos').updateOne({ id: alunoRefId }, updateDoc);
         }
