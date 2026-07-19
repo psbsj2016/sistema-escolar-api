@@ -425,35 +425,57 @@ router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// ⚙️ ROTA DE ALTERAÇÃO DE SENHA (PERFIL)
+// ⚙️ ROTA DE ALTERAÇÃO DE SENHA (PERFIL À PROVA DE FALHAS)
 // ============================================================================
 router.put('/perfil', verificarToken, async (req, res) => {
     try {
-        const { id, senhaAtual, novaSenha } = req.body;
+        const { id, alunoRefId, senhaAtual, novaSenha } = req.body;
         const database = await connectDB();
         
-        // 1. Procuramos primeiro na gaveta dos Professores/Gestores
-        let user = await database.collection('usuarios').findOne({ id: id, senha: senhaAtual });
+        // 🚀 PROTEÇÃO 1: Limpeza final e segurança contra tipos de dados (String vs Number)
+        const senhaLimpa = String(senhaAtual).trim();
+        const novaSenhaLimpa = String(novaSenha).trim();
+        
+        // O servidor procura a senha em formato de Texto ou em formato de Número, evitando falhas de bases importadas.
+        const filtroSenha = { $in: [senhaLimpa, Number(senhaLimpa), senhaAtual] };
+
+        // 🚀 PROTEÇÃO 2: Procuramos primeiro na gaveta dos Professores/Gestores
+        let user = await database.collection('usuarios').findOne({ id: id, senha: filtroSenha });
         let nomeDaColecao = 'usuarios';
+        let idAlvo = id;
 
-        // 2. Se não estiver nos usuarios, procuramos na gaveta dos Alunos
+        // 🚀 PROTEÇÃO 3: Se não for Professor, procuramos na gaveta dos Alunos usando o ID principal
         if (!user) {
-            user = await database.collection('alunos').findOne({ id: id, senha: senhaAtual });
+            user = await database.collection('alunos').findOne({ id: id, senha: filtroSenha });
             nomeDaColecao = 'alunos';
+            idAlvo = id;
         }
 
-        // 3. Se continuar sem encontrar em lado nenhum, então a senha atual está mesmo errada (Erro 401)
+        // 🚀 PROTEÇÃO 4: A bala de prata para os Alunos! Usamos o alunoRefId se as opções anteriores falharem
+        if (!user && alunoRefId) {
+            user = await database.collection('alunos').findOne({ id: alunoRefId, senha: filtroSenha });
+            nomeDaColecao = 'alunos';
+            idAlvo = alunoRefId;
+        }
+
+        // Se passar pelos 3 filtros e continuar sem utilizador, então a senha atual está 100% errada
         if (!user) {
-            return res.status(401).json({ error: 'A senha atual está incorreta.' });
+            return res.status(401).json({ error: 'A senha atual está incorreta. Verifique e tente novamente.' });
         }
 
-        // 4. Sabendo qual é a gaveta correta, atualizamos a senha na Base de Dados
+        // 🚀 PROTEÇÃO 5: Sincronização Dupla! Se a conta for alterada, guardamos a senha nova em todas as gavetas onde o utilizador existir
         await database.collection(nomeDaColecao).updateOne(
-            { id: id }, 
-            { $set: { senha: novaSenha } }
+            { id: idAlvo }, 
+            { $set: { senha: novaSenhaLimpa } }
         );
 
-        // 5. Devolvemos a mensagem de sucesso ao ecrã
+        if (nomeDaColecao === 'alunos') {
+            await database.collection('usuarios').updateOne({ id: id }, { $set: { senha: novaSenhaLimpa } });
+        } else if (alunoRefId) {
+            await database.collection('alunos').updateOne({ id: alunoRefId }, { $set: { senha: novaSenhaLimpa } });
+        }
+
+        // Devolvemos o sinal verde para o ecrã
         res.status(200).json({ success: true });
         
     } catch (error) { 
