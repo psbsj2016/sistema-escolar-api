@@ -432,38 +432,39 @@ router.put('/perfil', verificarToken, async (req, res) => {
         const { id, alunoRefId, senhaAtual, novaSenha } = req.body;
         const database = await connectDB();
         
-        // 🚀 PROTEÇÃO 1: Limpeza final e segurança contra tipos de dados (String vs Number)
+        // 1. Limpeza final e segurança contra tipos de dados (String vs Number)
         const senhaLimpa = String(senhaAtual).trim();
         const novaSenhaLimpa = String(novaSenha).trim();
         
-        // O servidor procura a senha em formato de Texto ou em formato de Número, evitando falhas de bases importadas.
+        // O servidor procura a senha em formato de Texto ou em formato de Número
         const filtroSenha = { $in: [senhaLimpa, Number(senhaLimpa), senhaAtual] };
 
-        // 🚀 PROTEÇÃO 2: Procuramos primeiro na gaveta dos Professores/Gestores
+        // 2. Procuramos primeiro na gaveta dos Professores/Gestores
         let user = await database.collection('usuarios').findOne({ id: id, senha: filtroSenha });
         let nomeDaColecao = 'usuarios';
         let idAlvo = id;
 
-        // 🚀 PROTEÇÃO 3: Se não for Professor, procuramos na gaveta dos Alunos usando o ID principal
+        // 3. Se não for Professor, procuramos na gaveta dos Alunos usando o ID principal
         if (!user) {
             user = await database.collection('alunos').findOne({ id: id, senha: filtroSenha });
             nomeDaColecao = 'alunos';
             idAlvo = id;
         }
 
-        // 🚀 PROTEÇÃO 4: A bala de prata para os Alunos! Usamos o alunoRefId se as opções anteriores falharem
+        // 4. A bala de prata para os Alunos! Usamos o alunoRefId se as opções anteriores falharem
         if (!user && alunoRefId) {
             user = await database.collection('alunos').findOne({ id: alunoRefId, senha: filtroSenha });
             nomeDaColecao = 'alunos';
             idAlvo = alunoRefId;
         }
 
-        // Se passar pelos 3 filtros e continuar sem utilizador, então a senha atual está 100% errada
+        // 🚀 A CORREÇÃO MÁGICA ESTÁ AQUI: Trocámos o 401 pelo 400!
+        // Com o Erro 400, o frontend exibe o aviso sem quebrar a tela e sem puxar o Login.
         if (!user) {
-            return res.status(401).json({ error: 'A senha atual está incorreta. Verifique e tente novamente.' });
+            return res.status(400).json({ error: 'A senha atual está incorreta. Verifique e tente novamente.' });
         }
 
-        // 🚀 PROTEÇÃO 5: Sincronização Dupla! Se a conta for alterada, guardamos a senha nova em todas as gavetas onde o utilizador existir
+        // 5. Sincronização Dupla! Guarda a senha nova em todas as gavetas
         await database.collection(nomeDaColecao).updateOne(
             { id: idAlvo }, 
             { $set: { senha: novaSenhaLimpa } }
