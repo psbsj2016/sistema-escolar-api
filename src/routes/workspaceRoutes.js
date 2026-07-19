@@ -424,15 +424,42 @@ router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
 
+// ============================================================================
+// ⚙️ ROTA DE ALTERAÇÃO DE SENHA (PERFIL)
+// ============================================================================
 router.put('/perfil', verificarToken, async (req, res) => {
     try {
         const { id, senhaAtual, novaSenha } = req.body;
         const database = await connectDB();
-        const user = await database.collection('usuarios').findOne({ id: id, senha: senhaAtual });
-        if (!user) return res.status(401).json({ error: 'A senha atual está incorreta.' });
-        await database.collection('usuarios').updateOne({ id: id }, { $set: { senha: novaSenha } });
+        
+        // 1. Procuramos primeiro na gaveta dos Professores/Gestores
+        let user = await database.collection('usuarios').findOne({ id: id, senha: senhaAtual });
+        let nomeDaColecao = 'usuarios';
+
+        // 2. Se não estiver nos usuarios, procuramos na gaveta dos Alunos
+        if (!user) {
+            user = await database.collection('alunos').findOne({ id: id, senha: senhaAtual });
+            nomeDaColecao = 'alunos';
+        }
+
+        // 3. Se continuar sem encontrar em lado nenhum, então a senha atual está mesmo errada (Erro 401)
+        if (!user) {
+            return res.status(401).json({ error: 'A senha atual está incorreta.' });
+        }
+
+        // 4. Sabendo qual é a gaveta correta, atualizamos a senha na Base de Dados
+        await database.collection(nomeDaColecao).updateOne(
+            { id: id }, 
+            { $set: { senha: novaSenha } }
+        );
+
+        // 5. Devolvemos a mensagem de sucesso ao ecrã
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+        
+    } catch (error) { 
+        console.error("🚨 Erro ao atualizar senha:", error);
+        res.status(500).json({ error: 'Erro interno ao tentar atualizar a senha.' }); 
+    }
 });
 
 router.put('/perfil/avatar', verificarToken, async (req, res) => {
