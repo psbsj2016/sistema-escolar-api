@@ -435,64 +435,42 @@ router.put('/perfil', verificarToken, async (req, res) => {
         const senhaLimpa = String(senhaAtual).trim();
         const novaSenhaLimpa = String(novaSenha).trim();
 
-        // 1. A BUSCA CEGA: Encontramos o utilizador APENAS pelo ID (Não filtramos a senha aqui)
-        let user = null;
-        let nomeDaColecao = '';
-        let idAlvo = null;
+        // 1. A BUSCA CORRETA: O script de Admin cria sempre as credenciais na coleção 'usuarios'.
+        // Portanto, a senha verdadeira de login (mesmo a dos alunos) está sempre aqui!
+        const user = await database.collection('usuarios').findOne({ id: id });
 
-        // Tenta achar nos alunos primeiro (usando a referência do aluno)
-        if (alunoRefId) {
-            user = await database.collection('alunos').findOne({ id: alunoRefId });
-            if (user) { nomeDaColecao = 'alunos'; idAlvo = alunoRefId; }
-        }
-
-        // Se não achou pelo alunoRefId, tenta pelo id normal na coleção alunos
+        // Se não encontrou a conta de login, aborta.
         if (!user) {
-            user = await database.collection('alunos').findOne({ id: id });
-            if (user) { nomeDaColecao = 'alunos'; idAlvo = id; }
+            return res.status(404).json({ error: 'Conta de acesso não encontrada no sistema.' });
         }
 
-        // Se não é aluno, tenta na coleção de usuarios (Professores/Gestores)
-        if (!user) {
-            user = await database.collection('usuarios').findOne({ id: id });
-            if (user) { nomeDaColecao = 'usuarios'; idAlvo = id; }
-        }
-
-        // Se mesmo assim não achou ninguém, a conta não existe
-        if (!user) {
-            return res.status(404).json({ error: 'Conta não encontrada no sistema.' });
-        }
-
-        // 2. A VERIFICAÇÃO INTELIGENTE DA SENHA PROVISÓRIA (NO JAVASCRIPT)
-        // Reunimos todos os campos onde o sistema possa ter gerado a senha inicial
+        // 2. A VERIFICAÇÃO INTELIGENTE (Provisória ou Oficial)
+        // Reunimos todos os formatos onde a senha inicial possa estar guardada
         const senhasValidas = [
             String(user.senha).trim(),
             String(user.senha_provisoria).trim(),
-            String(user.senhaProvisoria).trim(),
-            String(user.password).trim()
+            String(user.senhaProvisoria).trim()
         ];
 
-        // Comparamos a senha digitada com a base de dados (permitindo match como texto ou número)
+        // Verificamos se o que o aluno digitou bate certo (como texto ou como número)
         const senhaCorreta = senhasValidas.includes(senhaLimpa) || senhasValidas.includes(String(Number(senhaLimpa)));
 
-        // Se a senha não bater certo com nenhum dos campos provisórios ou oficiais...
         if (!senhaCorreta) {
             return res.status(400).json({ error: 'A senha atual está incorreta. Verifique e tente novamente.' });
         }
 
         // 3. ATUALIZAÇÃO DA SENHA E LIMPEZA
-        // Guardamos a senha oficial e removemos as provisórias para ativar a conta definitivamente
+        // Criamos o pacote de atualização: define a nova senha e apaga vestígios de senhas provisórias
         const updateDoc = {
             $set: { senha: novaSenhaLimpa },
             $unset: { senha_provisoria: "", senhaProvisoria: "" } 
         };
 
-        await database.collection(nomeDaColecao).updateOne({ id: idAlvo }, updateDoc);
+        // Atualiza obrigatoriamente a coleção de usuários (onde o login funciona)
+        await database.collection('usuarios').updateOne({ id: id }, updateDoc);
 
-        // Sincronização dupla (Mantém ambas as gavetas iguais)
-        if (nomeDaColecao === 'alunos') {
-            await database.collection('usuarios').updateOne({ id: id }, updateDoc);
-        } else if (alunoRefId) {
+        // 4. SINCRONIZAÇÃO DUPLA: Se for um aluno, espelha a alteração na coleção 'alunos'
+        if (alunoRefId) {
             await database.collection('alunos').updateOne({ id: alunoRefId }, updateDoc);
         }
 
