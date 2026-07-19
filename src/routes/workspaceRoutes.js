@@ -201,30 +201,38 @@ router.get('/testar-cloudinary', async (req, res) => {
 });
 
 // ============================================================================
-// 💬 ROTA DE ENVIO DE MENSAGENS E ANEXOS DO CHAT
+// 💬 CHAT DO FÓRUM (COM TEMPO REAL E INDICADOR DE DIGITAÇÃO)
 // ============================================================================
+
+// 1. ROTA GET (Foi a que apagou sem querer - Serve para ler o histórico)
+router.get('/chat/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const mensagens = await database.collection('workspace_chats').find({ turmaId: req.params.turmaId }).sort({ data: 1 }).toArray();
+        res.status(200).json(mensagens);
+    } catch (error) { res.status(500).json({ error: 'Erro ao carregar o chat.' }); }
+});
+
+// 2. ROTA POST (Atualizada para guardar PDFs, Nomes e Imagens do Cloudinary)
 router.post('/chat/:turmaId', verificarToken, async (req, res) => {
     try {
-        // 1. Extraímos TODOS os dados enviados, incluindo os links da nuvem
+        // 🚀 O Servidor lê todos os dados, incluindo os anexos e nomes
         const { texto, autorNome, anexoUrl, anexoTipo, anexoNome } = req.body;
         const database = await connectDB();
         
-        // 2. Construímos a mensagem assegurando que nada se perde
         const novaMensagem = { 
             id: crypto.randomUUID(), 
             turmaId: req.params.turmaId, 
             autorNome: autorNome || 'Desconhecido', 
             texto: texto || '', 
-            anexoUrl: anexoUrl || null,   // 👈 O Segredo: Guarda o link
-            anexoTipo: anexoTipo || null, // 👈 Guarda o tipo (image, document, video)
-            anexoNome: anexoNome || null, // 👈 Guarda o nome real do ficheiro
+            anexoUrl: anexoUrl || null,
+            anexoTipo: anexoTipo || null,
+            anexoNome: anexoNome || null,
             data: new Date().toISOString() 
         };
         
-        // 3. Guarda a mensagem completa na Base de Dados
         await database.collection('workspace_chats').insertOne(novaMensagem);
         
-        // 4. Distribui a mensagem em tempo real para a turma
         workspaceStream.emit('evento_realtime', { 
             type: 'NOVA_MENSAGEM', 
             turmaId: req.params.turmaId,
@@ -239,6 +247,7 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
     }
 });
 
+// 3. ROTA DE DIGITAÇÃO
 router.post('/chat/:turmaId/digitando', verificarToken, (req, res) => {
     const { autorNome, isTyping } = req.body;
     workspaceStream.emit('evento_realtime', {
