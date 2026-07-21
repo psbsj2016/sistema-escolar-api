@@ -374,7 +374,17 @@ router.put('/posts/:id/reagir', verificarToken, async (req, res) => {
 router.delete('/posts/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
+        
+        // 1. Apaga fisicamente da Base de Dados
         await database.collection('workspace_posts').deleteOne({ id: req.params.id });
+        
+        // 2. 🚀 O GRITO GLOBAL (SSE): Avisa todos os aparelhos online instantaneamente!
+        workspaceStream.emit('evento_realtime', { 
+            type: 'POST_APAGADO', 
+            postId: req.params.id, 
+            escolaId: 'DEFAULT' 
+        });
+
         res.status(200).json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
