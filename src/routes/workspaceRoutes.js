@@ -699,37 +699,53 @@ router.delete('/avaliacoes/:id/entregas', verificarToken, async (req, res) => {
 // 🧰 BAÚ DAS MEMÓRIAS (NOTAS E ALARMES)
 // ============================================================================
 
-// 1. Buscar Notas do Aluno
+// 1. Buscar Todas as Notas do Aluno (Lista)
 router.get('/bau/notas', verificarToken, async (req, res) => {
     try {
         const usuarioId = req.query.usuarioId;
-        if (!usuarioId) return res.status(400).json({ error: 'ID ausente.' });
-
         const database = await connectDB();
-        const notas = await database.collection('workspace_bau_notas').findOne({ usuarioId: usuarioId });
-        
-        res.status(200).json(notas || { texto: '' });
-    } catch (error) { 
-        res.status(500).json({ error: 'Erro ao carregar notas.' }); 
-    }
+        const notas = await database.collection('workspace_bau_notas')
+            .find({ usuarioId: usuarioId })
+            .sort({ dataAtualizacao: -1 })
+            .toArray();
+        res.status(200).json({ dados: notas });
+    } catch (error) { res.status(500).json({ error: 'Erro ao carregar notas.' }); }
 });
 
-// 2. Salvar Notas do Aluno (Com Upsert: Atualiza ou Cria)
-router.put('/bau/notas', verificarToken, async (req, res) => {
+// 2. Criar Nova Nota
+router.post('/bau/notas', verificarToken, async (req, res) => {
     try {
-        const { usuarioId, texto } = req.body;
+        const { usuarioId, titulo, texto } = req.body;
         const database = await connectDB();
-        
+        const novaNota = {
+            id: crypto.randomUUID(), usuarioId, titulo: titulo || 'Nota sem título', 
+            texto, dataCriacao: new Date().toISOString(), dataAtualizacao: new Date().toISOString()
+        };
+        await database.collection('workspace_bau_notas').insertOne(novaNota);
+        res.status(201).json({ success: true, nota: novaNota });
+    } catch (error) { res.status(500).json({ error: 'Erro ao criar nota.' }); }
+});
+
+// 2.1. Atualizar Nota Existente
+router.put('/bau/notas/:id', verificarToken, async (req, res) => {
+    try {
+        const { titulo, texto } = req.body;
+        const database = await connectDB();
         await database.collection('workspace_bau_notas').updateOne(
-            { usuarioId: usuarioId },
-            { $set: { texto: texto, ultimaAtualizacao: new Date().toISOString() } },
-            { upsert: true } // 🚀 Se não existir, ele cria automaticamente!
+            { id: req.params.id },
+            { $set: { titulo: titulo, texto: texto, dataAtualizacao: new Date().toISOString() } }
         );
-        
         res.status(200).json({ success: true });
-    } catch (error) { 
-        res.status(500).json({ error: 'Erro ao salvar notas.' }); 
-    }
+    } catch (error) { res.status(500).json({ error: 'Erro ao atualizar nota.' }); }
+});
+
+// 2.2. Apagar Nota
+router.delete('/bau/notas/:id', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_bau_notas').deleteOne({ id: req.params.id });
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao apagar nota.' }); }
 });
 
 // 3. Buscar Alarmes/Lembretes Pendentes
