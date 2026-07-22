@@ -594,7 +594,38 @@ router.delete('/eventos/:id', verificarToken, async (req, res) => {
 // 🧹 ROTAS DE DESTRUIÇÃO E REATIVAÇÃO (DELETE)
 // ============================================================================
 
-// 1. Apagar uma Mensagem Individual do Chat com SSE Global
+// 1. Apagar Mensagens em Massa do Chat com SSE Global
+router.delete('/chat/:turmaId/mensagens/massa', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const { ids } = req.body; // Recebemos o "cesto" cheio de IDs
+
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ error: 'Nenhuma mensagem selecionada.' });
+        }
+
+        // 1. Destrói fisicamente todas as mensagens listadas de uma vez
+        await database.collection('workspace_chats').deleteMany({ 
+            id: { $in: ids },
+            turmaId: req.params.turmaId
+        });
+        
+        // 2. 🚀 O GRITO GLOBAL (SSE): Avisa todos para apagarem esta lista do ecrã
+        workspaceStream.emit('evento_realtime', { 
+            type: 'MSG_APAGADA_MASSA', 
+            turmaId: req.params.turmaId, 
+            mensagensIds: ids, // Passamos a lista toda pelo túnel
+            escolaId: 'DEFAULT' 
+        });
+
+        res.status(200).json({ success: true, message: "Mensagens apagadas com sucesso!" });
+    } catch (error) { 
+        console.error("Erro ao apagar mensagens em massa:", error);
+        res.status(500).json({ error: 'Erro interno.' }); 
+    }
+});
+
+// 2. Apagar uma Mensagem Individual do Chat com SSE Global
 router.delete('/chat/:turmaId/mensagem/:mensagemId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -620,7 +651,7 @@ router.delete('/chat/:turmaId/mensagem/:mensagemId', verificarToken, async (req,
     }
 });
 
-// 2. Limpar todo o Chat de uma turma
+// 3. Limpar todo o Chat de uma turma
 router.delete('/chat/:turmaId/limpar', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -642,7 +673,7 @@ router.delete('/chat/:turmaId/limpar', verificarToken, async (req, res) => {
     }
 });
 
-// 3. Reativar Acesso de 1 Aluno na Sala Online (Apaga uma presença específica)
+// 4. Reativar Acesso de 1 Aluno na Sala Online (Apaga uma presença específica)
 router.delete('/entregas/:entregaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -653,7 +684,7 @@ router.delete('/entregas/:entregaId', verificarToken, async (req, res) => {
     }
 });
 
-// 4. Reativar Sala para Todos os Alunos (Apaga todas as presenças daquela sala)
+// 5. Reativar Sala para Todos os Alunos (Apaga todas as presenças daquela sala)
 router.delete('/avaliacoes/:id/entregas', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
