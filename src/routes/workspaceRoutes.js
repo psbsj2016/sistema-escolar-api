@@ -594,7 +594,33 @@ router.delete('/eventos/:id', verificarToken, async (req, res) => {
 // 🧹 ROTAS DE DESTRUIÇÃO E REATIVAÇÃO (DELETE)
 // ============================================================================
 
-// 1. Limpar todo o Chat de uma turma
+// 1. Apagar uma Mensagem Individual do Chat com SSE Global
+router.delete('/chat/:turmaId/mensagem/:mensagemId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        
+        // 1. Apaga fisicamente a mensagem da Base de Dados
+        await database.collection('workspace_chats').deleteOne({ 
+            id: req.params.mensagemId,
+            turmaId: req.params.turmaId
+        });
+        
+        // 2. 🚀 O GRITO GLOBAL (SSE): Avisa os telemóveis conectados para apagarem a msg do ecrã
+        workspaceStream.emit('evento_realtime', { 
+            type: 'MSG_APAGADA', 
+            turmaId: req.params.turmaId, 
+            mensagemId: req.params.mensagemId,
+            escolaId: 'DEFAULT' 
+        });
+
+        res.status(200).json({ success: true, message: "Mensagem apagada com sucesso!" });
+    } catch (error) { 
+        console.error("Erro ao apagar mensagem individual do chat:", error);
+        res.status(500).json({ error: 'Erro ao apagar a mensagem do chat.' }); 
+    }
+});
+
+// 2. Limpar todo o Chat de uma turma
 router.delete('/chat/:turmaId/limpar', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -616,7 +642,7 @@ router.delete('/chat/:turmaId/limpar', verificarToken, async (req, res) => {
     }
 });
 
-// 2. Reativar Acesso de 1 Aluno na Sala Online (Apaga uma presença específica)
+// 3. Reativar Acesso de 1 Aluno na Sala Online (Apaga uma presença específica)
 router.delete('/entregas/:entregaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
@@ -627,7 +653,7 @@ router.delete('/entregas/:entregaId', verificarToken, async (req, res) => {
     }
 });
 
-// 3. Reativar Sala para Todos os Alunos (Apaga todas as presenças daquela sala)
+// 4. Reativar Sala para Todos os Alunos (Apaga todas as presenças daquela sala)
 router.delete('/avaliacoes/:id/entregas', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
