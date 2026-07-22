@@ -695,4 +695,90 @@ router.delete('/avaliacoes/:id/entregas', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🧰 BAÚ DAS MEMÓRIAS (NOTAS E ALARMES)
+// ============================================================================
+
+// 1. Buscar Notas do Aluno
+router.get('/bau/notas', verificarToken, async (req, res) => {
+    try {
+        const usuarioId = req.query.usuarioId;
+        if (!usuarioId) return res.status(400).json({ error: 'ID ausente.' });
+
+        const database = await connectDB();
+        const notas = await database.collection('workspace_bau_notas').findOne({ usuarioId: usuarioId });
+        
+        res.status(200).json(notas || { texto: '' });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao carregar notas.' }); 
+    }
+});
+
+// 2. Salvar Notas do Aluno (Com Upsert: Atualiza ou Cria)
+router.put('/bau/notas', verificarToken, async (req, res) => {
+    try {
+        const { usuarioId, texto } = req.body;
+        const database = await connectDB();
+        
+        await database.collection('workspace_bau_notas').updateOne(
+            { usuarioId: usuarioId },
+            { $set: { texto: texto, ultimaAtualizacao: new Date().toISOString() } },
+            { upsert: true } // 🚀 Se não existir, ele cria automaticamente!
+        );
+        
+        res.status(200).json({ success: true });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao salvar notas.' }); 
+    }
+});
+
+// 3. Buscar Alarmes/Lembretes Pendentes
+router.get('/bau/alarmes', verificarToken, async (req, res) => {
+    try {
+        const usuarioId = req.query.usuarioId;
+        const database = await connectDB();
+        
+        const alarmes = await database.collection('workspace_bau_alarmes')
+            .find({ usuarioId: usuarioId })
+            .sort({ tempoDisparo: 1 })
+            .toArray();
+            
+        res.status(200).json({ dados: alarmes });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao carregar alarmes.' }); 
+    }
+});
+
+// 4. Criar Novo Alarme/Lembrete
+router.post('/bau/alarmes', verificarToken, async (req, res) => {
+    try {
+        const { usuarioId, mensagem, tempoDisparo } = req.body;
+        const database = await connectDB();
+        
+        const novoAlarme = {
+            id: crypto.randomUUID(),
+            usuarioId,
+            mensagem,
+            tempoDisparo,
+            criadoEm: new Date().toISOString()
+        };
+        
+        await database.collection('workspace_bau_alarmes').insertOne(novoAlarme);
+        res.status(201).json({ success: true, id: novoAlarme.id });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao criar alarme.' }); 
+    }
+});
+
+// 5. Apagar Alarme (Após ele disparar na tela)
+router.delete('/bau/alarmes/:id', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_bau_alarmes').deleteOne({ id: req.params.id });
+        res.status(200).json({ success: true });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao apagar alarme.' }); 
+    }
+});
+
 module.exports = router;
