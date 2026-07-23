@@ -786,6 +786,20 @@ router.post('/bau/alarmes', verificarToken, async (req, res) => {
     }
 });
 
+// 4.1. Marcar Alarme como Disparado (Mantém no Calendário)
+router.put('/bau/alarmes/:id/disparado', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_bau_alarmes').updateOne(
+            { id: req.params.id },
+            { $set: { disparado: true } }
+        );
+        res.status(200).json({ success: true });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao atualizar alarme.' }); 
+    }
+});
+
 // 5. Apagar Alarme (Após ele disparar na tela)
 router.delete('/bau/alarmes/:id', verificarToken, async (req, res) => {
     try {
