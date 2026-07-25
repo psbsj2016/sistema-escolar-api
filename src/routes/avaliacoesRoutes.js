@@ -181,4 +181,48 @@ router.get('/minhas-entregas/:alunoId', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
+// ============================================================================
+// 🚀 ETAPA D: REATIVAÇÃO DE ACESSOS (SESSÕES E AVALIAÇÕES)
+// ============================================================================
+
+// 10. REATIVAR ACESSO INDIVIDUAL (Apaga a presença de 1 aluno específico)
+// Rota acionada no frontend via: DELETE /workspace/avaliacoes/entregas/:entregaId
+router.delete('/entregas/:entregaId', async (req, res) => {
+    try {
+        const db = await connectDB();
+        
+        // 🚀 O SEGREDO: Fomos à gaveta exata onde a presença foi criada!
+        const result = await db.collection('workspace_entregas_provas').deleteOne({ 
+            id: req.params.entregaId 
+        });
+        
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ success: false, error: "Registo não encontrado na base de dados." });
+        }
+        
+        res.json({ success: true, message: "Acesso reativado com sucesso!" });
+    } catch (error) { 
+        console.error("Erro ao reativar aluno:", error);
+        res.status(500).json({ success: false, error: "Erro interno no servidor." }); 
+    }
+});
+
+// 11. REATIVAR SALA PARA TODOS (Apaga todas as presenças daquela sala)
+// Rota acionada no frontend via: DELETE /workspace/avaliacoes/:id/entregas
+router.delete('/:id/entregas', async (req, res) => {
+    try {
+        const db = await connectDB();
+        
+        // 🚀 O SEGREDO: Limpa todos os documentos da gaveta correspondentes a esta sala
+        await db.collection('workspace_entregas_provas').deleteMany({ 
+            avaliacaoId: req.params.id 
+        });
+        
+        res.json({ success: true, message: "Sala reativada para todos!" });
+    } catch (error) { 
+        console.error("Erro ao limpar sala:", error);
+        res.status(500).json({ success: false, error: "Erro interno no servidor." }); 
+    }
+});
+
 module.exports = router;

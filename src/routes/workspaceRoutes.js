@@ -674,11 +674,10 @@ router.delete('/chat/:turmaId/limpar', verificarToken, async (req, res) => {
 });
 
 // 4. Reativar Acesso de 1 Aluno na Sala Online (Apaga uma presença específica)
-router.delete('/avaliacoes/entregas/:entregaId', verificarToken, async (req, res) => {
+router.delete('/entregas/:entregaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        // 🚀 Ajustado para a gaveta correta das Avaliações/Sessões
-        await database.collection('workspace_avaliacoes_entregas').deleteOne({ id: req.params.entregaId });
+        await database.collection('workspace_entregas').deleteOne({ id: req.params.entregaId });
         res.status(200).json({ success: true, message: "Acesso reativado!" });
     } catch (error) { 
         res.status(500).json({ error: 'Erro ao reativar aluno.' }); 
@@ -689,8 +688,7 @@ router.delete('/avaliacoes/entregas/:entregaId', verificarToken, async (req, res
 router.delete('/avaliacoes/:id/entregas', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        // 🚀 Ajustado para a gaveta correta
-        await database.collection('workspace_avaliacoes_entregas').deleteMany({ avaliacaoId: req.params.id });
+        await database.collection('workspace_entregas').deleteMany({ avaliacaoId: req.params.id });
         res.status(200).json({ success: true, message: "Sala reativada para todos!" });
     } catch (error) { 
         res.status(500).json({ error: 'Erro ao limpar presenças.' }); 
