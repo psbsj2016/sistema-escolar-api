@@ -811,4 +811,65 @@ router.delete('/bau/alarmes/:id', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 📚 MATERIAIS DAS AULAS (A ESTANTE DIGITAL)
+// ============================================================================
+
+// 1. Guardar metadados do Material
+router.post('/materiais', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const novoMaterial = req.body;
+        await db.collection('workspace_materiais').insertOne(novoMaterial);
+        res.status(201).json({ success: true, material: novoMaterial });
+    } catch (error) {
+        console.error("Erro ao guardar material:", error);
+        res.status(500).json({ success: false, error: 'Erro ao registar o material.' });
+    }
+});
+
+// 2. Procurar Materiais (Geral para Professores, Filtrado para Alunos)
+router.get('/materiais', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const escolaId = req.query.escolaId;
+        const alunoRefId = req.query.alunoRefId;
+        
+        let filtro = { escolaId: escolaId };
+        
+        // Se for um aluno a pedir, o servidor só entrega materiais permitidos
+        if (alunoRefId && alunoRefId !== 'undefined') {
+            const aluno = await db.collection('alunos').findOne({ id: alunoRefId });
+            if (aluno) {
+                let minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas || aluno.turma];
+                // Mostra o que é Global + O que é da turma exata dele
+                filtro = { 
+                    escolaId: escolaId,
+                    $or: [
+                        { destino: 'global' }, 
+                        { destino: { $in: minhasTurmas } }, 
+                        { destinoNome: { $in: minhasTurmas } }
+                    ] 
+                };
+            }
+        }
+        
+        const materiais = await db.collection('workspace_materiais').find(filtro).sort({ dataCriacao: -1 }).toArray();
+        res.status(200).json({ success: true, materiais });
+    } catch (error) {
+        res.status(500).json({ success: false });
+    }
+});
+
+// 3. Apagar Material
+router.delete('/materiais/:id', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        await db.collection('workspace_materiais').deleteOne({ id: req.params.id });
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false });
+    }
+});
+
 module.exports = router;
