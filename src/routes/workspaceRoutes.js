@@ -536,13 +536,72 @@ router.put('/perfil/avatar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
 
+// 🚀 Guardar a Entrega de Exercício/Avaliação e AVISAR O PROFESSOR
 router.post('/entregas', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
         const novaEntrega = { ...req.body, id: crypto.randomUUID(), dataEntrega: new Date().toISOString() };
+        
+        // Passo A: A gaveta recebe o trabalho do aluno
         await database.collection('workspace_entregas').insertOne(novaEntrega);
+
+        // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES (ALUNO -> PROFESSOR/GESTOR)
+        // ====================================================================
+        try {
+            const escolaId = novaEntrega.escolaId || 'DEFAULT';
+            const nomeAluno = novaEntrega.alunoNome || 'Um aluno';
+            const tituloTarefa = novaEntrega.eventoTitulo || 'uma tarefa';
+            const turmaNome = novaEntrega.turmaNome || 'a sua turma';
+
+            // 1. Localiza a Equipa Pedagógica (Professores e Gestores da Escola)
+            const professoresEGestores = await database.collection('usuarios').find({ 
+                escolaId: escolaId,
+                tipo: { $in: ['Professor', 'Gestor'] }
+            }).toArray();
+
+            // 2. Fabrica os bilhetes de alerta para eles
+            if (professoresEGestores.length > 0) {
+                const nomesDestinatarios = [];
+                const notificacoesArray = professoresEGestores.map(prof => {
+                    const nomeProf = prof.nome || prof.login;
+                    if (nomeProf) nomesDestinatarios.push(nomeProf);
+                    
+                    return {
+                        id: crypto.randomUUID(),
+                        escolaId: escolaId,
+                        destinatarioNome: nomeProf,
+                        remetenteNome: nomeAluno,
+                        mensagem: `submeteu a resolução de "${tituloTarefa}" em ${turmaNome}.`,
+                        origem: 'tarefa', // O clique no sino abrirá o modal de verificação!
+                        origemId: novaEntrega.eventoId,
+                        destinoNome: turmaNome,
+                        lida: false,
+                        data: new Date().toISOString()
+                    };
+                }).filter(n => n.destinatarioNome);
+
+                // 3. Guarda e emite o aviso em Tempo Real
+                if (notificacoesArray.length > 0) {
+                    await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                    
+                    workspaceStream.emit('evento_realtime', { 
+                        type: 'NOVA_NOTIFICACAO', 
+                        destinatarios: nomesDestinatarios, 
+                        escolaId: escolaId 
+                    });
+                }
+            }
+        } catch (erroNoti) {
+            console.error("Aviso: Falha ao notificar professores sobre a entrega.", erroNoti);
+        }
+        // ====================================================================
+
         res.status(201).json({ success: true, entrega: novaEntrega });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { 
+        console.error("Erro no envio da entrega:", error);
+        res.status(500).json({ error: 'Erro interno.' }); 
+    }
 });
 
 router.get('/entregas/verificar/:eventoId/:alunoId', verificarToken, async (req, res) => {
@@ -815,12 +874,80 @@ router.delete('/bau/alarmes/:id', verificarToken, async (req, res) => {
 // 📚 MATERIAIS DAS AULAS (A ESTANTE DIGITAL)
 // ============================================================================
 
-// 1. Guardar metadados do Material
+// 1. Guardar metadados do Material e DISPARAR NOTIFICAÇÕES (Prof -> Alunos)
 router.post('/materiais', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const novoMaterial = req.body;
+        
+        // Garante que o material tem um ID seguro antes de guardar
+        if (!novoMaterial.id) novoMaterial.id = crypto.randomUUID();
+        
+        // Passo A: Guarda o documento físico na Biblioteca
         await db.collection('workspace_materiais').insertOne(novoMaterial);
+
+        // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES: Encontrar os alunos e tocar o sininho!
+        // ====================================================================
+        try {
+            const escolaId = novoMaterial.escolaId || 'DEFAULT';
+            const destino = novoMaterial.destino || 'global';
+            const autor = novoMaterial.autorNome || 'Professor';
+            const tituloMat = novoMaterial.titulo || 'Novo Material';
+
+            // 1. Vai buscar a lista de todos os alunos da escola
+            const alunos = await db.collection('alunos').find({ escolaId: escolaId }).toArray();
+            
+            // 2. Filtra apenas os alunos que têm acesso a este material
+            let alunosAlvo = [];
+            if (destino === 'global') {
+                alunosAlvo = alunos; // Todos recebem
+            } else {
+                alunosAlvo = alunos.filter(a => {
+                    const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                    // Verifica se o aluno pertence à turma do material
+                    return minhasTurmas.some(t => String(t).toLowerCase() === String(destino).toLowerCase() || String(t).toLowerCase() === String(novoMaterial.destinoNome).toLowerCase());
+                });
+            }
+
+            // 3. Se encontrou alunos, fabrica os bilhetes de notificação
+            if (alunosAlvo.length > 0) {
+                const nomesDestinatarios = [];
+                
+                const notificacoesArray = alunosAlvo.map(aluno => {
+                    const nomeAluno = aluno.nome || aluno.login;
+                    if (nomeAluno) nomesDestinatarios.push(nomeAluno);
+                    
+                    return {
+                        id: crypto.randomUUID(),
+                        escolaId: escolaId,
+                        destinatarioNome: nomeAluno,
+                        remetenteNome: autor,
+                        mensagem: `partilhou um novo material: "${tituloMat}"`,
+                        origem: 'material', // O nosso Roteador no alertas.js procura por esta palavra exata!
+                        origemId: novoMaterial.id,
+                        destinoNome: novoMaterial.destinoNome || 'Geral',
+                        lida: false,
+                        data: new Date().toISOString()
+                    };
+                }).filter(n => n.destinatarioNome); // Remove nulos por segurança
+
+                // 4. Salva no cofre e dá o Grito Global em Tempo Real (SSE)
+                if (notificacoesArray.length > 0) {
+                    await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                    
+                    workspaceStream.emit('evento_realtime', { 
+                        type: 'NOVA_NOTIFICACAO', 
+                        destinatarios: nomesDestinatarios, 
+                        escolaId: escolaId 
+                    });
+                }
+            }
+        } catch (erroNotificacao) {
+            console.error("Aviso: Material guardado, mas falha ao gerar notificações.", erroNotificacao);
+        }
+        // ====================================================================
+
         res.status(201).json({ success: true, material: novoMaterial });
     } catch (error) {
         console.error("Erro ao guardar material:", error);
