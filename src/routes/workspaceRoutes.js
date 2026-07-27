@@ -47,9 +47,27 @@ const upload = multer({
         fileSize: 10 * 1024 * 1024 // Limite estrito de 10MB
     }
 });
-const verificarToken = (req, res, next) => {
+
+const verificarToken = async (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
+    
+    // 🚀 REGISTO AUTOMÁTICO DE ATIVIDADE: Atualiza o último acesso em background
+    try {
+        // Tentamos extrair o ID do utilizador através do token ou de cookies se decodificado, 
+        // ou atualizamos com base nas rotas subsequentes. Para garantir leveza, 
+        // fazemos um registo genérico se houver identificação na sessão.
+        if (req.body && req.body.id) {
+            const db = await connectDB();
+            await db.collection('usuarios').updateOne(
+                { id: req.body.id },
+                { $set: { ultimoAcesso: new Date().toISOString() } }
+            );
+        }
+    } catch (e) {
+        // Silencioso para não atrapalhar o fluxo principal
+    }
+
     next();
 };
 
@@ -1082,6 +1100,70 @@ router.delete('/materiais/:id', verificarToken, async (req, res) => {
         res.status(200).json({ success: true });
     } catch (error) {
         res.status(500).json({ success: false });
+    }
+});
+
+// ============================================================================
+// 📡 ROTA DE MONITORAMENTO EM TEMPO REAL DO WORKSPACE
+// ============================================================================
+router.get('/workspace/monitoramento/status', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        
+        // 1. Busca todos os alunos e todos os utilizadores (contas de acesso)
+        const alunos = await db.collection('alunos').find({}).toArray();
+        const usuarios = await db.collection('usuarios').find({}).toArray();
+        
+        const agora = new Date();
+        const CINCO_MINUTOS = 5 * 60 * 1000; // Limite de inatividade para considerar "Online"
+
+        // 2. Cruza os dados para montar o relatório do radar
+        const relatorio = alunos.map(aluno => {
+            // Procura a conta de acesso associada a este aluno
+            const contaUser = usuarios.find(u => u.alunoRefId === aluno.id || (u.tipo === 'Aluno' && u.nome === aluno.nome));
+            
+            const ultimoAcessoStr = contaUser ? contaUser.ultimoAcesso : null;
+            let isOnline = false;
+
+            if (ultimoAcessoStr) {
+                const tempoUltimoAcesso = new Date(ultimoAcessoStr).getTime();
+                // Se a última interação ocorreu há menos de 5 minutos, está online!
+                if ((agora.getTime() - tempoUltimoAcesso) <= CINCO_MINUTOS) {
+                    isOnline = true;
+                }
+            }
+
+            return {
+                id: aluno.id,
+                nome: aluno.nome || 'Aluno Sem Nome',
+                login: contaUser ? contaUser.login : 'Sem Acesso Criado',
+                isOnline: isOnline,
+                ultimoAcesso: ultimoAcessoStr || (contaUser ? contaUser.dataCriacao : null)
+            };
+        });
+
+        res.status(200).json(relatorio);
+    } catch (error) {
+        console.error("🚨 Erro ao gerar relatório de monitoramento:", error);
+        res.status(500).json({ error: 'Erro interno ao carregar o radar de status.' });
+    }
+});
+
+// 🚀 ROTA AUXILIAR DE "HEARTBEAT" (O aluno bate a porta a cada 10s para avisar que continua a estudar)
+router.post('/workspace/monitoramento/ping', verificarToken, async (req, res) => {
+    try {
+        const { usuarioId } = req.body;
+        if (!usuarioId) return res.status(400).json({ error: 'ID em falta.' });
+
+        const db = await connectDB();
+        await db.collection('usuarios').updateOne(
+            { id: usuarioId },
+            { $set: { ultimoAcesso: new Date().toISOString() } }
+        );
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro no ping.' });
     }
 });
 
