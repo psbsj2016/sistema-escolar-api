@@ -1103,51 +1103,7 @@ router.delete('/materiais/:id', verificarToken, async (req, res) => {
     }
 });
 
-// ============================================================================
-// 📡 ROTA DE MONITORAMENTO EM TEMPO REAL DO WORKSPACE
-// ============================================================================
-router.get('/monitoramento/status', verificarToken, async (req, res) => {
-    try {
-        const db = await connectDB();
-        
-        // 1. Busca todos os alunos e todos os utilizadores (contas de acesso)
-        const alunos = await db.collection('alunos').find({}).toArray();
-        const usuarios = await db.collection('usuarios').find({}).toArray();
-        
-        const agora = new Date();
-        const CINCO_MINUTOS = 5 * 60 * 1000; // Limite de inatividade para considerar "Online"
-
-        // 2. Cruza os dados para montar o relatório do radar
-        const relatorio = alunos.map(aluno => {
-            const contaUser = usuarios.find(u => u.alunoRefId === aluno.id || (u.tipo === 'Aluno' && u.nome === aluno.nome));
-            
-            const ultimoAcessoStr = contaUser ? contaUser.ultimoAcesso : null;
-            let isOnline = false;
-
-            if (ultimoAcessoStr) {
-                const tempoUltimoAcesso = new Date(ultimoAcessoStr).getTime();
-                if ((agora.getTime() - tempoUltimoAcesso) <= CINCO_MINUTOS) {
-                    isOnline = true;
-                }
-            }
-
-            return {
-                id: aluno.id,
-                nome: aluno.nome || 'Aluno Sem Nome',
-                login: contaUser ? contaUser.login : 'Sem Acesso Criado',
-                isOnline: isOnline,
-                ultimoAcesso: ultimoAcessoStr || (contaUser ? contaUser.dataCriacao : null)
-            };
-        });
-
-        res.status(200).json(relatorio);
-    } catch (error) {
-        console.error("🚨 Erro ao gerar relatório de monitoramento:", error);
-        res.status(500).json({ error: 'Erro interno ao carregar o radar de status.' });
-    }
-});
-
-// 🚀 ROTA AUXILIAR DE "HEARTBEAT"
+// 🚀 ROTA DE "HEARTBEAT" (O aluno avisa que continua ativo)
 router.post('/monitoramento/ping', verificarToken, async (req, res) => {
     try {
         const { usuarioId } = req.body;
