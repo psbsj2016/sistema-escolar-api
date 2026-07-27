@@ -47,7 +47,7 @@ router.post('/', async (req, res) => {
                         escolaId: escola,
                         destinatarioNome: nomeAluno,
                         remetenteNome: autorNome,
-                        mensagem: `agendou uma nova atividade: "${titulo}"`,
+                        mensagem: `agendou uma aula online: "${titulo}"`,
                         origem: origemNoti,
                         origemId: novaAvaliacao.id,
                         destinoNome: novaAvaliacao.destinoNome || 'Geral',

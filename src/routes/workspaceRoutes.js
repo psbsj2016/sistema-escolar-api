@@ -633,6 +633,91 @@ router.get('/avatars', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
 
+// ============================================================================
+// 📝 CRIAR NOVA TAREFA / EXERCÍCIO (E DISPARAR CARTÃO ANIMADO PARA ALUNOS)
+// ============================================================================
+router.post('/eventos', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        
+        // Monta a estrutura da tarefa recebida do sidebar.js
+        const novoEvento = {
+            ...req.body,
+            id: crypto.randomUUID(), // Gera o ID único
+            dataCriacao: new Date().toISOString()
+        };
+
+        // 1. Guarda a Tarefa fisicamente na Base de Dados
+        await db.collection('eventos').insertOne(novoEvento);
+
+        // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES (PROFESSOR -> ALUNOS) PARA EXERCÍCIOS
+        // ====================================================================
+        try {
+            // Recolhe os dados do payload enviado pelo sidebar.js
+            const escola = req.body.escolaId || 'DEFAULT'; 
+            const tituloTarefa = req.body.titulo || 'Novo Exercício';
+            const autorDaTarefa = req.body.autorNome || 'Professor';
+            const destinoTarefa = req.body.turma || 'global';
+            const destinoNomeTarefa = req.body.turmaNome || 'Geral';
+
+            // Busca os alunos da base de dados
+            const alunos = await db.collection('alunos').find({ escolaId: escola }).toArray();
+            
+            // Filtra quem tem o direito de receber o exercício
+            let alunosAlvo = [];
+            if (destinoTarefa === 'global') {
+                alunosAlvo = alunos;
+            } else {
+                alunosAlvo = alunos.filter(a => {
+                    const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                    return minhasTurmas.some(t => String(t).toLowerCase() === String(destinoTarefa).toLowerCase() || String(t).toLowerCase() === String(destinoNomeTarefa).toLowerCase());
+                });
+            }
+
+            if (alunosAlvo.length > 0) {
+                const nomesDestinatarios = [];
+                const notificacoesArray = alunosAlvo.map(aluno => {
+                    const nomeAluno = aluno.nome || aluno.login;
+                    if (nomeAluno) nomesDestinatarios.push(nomeAluno);
+                    
+                    return {
+                        id: 'notif_' + Date.now() + Math.random().toString(36).substring(7),
+                        escolaId: escola,
+                        destinatarioNome: nomeAluno,
+                        remetenteNome: autorDaTarefa,
+                        mensagem: `agendou um novo exercício: "${tituloTarefa}"`,
+                        origem: 'tarefa', // 🚀 Gatilho Mágico: Esta palavra ativa o cartão azul e a animação do sininho!
+                        origemId: novoEvento.id, 
+                        destinoNome: destinoNomeTarefa,
+                        lida: false,
+                        data: new Date().toISOString()
+                    };
+                }).filter(n => n.destinatarioNome);
+
+                // Guarda no cofre e dá o Grito de Tempo Real para o ecrã dos alunos!
+                if (notificacoesArray.length > 0) {
+                    await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                    
+                    if (global.workspaceStream) {
+                        global.workspaceStream.emit('evento_realtime', { 
+                            type: 'NOVA_NOTIFICACAO', destinatarios: nomesDestinatarios, escolaId: escola 
+                        });
+                    }
+                }
+            }
+        } catch (erroNotificacao) {
+            console.error("Aviso: Falha ao gerar notificações da tarefa.", erroNotificacao);
+        }
+        // ====================================================================
+
+        res.status(201).json({ success: true, evento: novoEvento });
+    } catch (error) {
+        console.error("Erro ao criar evento/tarefa:", error);
+        res.status(500).json({ error: 'Erro ao registar a atividade no servidor.' });
+    }
+});
+
 router.put('/eventos/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
