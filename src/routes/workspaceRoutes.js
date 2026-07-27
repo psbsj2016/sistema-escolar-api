@@ -1110,14 +1110,13 @@ router.get('/monitoramento/status', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         
-        // 1. Busca todos os alunos e todos os utilizadores (contas de acesso)
         const alunos = await db.collection('alunos').find({}).toArray();
         const usuarios = await db.collection('usuarios').find({}).toArray();
         
         const agora = new Date();
-        const CINCO_MINUTOS = 5 * 60 * 1000; // Limite de inatividade para considerar "Online"
+        // 🚀 Janela reduzida para 35 segundos (perfeito para o ping de 30s)
+        const JANELA_ONLINE = 35 * 1000; 
 
-        // 2. Cruza os dados para montar o relatório do radar
         const relatorio = alunos.map(aluno => {
             const contaUser = usuarios.find(u => u.alunoRefId === aluno.id || (u.tipo === 'Aluno' && u.nome === aluno.nome));
             
@@ -1126,7 +1125,7 @@ router.get('/monitoramento/status', verificarToken, async (req, res) => {
 
             if (ultimoAcessoStr) {
                 const tempoUltimoAcesso = new Date(ultimoAcessoStr).getTime();
-                if ((agora.getTime() - tempoUltimoAcesso) <= CINCO_MINUTOS) {
+                if ((agora.getTime() - tempoUltimoAcesso) <= JANELA_ONLINE) {
                     isOnline = true;
                 }
             }
@@ -1147,7 +1146,7 @@ router.get('/monitoramento/status', verificarToken, async (req, res) => {
     }
 });
 
-// 🚀 ROTA AUXILIAR DE "HEARTBEAT"
+// 🚀 ROTA DE "HEARTBEAT" (Recebe o sinal periódico de que o aluno está ativo)
 router.post('/monitoramento/ping', verificarToken, async (req, res) => {
     try {
         const { usuarioId } = req.body;
@@ -1162,6 +1161,27 @@ router.post('/monitoramento/ping', verificarToken, async (req, res) => {
         res.status(200).json({ success: true });
     } catch (error) {
         res.status(500).json({ error: 'Erro no ping.' });
+    }
+});
+
+// 🚀 ROTA DE SAÍDA INSTANTÂNEA (Força o aluno a ficar offline imediatamente)
+router.post('/monitoramento/offline', verificarToken, async (req, res) => {
+    try {
+        const { usuarioId } = req.body;
+        if (!usuarioId) return res.status(200).json({ success: true });
+
+        const db = await connectDB();
+        // Atualiza o último acesso e envelhece o timestamp para além da janela de 35 segundos
+        const tempoExpirado = new Date(Date.now() - 60000).toISOString();
+        
+        await db.collection('usuarios').updateOne(
+            { id: usuarioId },
+            { $set: { ultimoAcesso: tempoExpirado } }
+        );
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: true });
     }
 });
 
