@@ -47,10 +47,11 @@ router.post('/', async (req, res) => {
                         escolaId: escola,
                         destinatarioNome: nomeAluno,
                         remetenteNome: autorNome,
-                        mensagem: `agendou uma aula online: "${titulo}"`,
+                        mensagem: `agendou uma atividade: "${titulo}"`,
                         origem: origemNoti,
                         origemId: novaAvaliacao.id,
                         destinoNome: novaAvaliacao.destinoNome || 'Geral',
+                        dataEvento: novaAvaliacao.tempo, // 🚀 A MAGIA AQUI: A data e hora exatas da aula viajam na mochila!
                         lida: false,
                         data: new Date().toISOString()
                     };
