@@ -1106,7 +1106,7 @@ router.delete('/materiais/:id', verificarToken, async (req, res) => {
 // ============================================================================
 // 📡 ROTA DE MONITORAMENTO EM TEMPO REAL DO WORKSPACE
 // ============================================================================
-router.get('/workspace/monitoramento/status', verificarToken, async (req, res) => {
+router.get('/monitoramento/status', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         
@@ -1119,7 +1119,6 @@ router.get('/workspace/monitoramento/status', verificarToken, async (req, res) =
 
         // 2. Cruza os dados para montar o relatório do radar
         const relatorio = alunos.map(aluno => {
-            // Procura a conta de acesso associada a este aluno
             const contaUser = usuarios.find(u => u.alunoRefId === aluno.id || (u.tipo === 'Aluno' && u.nome === aluno.nome));
             
             const ultimoAcessoStr = contaUser ? contaUser.ultimoAcesso : null;
@@ -1127,7 +1126,6 @@ router.get('/workspace/monitoramento/status', verificarToken, async (req, res) =
 
             if (ultimoAcessoStr) {
                 const tempoUltimoAcesso = new Date(ultimoAcessoStr).getTime();
-                // Se a última interação ocorreu há menos de 5 minutos, está online!
                 if ((agora.getTime() - tempoUltimoAcesso) <= CINCO_MINUTOS) {
                     isOnline = true;
                 }
@@ -1149,8 +1147,8 @@ router.get('/workspace/monitoramento/status', verificarToken, async (req, res) =
     }
 });
 
-// 🚀 ROTA AUXILIAR DE "HEARTBEAT" (O aluno bate a porta a cada 10s para avisar que continua a estudar)
-router.post('/workspace/monitoramento/ping', verificarToken, async (req, res) => {
+// 🚀 ROTA AUXILIAR DE "HEARTBEAT"
+router.post('/monitoramento/ping', verificarToken, async (req, res) => {
     try {
         const { usuarioId } = req.body;
         if (!usuarioId) return res.status(400).json({ error: 'ID em falta.' });
