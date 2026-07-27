@@ -23,6 +23,7 @@ const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary
 const EventEmitter = require('events');
 const workspaceStream = new EventEmitter();
 workspaceStream.setMaxListeners(0); // Permite infinitas conexões simultâneas
+global.workspaceStream = workspaceStream; // 🚀 MAGIA: Torna o motor acessível a todos os ficheiros!
 
 // ☁️ Configuração Cloudinary
 cloudinary.config({

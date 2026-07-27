@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const connectDB = require('../config/db'); // 🚀 LIGAÇÃO À BD REAL
 
-// 1. CRIAR NOVA AVALIAÇÃO
+// 1. CRIAR NOVA AVALIAÇÃO (E AVISAR ALUNOS)
 router.post('/', async (req, res) => {
     try {
         const db = await connectDB();
@@ -12,10 +12,69 @@ router.post('/', async (req, res) => {
             id: 'av_' + Date.now(), titulo, tipo, tempo: tempo || null, questoes: questoes || [], instrucoes: instrucoes || '', escolaId, autorNome, destino: destino || 'global', destinoNome: destinoNome || 'Todas as Turmas', tentativas: tentativas || 1, dataCriacao: new Date().toISOString(), ultimaAtualizacao: new Date().toISOString(), status: 'ativa'
         };
         await db.collection('workspace_avaliacoes').insertOne(novaAvaliacao);
+
+        // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES (PROFESSOR -> ALUNOS)
+        // ====================================================================
+        try {
+            const escola = novaAvaliacao.escolaId || 'DEFAULT';
+            
+            // Descobre o Roteiro exato para a cápsula (para o 'lerEIr')
+            let origemNoti = 'tarefa';
+            if (tipo === 'escrita') origemNoti = 'avaliacao_escrita';
+            if (tipo === 'oral') origemNoti = 'avaliacao_oral';
+            if (tipo === 'online' || tipo === 'sessao_ao_vivo' || tipo === 'sessao') origemNoti = 'online';
+
+            const alunos = await db.collection('alunos').find({ escolaId: escola }).toArray();
+            
+            let alunosAlvo = [];
+            if (novaAvaliacao.destino === 'global') {
+                alunosAlvo = alunos;
+            } else {
+                alunosAlvo = alunos.filter(a => {
+                    const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                    return minhasTurmas.some(t => String(t).toLowerCase() === String(novaAvaliacao.destino).toLowerCase() || String(t).toLowerCase() === String(novaAvaliacao.destinoNome).toLowerCase());
+                });
+            }
+
+            if (alunosAlvo.length > 0) {
+                const nomesDestinatarios = [];
+                const notificacoesArray = alunosAlvo.map(aluno => {
+                    const nomeAluno = aluno.nome || aluno.login;
+                    if (nomeAluno) nomesDestinatarios.push(nomeAluno);
+                    return {
+                        id: 'notif_' + Date.now() + Math.random().toString(36).substring(7),
+                        escolaId: escola,
+                        destinatarioNome: nomeAluno,
+                        remetenteNome: autorNome,
+                        mensagem: `agendou uma nova atividade: "${titulo}"`,
+                        origem: origemNoti,
+                        origemId: novaAvaliacao.id,
+                        destinoNome: novaAvaliacao.destinoNome || 'Geral',
+                        lida: false,
+                        data: new Date().toISOString()
+                    };
+                }).filter(n => n.destinatarioNome);
+
+                if (notificacoesArray.length > 0) {
+                    await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                    
+                    // 🚀 O GRITO GLOBAL DE TEMPO REAL
+                    if (global.workspaceStream) {
+                        global.workspaceStream.emit('evento_realtime', { 
+                            type: 'NOVA_NOTIFICACAO', destinatarios: nomesDestinatarios, escolaId: escola 
+                        });
+                    }
+                }
+            }
+        } catch (erroNotificacao) {
+            console.error("Aviso: Avaliação salva, mas falha ao gerar notificações.", erroNotificacao);
+        }
+        // ====================================================================
+
         res.json({ success: true, avaliacao: novaAvaliacao });
     } catch (error) { res.status(500).json({ success: false }); }
 });
-
 // 2. LISTAR AVALIAÇÕES DISPONÍVEIS
 router.get('/', async (req, res) => {
     try {
@@ -134,7 +193,7 @@ router.post('/:id/iniciar', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 7. ALUNO ENTREGA AVALIAÇÃO
+// 7. ALUNO ENTREGA AVALIAÇÃO (E AVISA O PROFESSOR)
 router.post('/:id/entregar', async (req, res) => {
     try {
         const db = await connectDB();
@@ -158,6 +217,44 @@ router.post('/:id/entregar', async (req, res) => {
                 dataEntrega: new Date().toISOString()
             }}
         );
+
+        // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES (ALUNO -> PROFESSOR CRIADOR DA PROVA)
+        // ====================================================================
+        try {
+            const provaOriginal = await db.collection('workspace_avaliacoes').findOne({ id: id });
+            
+            if (provaOriginal && provaOriginal.autorNome) {
+                const escola = provaOriginal.escolaId || 'DEFAULT';
+                const autorDaProva = provaOriginal.autorNome; 
+                const nomeDoAluno = req.body.alunoNome || 'Um aluno';
+
+                const novaNotificacao = {
+                    id: 'notif_' + Date.now() + Math.random().toString(36).substring(7),
+                    escolaId: escola,
+                    destinatarioNome: autorDaProva,
+                    remetenteNome: nomeDoAluno,
+                    mensagem: `entregou a atividade: "${provaOriginal.titulo}".`,
+                    origem: 'tarefa', 
+                    origemId: provaOriginal.id,
+                    destinoNome: 'Avaliação',
+                    lida: false,
+                    data: new Date().toISOString()
+                };
+
+                await db.collection('workspace_notificacoes').insertOne(novaNotificacao);
+
+                // 🚀 Grito em Tempo Real apenas para o Professor!
+                if (global.workspaceStream) {
+                    global.workspaceStream.emit('evento_realtime', { 
+                        type: 'NOVA_NOTIFICACAO', destinatarios: [autorDaProva], escolaId: escola 
+                    });
+                }
+            }
+        } catch (erroNoti) {
+            console.error("Falha ao notificar professor sobre a entrega da prova.", erroNoti);
+        }
+        // ====================================================================
 
         res.json({ success: true, entrega });
     } catch (error) { res.status(500).json({ success: false, error: "Erro na entrega." }); }
