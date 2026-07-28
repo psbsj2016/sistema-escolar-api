@@ -153,7 +153,7 @@ router.put('/:id', async (req, res) => {
                 origemNoti = tipo === 'escrita' ? 'avaliacao_escrita' : 'avaliacao_oral';
                 textoAviso = `alterou os dados da avaliação ${tipo}: "${tituloNovo}". Fique atento aos prazos!`;
             } else {
-                origemNoti = 'online';
+                origemNoti = 'online_edit';
                 textoAviso = `alterou a data/hora ou link da aula online: "${tituloNovo}". Fique atento!`;
             }
 
