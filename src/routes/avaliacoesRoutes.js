@@ -205,7 +205,17 @@ router.put('/:id', async (req, res) => {
             // 🚀 MAGIA 3: ATUALIZAR O CALENDÁRIO DO BAÚ DOS ALUNOS SILENCIOSAMENTE
             // ====================================================================
             if (tipo === 'online') {
-                const dataMs = provaAtualizada.dataAgendada ? new Date(provaAtualizada.dataAgendada).getTime() : new Date(provaAtualizada.tempo).getTime();
+                let dataMs;
+                const stringData = provaAtualizada.dataAgendada || provaAtualizada.tempo;
+                
+                // 🚀 O SEGREDO DO FUSO HORÁRIO (BACKEND): O servidor na nuvem usa UTC (Londres).
+                // Ao forçar ':00-03:00' na string, obrigamos o servidor a gerar o Timestamp exato do Brasil!
+                if (stringData && stringData.includes('T')) {
+                    const dataFixada = stringData.length === 16 ? stringData + ':00-03:00' : stringData;
+                    dataMs = new Date(dataFixada).getTime();
+                } else {
+                    dataMs = new Date(stringData).getTime();
+                }
                 
                 // Busca os alarmes na base de dados que tinham o título antigo
                 const mensagemAntigaRegex = new RegExp(`Aula Online: ${tituloAntigo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
