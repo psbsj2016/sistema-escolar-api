@@ -1027,7 +1027,7 @@ router.post('/materiais', verificarToken, async (req, res) => {
                         escolaId: escolaId,
                         destinatarioNome: nomeAluno,
                         remetenteNome: autor,
-                        mensagem: `partilhou um novo material: "${tituloMat}"`,
+                        mensagem: `compartilhou um novo material: "${tituloMat}"`,
                         origem: 'material', // O nosso Roteador no alertas.js procura por esta palavra exata!
                         origemId: novoMaterial.id,
                         destinoNome: novoMaterial.destinoNome || 'Geral',

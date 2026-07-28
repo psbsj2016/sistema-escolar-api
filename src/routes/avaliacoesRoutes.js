@@ -58,16 +58,24 @@ router.post('/', async (req, res) => {
                 const notificacoesArray = alunosAlvo.map(aluno => {
                     const nomeAluno = aluno.nome || aluno.login;
                     if (nomeAluno) nomesDestinatarios.push(nomeAluno);
+                    // 🚀 MAGIA DA DISTINÇÃO: Texto dinâmico conforme o tipo!
+                    let textoAviso = '';
+                    if (tipo === 'escrita' || tipo === 'oral') {
+                        textoAviso = `publicou uma nova avaliação ${tipo === 'escrita' ? 'escrita' : 'oral'}: "${titulo}"`;
+                    } else {
+                        textoAviso = `agendou o link da aula online: "${titulo}"`;
+                    }
+
                     return {
                         id: 'notif_' + Date.now() + Math.random().toString(36).substring(7),
                         escolaId: escola,
                         destinatarioNome: nomeAluno,
                         remetenteNome: autorNome,
-                        mensagem: `agendou uma atividade: "${titulo}"`,
+                        mensagem: textoAviso, // 🚀 Texto aplicado aqui!
                         origem: origemNoti,
                         origemId: novaAvaliacao.id,
                         destinoNome: novaAvaliacao.destinoNome || 'Geral',
-                        dataEvento: novaAvaliacao.dataAgendada || novaAvaliacao.tempo,                         
+                        dataEvento: novaAvaliacao.dataAgendada || novaAvaliacao.tempo,
                         lida: false,
                         data: new Date().toISOString()
                     };
@@ -103,17 +111,21 @@ router.get('/', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 3. EDITAR AVALIAÇÃO EXISTENTE
+// 3. EDITAR AVALIAÇÃO EXISTENTE (COM AVISOS E ATUALIZAÇÃO NO BAÚ)
 router.put('/:id', async (req, res) => {
     try {
         const db = await connectDB();
         const { id } = req.params;
         
+        // Captura a prova antiga para sabermos o que mudou (importante para o Baú)
+        const provaOriginal = await db.collection('workspace_avaliacoes').findOne({ id: id });
+        if (!provaOriginal) return res.status(404).json({ success: false, error: "Prova não encontrada." });
+
         const temEntregas = await db.collection('workspace_entregas_provas').findOne({ avaliacaoId: id });
         if (temEntregas) return res.json({ success: false, error: "Esta avaliação possui entregas e não pode ser editada." });
         
         const updateData = { ...req.body, ultimaAtualizacao: new Date().toISOString() };
-        delete updateData._id; // Impede que o Express tente sobrescrever o ID interno do Mongo
+        delete updateData._id; 
         delete updateData.id;
 
         const result = await db.collection('workspace_avaliacoes').findOneAndUpdate(
@@ -122,8 +134,104 @@ router.put('/:id', async (req, res) => {
             { returnDocument: 'after' }
         );
         
-        if (!result) return res.status(404).json({ success: false, error: "Prova não encontrada." });
-        res.json({ success: true, avaliacao: result });
+        const provaAtualizada = result.value || result;
+
+        // ====================================================================
+        // 🚀 MAGIA 1 E 2: NOTIFICAR ALUNOS SOBRE A EDIÇÃO COM DISTINÇÃO CLARA
+        // ====================================================================
+        try {
+            const escola = provaAtualizada.escolaId || 'DEFAULT';
+            const tipo = provaAtualizada.tipo;
+            const tituloAntigo = provaOriginal.titulo;
+            const tituloNovo = provaAtualizada.titulo;
+
+            let origemNoti = 'tarefa';
+            let textoAviso = '';
+
+            // Distinção Clara do Texto de Edição
+            if (tipo === 'escrita' || tipo === 'oral') {
+                origemNoti = tipo === 'escrita' ? 'avaliacao_escrita' : 'avaliacao_oral';
+                textoAviso = `alterou os dados da avaliação ${tipo}: "${tituloNovo}". Fique atento aos prazos!`;
+            } else {
+                origemNoti = 'online';
+                textoAviso = `alterou a data/hora ou link da aula online: "${tituloNovo}". Fique atento!`;
+            }
+
+            const alunos = await db.collection('alunos').find({ escolaId: escola }).toArray();
+
+            let alunosAlvo = [];
+            if (provaAtualizada.destino === 'global') {
+                alunosAlvo = alunos;
+            } else {
+                alunosAlvo = alunos.filter(a => {
+                    const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                    return minhasTurmas.some(t => String(t).toLowerCase() === String(provaAtualizada.destino).toLowerCase() || String(t).toLowerCase() === String(provaAtualizada.destinoNome).toLowerCase());
+                });
+            }
+
+            if (alunosAlvo.length > 0) {
+                const nomesDestinatarios = [];
+                const notificacoesArray = alunosAlvo.map(aluno => {
+                    const nomeAluno = aluno.nome || aluno.login;
+                    if (nomeAluno) nomesDestinatarios.push(nomeAluno);
+                    return {
+                        id: 'notif_edit_' + Date.now() + Math.random().toString(36).substring(7),
+                        escolaId: escola,
+                        destinatarioNome: nomeAluno,
+                        remetenteNome: provaAtualizada.autorNome || 'Professor',
+                        mensagem: textoAviso,
+                        origem: origemNoti,
+                        origemId: provaAtualizada.id,
+                        destinoNome: provaAtualizada.destinoNome || 'Geral',
+                        dataEvento: provaAtualizada.dataAgendada || provaAtualizada.tempo,
+                        lida: false,
+                        data: new Date().toISOString()
+                    };
+                }).filter(n => n.destinatarioNome);
+
+                if (notificacoesArray.length > 0) {
+                    await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+
+                    // Toca o sininho de todos os alunos instantaneamente!
+                    if (global.workspaceStream) {
+                        global.workspaceStream.emit('evento_realtime', {
+                            type: 'NOVA_NOTIFICACAO', destinatarios: nomesDestinatarios, escolaId: escola
+                        });
+                    }
+                }
+            }
+
+            // ====================================================================
+            // 🚀 MAGIA 3: ATUALIZAR O CALENDÁRIO DO BAÚ DOS ALUNOS SILENCIOSAMENTE
+            // ====================================================================
+            if (tipo === 'online') {
+                const dataMs = provaAtualizada.dataAgendada ? new Date(provaAtualizada.dataAgendada).getTime() : new Date(provaAtualizada.tempo).getTime();
+                
+                // Busca os alarmes na base de dados que tinham o título antigo
+                const mensagemAntigaRegex = new RegExp(`Aula Online: ${tituloAntigo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+                
+                await db.collection('workspace_bau_alarmes').updateMany(
+                    { mensagem: { $regex: mensagemAntigaRegex } },
+                    { $set: { 
+                        mensagem: `Aula Online: ${tituloNovo} (com ${provaAtualizada.autorNome || 'Professor'})`,
+                        tempoDisparo: dataMs 
+                      } 
+                    }
+                );
+                
+                // Grito SSE para forçar o Baú dos alunos online a recarregar o calendário
+                if (global.workspaceStream) {
+                    global.workspaceStream.emit('evento_realtime', {
+                        type: 'BAU_UPDATE', escolaId: escola
+                    });
+                }
+            }
+
+        } catch (errNoti) {
+            console.error("Aviso: Falha ao notificar/atualizar edição", errNoti);
+        }
+
+        res.json({ success: true, avaliacao: provaAtualizada });
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
