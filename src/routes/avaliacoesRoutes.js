@@ -7,9 +7,25 @@ const connectDB = require('../config/db'); // 🚀 LIGAÇÃO À BD REAL
 router.post('/', async (req, res) => {
     try {
         const db = await connectDB();
-        const { titulo, tipo, tempo, questoes, instrucoes, escolaId, autorNome, destino, destinoNome, tentativas } = req.body;
+        // 🚀 CORREÇÃO 1: Capturamos a variável 'dataAgendada' que vem do formulário
+        const { titulo, tipo, tempo, dataAgendada, questoes, instrucoes, escolaId, autorNome, destino, destinoNome, tentativas } = req.body;
+        
         const novaAvaliacao = {
-            id: 'av_' + Date.now(), titulo, tipo, tempo: tempo || null, questoes: questoes || [], instrucoes: instrucoes || '', escolaId, autorNome, destino: destino || 'global', destinoNome: destinoNome || 'Todas as Turmas', tentativas: tentativas || 1, dataCriacao: new Date().toISOString(), ultimaAtualizacao: new Date().toISOString(), status: 'ativa'
+            id: 'av_' + Date.now(), 
+            titulo, 
+            tipo, 
+            tempo: tempo || null, 
+            dataAgendada: dataAgendada || null, // 🚀 Guardamos a data da aula online
+            questoes: questoes || [], 
+            instrucoes: instrucoes || '', 
+            escolaId, 
+            autorNome, 
+            destino: destino || 'global', 
+            destinoNome: destinoNome || 'Todas as Turmas', 
+            tentativas: tentativas || 1, 
+            dataCriacao: new Date().toISOString(), 
+            ultimaAtualizacao: new Date().toISOString(), 
+            status: 'ativa'
         };
         await db.collection('workspace_avaliacoes').insertOne(novaAvaliacao);
 
@@ -51,7 +67,7 @@ router.post('/', async (req, res) => {
                         origem: origemNoti,
                         origemId: novaAvaliacao.id,
                         destinoNome: novaAvaliacao.destinoNome || 'Geral',
-                        dataEvento: novaAvaliacao.tempo, // 🚀 A MAGIA AQUI: A data e hora exatas da aula viajam na mochila!
+                        dataEvento: novaAvaliacao.dataAgendada || novaAvaliacao.tempo,                         
                         lida: false,
                         data: new Date().toISOString()
                     };
