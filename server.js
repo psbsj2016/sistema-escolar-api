@@ -20,6 +20,8 @@ const usuariosRoutes = require('./src/routes/usuariosRoutes');
 const dataRoutes = require('./src/routes/dataRoutes');
 const workspaceRoutes = require('./src/routes/workspaceRoutes');
 const avaliacoesRoutes = require('./src/routes/avaliacoesRoutes');
+// 🚀 1. REGISTO DA NOVA ROTA DA BIBLIOTECA
+const bibliotecaRoutes = require('./src/routes/bibliotecaRoutes');
 const pushRoutes = require('./src/routes/pushRoutes');
 const auditoriaRoutes = require('./src/routes/auditoriaRoutes');
 const iniciarAutomacao = require('./src/services/automacao');
@@ -99,6 +101,7 @@ app.use('/auditoria', auditoriaRoutes);
 
 // 🚀 A rota de avaliações TEM de vir antes da rota geral do workspace!
 app.use('/workspace/avaliacoes', avaliacoesRoutes);
+app.use('/workspace/biblioteca', bibliotecaRoutes);
 app.use('/workspace', workspaceRoutes); 
 
 // 🔥 O ESPELHO MÁGICO PARA PRODUÇÃO (Resolve os erros 403 da App e Notificações)
@@ -106,6 +109,7 @@ const apiRouter = express.Router();
 
 // 🚀 Injeta a rota de avaliações no espelho antes do workspace geral
 apiRouter.use('/workspace/avaliacoes', avaliacoesRoutes);
+apiRouter.use('/workspace/biblioteca', bibliotecaRoutes);
 apiRouter.use('/workspace', workspaceRoutes);
 
 apiRouter.use('/escola', escolaRoutes);
