@@ -457,4 +457,50 @@ router.delete('/:id/entregas', async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🎫 ADICIONAR CONVIDADO VIP A UMA SESSÃO (COM NOTIFICAÇÃO)
+// ============================================================================
+router.post('/:id/convidados', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { alunoId, alunoNome } = req.body;
+        
+        const prova = await db.collection('workspace_avaliacoes').findOne({ id: req.params.id });
+        if (!prova) return res.status(404).json({ error: 'Sessão não encontrada.' });
+
+        // 1. Adiciona o aluno à lista de convidados autorizados da sessão
+        await db.collection('workspace_avaliacoes').updateOne(
+            { id: req.params.id },
+            { $addToSet: { convidados: { id: alunoId, nome: alunoNome } } }
+        );
+
+        // 2. Dispara a notificação para o telemóvel/computador do aluno convidado
+        const escolaId = prova.escolaId || 'DEFAULT';
+        const novaNoti = {
+            id: 'notif_conv_' + Date.now(),
+            escolaId: escolaId,
+            destinatarioNome: alunoNome,
+            remetenteNome: prova.autorNome || 'Professor',
+            mensagem: `convidou você para a sessão ao vivo: "${prova.titulo}".`,
+            origem: 'online',
+            origemId: prova.id,
+            destinoNome: 'Sessão Privada',
+            dataEvento: prova.dataAgendada,
+            lida: false,
+            data: new Date().toISOString()
+        };
+        await db.collection('workspace_notificacoes').insertOne(novaNoti);
+
+        // 3. Grito em Tempo Real (Atualiza o Sininho e o ecrã do aluno instantaneamente)
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: [alunoNome], escolaId: escolaId });
+            global.workspaceStream.emit('evento_realtime', { type: 'SALA_UPDATE', turmaId: req.params.id, escolaId: escolaId });
+        }
+
+        res.json({ success: true });
+    } catch(e) { 
+        res.status(500).json({ error: 'Erro ao adicionar convidado.' }); 
+    }
+});
+
 module.exports = router;
