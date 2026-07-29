@@ -96,6 +96,31 @@ router.get('/stream', (req, res) => {
 });
 
 // ============================================================================
+// 🚀 PLANO B (VIA VERDE): ROTA PARA SOLICITAR BILHETE VIP DE UPLOAD DIRETO
+// ============================================================================
+router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
+    try {
+        const { nomeFicheiro, tipoFicheiro } = req.body;
+        
+        if (!nomeFicheiro || !tipoFicheiro) {
+            return res.status(400).json({ error: 'Faltam dados do ficheiro para gerar a autorização.' });
+        }
+
+        // Importamos a nossa nova máquina de bilhetes
+        const { gerarLinkUploadDireto } = require('../config/cloudflareR2');
+        
+        // Fabricamos o link VIP e o link final de leitura
+        const dadosAutorizacao = await gerarLinkUploadDireto(nomeFicheiro, tipoFicheiro);
+
+        // Devolvemos ao navegador do aluno!
+        res.status(200).json({ success: true, ...dadosAutorizacao });
+    } catch (erro) {
+        console.error('🚨 Erro na Via Verde:', erro);
+        res.status(500).json({ error: 'Erro ao comunicar com a nuvem de armazenamento.' });
+    }
+});
+
+// ============================================================================
 // 1. UPLOAD BLINDADO COM SINALEIRO INTELIGENTE (CLOUDINARY ↔ CLOUDFLARE R2)
 // ============================================================================
 router.post('/upload', verificarToken, (req, res) => {

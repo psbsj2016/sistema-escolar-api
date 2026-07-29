@@ -1,9 +1,9 @@
 // src/config/cloudflareR2.js
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner"); // 🚀 NOVA FERRAMENTA: A Máquina de Bilhetes
 const crypto = require("crypto");
 const path = require("path");
 
-// 1. Ligamos a ignição do nosso "Camião de Entregas" usando as chaves do .env
 const r2Client = new S3Client({
     region: "auto",
     endpoint: process.env.R2_ENDPOINT,
@@ -13,15 +13,13 @@ const r2Client = new S3Client({
     },
 });
 
-// 2. A função que faz a magia de enviar o ficheiro
+// A Função Antiga (Mantemos para retrocompatibilidade ou ficheiros pequenos)
 const enviarParaR2 = async (fileBuffer, nomeOriginal, mimetype) => {
     try {
-        // Criamos um nome único para o ficheiro não se misturar com outros (ex: pdfs/123456-trabalho.pdf)
         const hash = crypto.randomBytes(8).toString("hex");
         const extensao = path.extname(nomeOriginal);
         const nomeArquivo = `documentos/${Date.now()}-${hash}${extensao}`;
 
-        // Preparamos o "pacote" para envio
         const comando = new PutObjectCommand({
             Bucket: process.env.R2_BUCKET_NAME,
             Key: nomeArquivo,
@@ -29,18 +27,48 @@ const enviarParaR2 = async (fileBuffer, nomeOriginal, mimetype) => {
             ContentType: mimetype,
         });
 
-        // Enviamos o pacote para a nuvem!
         await r2Client.send(comando);
-
-        // Devolvemos o Link Público pronto para os alunos clicarem e lerem!
-        // Retiramos a barra final do URL Público caso ela exista, para evitar erros
         const baseUrl = process.env.R2_PUBLIC_URL.replace(/\/$/, "");
         return `${baseUrl}/${nomeArquivo}`;
-
     } catch (error) {
-        console.error("❌ Erro ao enviar ficheiro para o Cloudflare R2:", error);
         throw new Error("Falha no upload para o R2.");
     }
 };
 
-module.exports = { enviarParaR2 };
+// ============================================================================
+// 🚀 NOVA MAGIA DO PLANO B: GERAR BILHETE VIP (PRESIGNED URL)
+// ============================================================================
+const gerarLinkUploadDireto = async (nomeOriginal, mimetype) => {
+    try {
+        // 1. Criamos um nome seguro e único para o ficheiro gigante
+        const hash = crypto.randomBytes(8).toString("hex");
+        const extensao = path.extname(nomeOriginal);
+        const nomeArquivo = `documentos/${Date.now()}-${hash}${extensao}`;
+
+        // 2. Preparamos as regras do bilhete (onde vai ser guardado e qual o formato)
+        const comando = new PutObjectCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: nomeArquivo,
+            ContentType: mimetype,
+        });
+
+        // 3. A Nuvem assina o bilhete! Definimos que expira em 15 minutos (900 segundos).
+        // Isto dá tempo suficiente para a internet do aluno terminar um upload grande.
+        const urlUpload = await getSignedUrl(r2Client, comando, { expiresIn: 900 });
+        
+        // 4. Preparamos o link final público (o que ficará guardado no banco de dados para leitura)
+        const baseUrl = process.env.R2_PUBLIC_URL.replace(/\/$/, "");
+        const urlPublica = `${baseUrl}/${nomeArquivo}`;
+
+        return {
+            urlUpload: urlUpload,   // Link secreto usado APENAS para enviar o ficheiro
+            urlPublica: urlPublica, // Link final que todos vão usar para ler o ficheiro
+            nomeFinal: nomeOriginal
+        };
+    } catch (error) {
+        console.error("❌ Erro ao gerar Presigned URL:", error);
+        throw new Error("Falha na geração do Bilhete VIP para o R2.");
+    }
+};
+
+module.exports = { enviarParaR2, gerarLinkUploadDireto };
