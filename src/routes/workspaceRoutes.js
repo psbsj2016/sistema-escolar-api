@@ -19,6 +19,9 @@ const { v2: cloudinary } = require('cloudinary');
 const multerCloudinary = require('multer-storage-cloudinary');
 const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary;
 
+// 🚀 NOVA LINHA: Importamos o Sinaleiro do Cloudflare R2
+const { enviarParaR2 } = require('../config/cloudflareR2');
+
 // ⚡ MOTOR DE TEMPO REAL (Túnel SSE)
 const EventEmitter = require('events');
 const workspaceStream = new EventEmitter();
@@ -93,14 +96,14 @@ router.get('/stream', (req, res) => {
 });
 
 // ============================================================================
-// 1. UPLOAD BLINDADO COM ENVIO MANUAL PARA O CLOUDINARY
+// 1. UPLOAD BLINDADO COM SINALEIRO INTELIGENTE (CLOUDINARY ↔ CLOUDFLARE R2)
 // ============================================================================
 router.post('/upload', verificarToken, (req, res) => {
     try {
         const uploadProcess = upload.array('anexos', 10);
         
         uploadProcess(req, res, async (err) => {
-            if (res.headersSent) return; // Se o timeout (90s) já respondeu, paramos aqui.
+            if (res.headersSent) return; 
 
             if (err) {
                 if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
@@ -118,40 +121,53 @@ router.post('/upload', verificarToken, (req, res) => {
             }
 
             try {
-                // 🚀 O NOVO MOTOR: Envia ficheiros da memória para o Cloudinary de forma segura
+                // 🚀 O SINALEIRO INTELIGENTE: Decide o destino de cada ficheiro
                 const promessasUpload = req.files.map(file => {
-                    return new Promise((resolve, reject) => {
-                        // Limpa o nome do ficheiro (remove acentos e espaços)
-                        let nomeOriginal = file.originalname || `ficheiro_${Date.now()}.jpg`;
-                        let nomeSeguro = String(nomeOriginal).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                        
-                        const ehDocumento = nomeSeguro.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
-                        
-                        // Configura o destino
-                        let recursoTipo = ehDocumento ? 'raw' : 'auto';
-                        let publicId = ehDocumento ? `${Date.now()}_${nomeSeguro}` : `${Date.now()}_${nomeSeguro.split('.')[0]}`;
+                    return new Promise(async (resolve, reject) => { // Adicionado 'async' aqui
+                        try {
+                            // Limpa o nome do ficheiro (remove acentos e espaços)
+                            let nomeOriginal = file.originalname || `ficheiro_${Date.now()}.jpg`;
+                            let nomeSeguro = String(nomeOriginal).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                            
+                            // O Sinaleiro verifica a identidade do ficheiro
+                            const ehDocumento = nomeSeguro.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
+                            
+                            if (ehDocumento) {
+                                // 🟢 ROTA 1: CLOUDFLARE R2 (Alta velocidade para Documentos)
+                                console.log(`🚀 Enviando DOCUMENTO para Cloudflare R2: ${nomeSeguro}`);
+                                const urlR2 = await enviarParaR2(file.buffer, nomeOriginal, file.mimetype);
+                                resolve({ url: urlR2, nome: file.originalname, tipo: file.mimetype });
+                            } else {
+                                // 🔵 ROTA 2: CLOUDINARY (Fábrica de Otimização de Multimédia)
+                                console.log(`📸 Enviando MULTIMÉDIA para Cloudinary: ${nomeSeguro}`);
+                                let recursoTipo = 'auto'; // O Cloudinary descobre sozinho se é imagem ou vídeo
+                                let publicId = `${Date.now()}_${nomeSeguro.split('.')[0]}`;
 
-                        // Abre o canal de envio com o Cloudinary
-                        const streamEnvio = cloudinary.uploader.upload_stream(
-                            { folder: 'workspace_escola', resource_type: recursoTipo, public_id: publicId },
-                            (error, result) => {
-                                if (error) reject(error);
-                                else resolve({ url: result.secure_url, nome: file.originalname, tipo: file.mimetype });
+                                // Abre o canal de envio com o Cloudinary
+                                const streamEnvio = cloudinary.uploader.upload_stream(
+                                    { folder: 'workspace_escola', resource_type: recursoTipo, public_id: publicId },
+                                    (error, result) => {
+                                        if (error) reject(error);
+                                        else resolve({ url: result.secure_url, nome: file.originalname, tipo: file.mimetype });
+                                    }
+                                );
+                                
+                                // Despeja o ficheiro da memória para o Cloudinary
+                                streamEnvio.end(file.buffer);
                             }
-                        );
-                        
-                        // Despeja o ficheiro da memória para o Cloudinary de uma só vez!
-                        streamEnvio.end(file.buffer);
+                        } catch (errUpload) {
+                            reject(errUpload);
+                        }
                     });
                 });
 
-                // Espera que todos os ficheiros terminem o envio
+                // Espera que todos os ficheiros (da Cloudflare e do Cloudinary) terminem o envio
                 const urls = await Promise.all(promessasUpload);
                 
                 if (!res.headersSent) res.status(200).json({ success: true, anexos: urls });
                 
             } catch (processError) {
-                console.error('🚨 Erro no envio direto para o Cloudinary:', processError);
+                console.error('🚨 Erro no envio para as nuvens:', processError);
                 if (!res.headersSent) res.status(500).json({ error: 'Erro ao transferir ficheiro para a nuvem.' });
             }
         });
