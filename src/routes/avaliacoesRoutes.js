@@ -460,7 +460,7 @@ router.delete('/:id/entregas', async (req, res) => {
 // ============================================================================
 // 🎫 ADICIONAR CONVIDADO VIP A UMA SESSÃO (COM NOTIFICAÇÃO)
 // ============================================================================
-router.post('/:id/convidados', verificarToken, async (req, res) => {
+router.post('/:id/convidados', async (req, res) => {
     try {
         const db = await connectDB();
         const { alunoId, alunoNome } = req.body;
