@@ -652,6 +652,41 @@ router.put('/perfil/avatar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
 
+// ============================================================================
+// ⚙️ ROTA DE ALTERAÇÃO DE NOME (PERFIL)
+// ============================================================================
+router.put('/perfil/nome', verificarToken, async (req, res) => {
+    try {
+        const { id, alunoRefId, novoNome } = req.body;
+        
+        if (!novoNome || novoNome.trim() === '') {
+            return res.status(400).json({ error: 'O nome não pode estar vazio.' });
+        }
+
+        const nomeLimpo = String(novoNome).trim();
+        const database = await connectDB();
+
+        // 1. Atualiza o registo de acesso principal (coleção 'usuarios')
+        await database.collection('usuarios').updateOne(
+            { id: id },
+            { $set: { nome: nomeLimpo } }
+        );
+
+        // 2. Se for um Aluno, atualiza também a ficha académica dele!
+        if (alunoRefId) {
+            await database.collection('alunos').updateOne(
+                { id: alunoRefId },
+                { $set: { nome: nomeLimpo } }
+            );
+        }
+
+        res.status(200).json({ success: true, nome: nomeLimpo });
+    } catch (error) {
+        console.error("🚨 Erro ao atualizar o nome do perfil:", error);
+        res.status(500).json({ error: 'Erro interno ao tentar atualizar o nome.' });
+    }
+});
+
 // 🚀 Guardar a Entrega de Exercício/Avaliação e AVISAR O PROFESSOR
 router.post('/entregas', verificarToken, async (req, res) => {
     try {
