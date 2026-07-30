@@ -653,7 +653,7 @@ router.put('/perfil/avatar', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// ⚙️ ROTA DE ALTERAÇÃO DE NOME (PERFIL)
+// ⚙️ ROTA DE ALTERAÇÃO DE NOME (PERFIL) COM EFEITO CASCATA
 // ============================================================================
 router.put('/perfil/nome', verificarToken, async (req, res) => {
     try {
@@ -666,23 +666,48 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
         const nomeLimpo = String(novoNome).trim();
         const database = await connectDB();
 
-        // 1. Atualiza o registo de acesso principal (coleção 'usuarios')
-        await database.collection('usuarios').updateOne(
-            { id: id },
-            { $set: { nome: nomeLimpo } }
-        );
+        // 1. Descobre quem é o utilizador e qual era o seu nome antigo
+        const user = await database.collection('usuarios').findOne({ id: id });
+        if (!user) return res.status(404).json({ error: 'Conta de acesso não encontrada.' });
+        
+        const nomeAntigo = user.nome || user.login;
 
-        // 2. Se for um Aluno, atualiza também a ficha académica dele!
+        // 2. Atualiza o registo principal
+        await database.collection('usuarios').updateOne({ id: id }, { $set: { nome: nomeLimpo } });
         if (alunoRefId) {
-            await database.collection('alunos').updateOne(
-                { id: alunoRefId },
-                { $set: { nome: nomeLimpo } }
-            );
+            await database.collection('alunos').updateOne({ id: alunoRefId }, { $set: { nome: nomeLimpo } });
         }
 
-        res.status(200).json({ success: true, nome: nomeLimpo });
+        // 3. 🚀 O EFEITO CASCATA: Reescreve a história nas publicações e no chat!
+        if (nomeAntigo && nomeAntigo !== nomeLimpo) {
+            
+            // Atualiza o nome em todas as publicações principais
+            await database.collection('workspace_posts').updateMany(
+                { autorNome: nomeAntigo },
+                { $set: { autorNome: nomeLimpo } }
+            );
+
+            // Atualiza o nome em todas as mensagens do Bate-papo
+            await database.collection('workspace_chats').updateMany(
+                { autorNome: nomeAntigo },
+                { $set: { autorNome: nomeLimpo } }
+            );
+
+            // Abordagem Blindada para atualizar os comentários dentro dos posts
+            const postsComComentarios = await database.collection('workspace_posts').find({ "comentarios.autorNome": nomeAntigo }).toArray();
+            for (let post of postsComComentarios) {
+                const novosComentarios = post.comentarios.map(c => {
+                    if (c.autorNome === nomeAntigo) c.autorNome = nomeLimpo;
+                    return c;
+                });
+                await database.collection('workspace_posts').updateOne({ id: post.id }, { $set: { comentarios: novosComentarios } });
+            }
+        }
+
+        // Devolvemos o nome antigo para o frontend saber como limpar a memória
+        res.status(200).json({ success: true, nome: nomeLimpo, nomeAntigo: nomeAntigo });
     } catch (error) {
-        console.error("🚨 Erro ao atualizar o nome do perfil:", error);
+        console.error("🚨 Erro ao atualizar o nome do perfil e cascata:", error);
         res.status(500).json({ error: 'Erro interno ao tentar atualizar o nome.' });
     }
 });
