@@ -386,7 +386,10 @@ router.post('/posts/:id/comentarios', verificarToken, async (req, res) => {
             
             const notificacoesArray = Array.from(usuariosNotificar).map(destinatario => ({
                 id: crypto.randomUUID(), escolaId: postOriginal.escolaId, destinatarioNome: destinatario, remetenteNome: autorNome,
-                mensagem: `comentou na publicação: "${texto.substring(0, 20)}..."`, origem: 'post', origemId: postId, lida: false, data: new Date().toISOString()
+                mensagem: `comentou: "${texto.substring(0, 30)}..."`, 
+                origem: 'comentario_novo', 
+                origemId: `${postId}|${novoComentario.id}`, // 🚀 O SALTO MÁGICO: Guardamos o ID do Post e do Comentário!
+                lida: false, data: new Date().toISOString()
             }));
 
             if (notificacoesArray.length > 0) {
@@ -420,12 +423,65 @@ router.put('/posts/:id/reagir', verificarToken, async (req, res) => {
         await database.collection('workspace_posts').updateOne({ id: postId }, { $set: { likes: likes, dislikes: dislikes } });
         workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: postId, escolaId: post.escolaId });
 
-        if (autorNome && post.autorNome !== autorNome) { 
+        // 🚀 NÃO NOTIFICA SE FOR "REMOVE" (Desfazer a curtida)
+        if (autorNome && post.autorNome !== autorNome && tipo !== 'remove') { 
+            const acaoRealizada = tipo === 'like' ? 'curtiu' : 'não curtiu';
             await database.collection('workspace_notificacoes').insertOne({
                 id: crypto.randomUUID(), escolaId: post.escolaId, destinatarioNome: post.autorNome, remetenteNome: autorNome,
-                mensagem: `reagiu à sua publicação.`, origem: 'post', origemId: postId, lida: false, data: new Date().toISOString()
+                mensagem: `${acaoRealizada} a sua publicação.`, 
+                origem: 'post', 
+                origemId: postId, 
+                lida: false, data: new Date().toISOString()
             });
             workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: [post.autorNome], escolaId: post.escolaId });
+        }
+        res.status(200).json({ success: true, likes, dislikes });
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+// 🚀 NOVA ROTA: REAÇÃO EM COMENTÁRIOS
+router.put('/posts/:postId/comentarios/:comentarioId/reagir', verificarToken, async (req, res) => {
+    try {
+        const { postId, comentarioId } = req.params;
+        const { userId, tipo, autorNome } = req.body; 
+        if (!userId) return res.status(400).json({ error: 'Obrigatório.' });
+
+        const database = await connectDB();
+        const post = await database.collection('workspace_posts').findOne({ id: postId });
+        if (!post || !post.comentarios) return res.status(404).json({ error: 'Post não encontrado.' });
+
+        const commentIndex = post.comentarios.findIndex(c => c.id === comentarioId);
+        if (commentIndex === -1) return res.status(404).json({ error: 'Comentário não encontrado.' });
+
+        const comentario = post.comentarios[commentIndex];
+        let likes = Array.isArray(comentario.likes) ? comentario.likes : [];
+        let dislikes = Array.isArray(comentario.dislikes) ? comentario.dislikes : [];
+
+        likes = likes.filter(id => id !== userId);
+        dislikes = dislikes.filter(id => id !== userId);
+
+        if (tipo === 'like') likes.push(userId);
+        if (tipo === 'dislike') dislikes.push(userId);
+
+        // Atualiza apenas o comentário específico dentro do Array
+        await database.collection('workspace_posts').updateOne(
+            { id: postId, "comentarios.id": comentarioId },
+            { $set: { "comentarios.$.likes": likes, "comentarios.$.dislikes": dislikes } }
+        );
+        
+        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: postId, escolaId: post.escolaId });
+
+        // Notifica o dono do comentário!
+        if (autorNome && comentario.autorNome !== autorNome && tipo !== 'remove') { 
+            const acaoRealizada = tipo === 'like' ? 'curtiu' : 'não curtiu';
+            await database.collection('workspace_notificacoes').insertOne({
+                id: crypto.randomUUID(), escolaId: post.escolaId, destinatarioNome: comentario.autorNome, remetenteNome: autorNome,
+                mensagem: `${acaoRealizada} o seu comentário.`, 
+                origem: 'comentario_reacao', 
+                origemId: `${postId}|${comentarioId}`, // Salto duplo!
+                lida: false, data: new Date().toISOString()
+            });
+            workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: [comentario.autorNome], escolaId: post.escolaId });
         }
         res.status(200).json({ success: true, likes, dislikes });
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
