@@ -154,7 +154,7 @@ router.put('/:id', async (req, res) => {
                 textoAviso = `alterou os dados da avaliação ${tipo}: "${tituloNovo}". Fique atento aos prazos!`;
             } else {
                 origemNoti = 'online_edit';
-                textoAviso = `fez algumas alterações no acesso da sessão: "${tituloNovo}". Confira o que mudou em <strong>Sala de Acessos</strong>.`;
+                textoAviso = `fez algumas alterações no acesso da sessão "${tituloNovo}". Confira o que mudou em <strong>Sala de Acessos</strong>.`;
             }
 
             const alunos = await db.collection('alunos').find({ escolaId: escola }).toArray();
