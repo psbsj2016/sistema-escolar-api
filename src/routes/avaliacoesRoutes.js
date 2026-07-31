@@ -7,8 +7,8 @@ const connectDB = require('../config/db'); // 🚀 LIGAÇÃO À BD REAL
 router.post('/', async (req, res) => {
     try {
         const db = await connectDB();
-        // 🚀 CORREÇÃO 1: Capturamos a variável 'dataAgendada' que vem do formulário
-        const { titulo, tipo, tempo, dataAgendada, questoes, instrucoes, escolaId, autorNome, destino, destinoNome, tentativas } = req.body;
+        // 🚀 CORREÇÃO 1: Capturamos a variável 'dataAgendada' E O 'linkSala' que vêm do formulário
+        const { titulo, tipo, tempo, dataAgendada, linkSala, questoes, instrucoes, escolaId, autorNome, destino, destinoNome, tentativas } = req.body;
         
         const novaAvaliacao = {
             id: 'av_' + Date.now(), 
@@ -16,6 +16,7 @@ router.post('/', async (req, res) => {
             tipo, 
             tempo: tempo || null, 
             dataAgendada: dataAgendada || null, // 🚀 Guardamos a data da aula online
+            linkSala: linkSala || null,         // 🚀 AGORA ELE LEMBRA-SE DO LINK LOGO NA CRIAÇÃO!
             questoes: questoes || [], 
             instrucoes: instrucoes || '', 
             escolaId, 
