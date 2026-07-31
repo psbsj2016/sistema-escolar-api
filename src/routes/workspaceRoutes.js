@@ -653,7 +653,7 @@ router.put('/perfil/avatar', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// ⚙️ ROTA DE ALTERAÇÃO DE NOME (PERFIL) COM EFEITO CASCATA
+// ⚙️ ROTA DE ALTERAÇÃO DE NOME (PERFIL) COM EFEITO CASCATA BLINDADO
 // ============================================================================
 router.put('/perfil/nome', verificarToken, async (req, res) => {
     try {
@@ -678,33 +678,40 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
             await database.collection('alunos').updateOne({ id: alunoRefId }, { $set: { nome: nomeLimpo } });
         }
 
-        // 3. 🚀 O EFEITO CASCATA: Reescreve a história nas publicações e no chat!
-        if (nomeAntigo && nomeAntigo !== nomeLimpo) {
-            
-            // Atualiza o nome em todas as publicações principais
-            await database.collection('workspace_posts').updateMany(
-                { autorNome: nomeAntigo },
-                { $set: { autorNome: nomeLimpo } }
-            );
-
-            // Atualiza o nome em todas as mensagens do Bate-papo
-            await database.collection('workspace_chats').updateMany(
-                { autorNome: nomeAntigo },
-                { $set: { autorNome: nomeLimpo } }
-            );
-
-            // Abordagem Blindada para atualizar os comentários dentro dos posts
-            const postsComComentarios = await database.collection('workspace_posts').find({ "comentarios.autorNome": nomeAntigo }).toArray();
-            for (let post of postsComComentarios) {
-                const novosComentarios = post.comentarios.map(c => {
-                    if (c.autorNome === nomeAntigo) c.autorNome = nomeLimpo;
-                    return c;
-                });
-                await database.collection('workspace_posts').updateOne({ id: post.id }, { $set: { comentarios: novosComentarios } });
-            }
+        // 3. 🚀 O EFEITO CASCATA DEFINITIVO (A MÁGICA DA LIMPEZA)
+        // Criamos uma lista de nomes que devem ser procurados na Base de Dados
+        const nomesParaAtualizar = [nomeAntigo];
+        
+        // Se quem está a mudar o nome for o Gestor, varremos também os posts antigos que ficaram presos com o nome padrão!
+        if (user.tipo === 'Gestor' || user.login === 'gestor' || nomeAntigo === 'Gestor Principal') {
+            nomesParaAtualizar.push('Gestor Principal');
         }
 
-        // Devolvemos o nome antigo para o frontend saber como limpar a memória
+        // O filtro mágico que procura qualquer postagem que tenha o nome antigo OU "Gestor Principal"
+        const filtroBusca = { autorNome: { $in: nomesParaAtualizar } };
+
+        // Atualiza as publicações principais
+        await database.collection('workspace_posts').updateMany(
+            filtroBusca,
+            { $set: { autorNome: nomeLimpo } }
+        );
+
+        // Atualiza as mensagens do Bate-papo
+        await database.collection('workspace_chats').updateMany(
+            filtroBusca,
+            { $set: { autorNome: nomeLimpo } }
+        );
+
+        // Atualiza os comentários dentro dos posts
+        const postsComComentarios = await database.collection('workspace_posts').find({ "comentarios.autorNome": { $in: nomesParaAtualizar } }).toArray();
+        for (let post of postsComComentarios) {
+            const novosComentarios = post.comentarios.map(c => {
+                if (nomesParaAtualizar.includes(c.autorNome)) c.autorNome = nomeLimpo;
+                return c;
+            });
+            await database.collection('workspace_posts').updateOne({ id: post.id }, { $set: { comentarios: novosComentarios } });
+        }
+
         res.status(200).json({ success: true, nome: nomeLimpo, nomeAntigo: nomeAntigo });
     } catch (error) {
         console.error("🚨 Erro ao atualizar o nome do perfil e cascata:", error);
