@@ -245,6 +245,7 @@ router.put('/:id', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
+
 // 4. MUDAR STATUS
 router.patch('/:id/status', async (req, res) => {
     try {
@@ -501,6 +502,64 @@ router.post('/:id/convidados', async (req, res) => {
     } catch(e) { 
         res.status(500).json({ error: 'Erro ao adicionar convidado.' }); 
     }
+});
+
+// ============================================================================
+// 👁️ ROTAS DE VISIBILIDADE DE ACESSO (MICRO E MACRO GESTÃO)
+// ============================================================================
+
+// 1. MICRO-GESTÃO: Ocultar/Desocultar acesso de um aluno específico
+router.put('/:id/ocultar-acesso', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { alunoId, acao } = req.body; 
+        
+        if (acao === 'ocultar') {
+            await db.collection('workspace_avaliacoes').updateOne(
+                { id: req.params.id },
+                { $addToSet: { ocultos: String(alunoId) } }
+            );
+        } else {
+            await db.collection('workspace_avaliacoes').updateOne(
+                { id: req.params.id },
+                { $pull: { ocultos: String(alunoId) } }
+            );
+        }
+        
+        // Grito SSE para a tela do aluno atualizar na mesma hora sem recarregar a página
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', { type: 'SALA_UPDATE', turmaId: req.params.id, escolaId: 'DEFAULT' });
+        }
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao alterar visibilidade.' }); }
+});
+
+// 2. MACRO-GESTÃO: Ocultar/Desocultar acesso de todos os alunos ativos de uma vez
+router.put('/:id/ocultar-massa', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { alunoIds, acao } = req.body;
+        
+        // Garante de forma blindada que são todos strings
+        const idsSeguros = alunoIds.map(id => String(id));
+
+        if (acao === 'ocultar') {
+            await db.collection('workspace_avaliacoes').updateOne(
+                { id: req.params.id },
+                { $addToSet: { ocultos: { $each: idsSeguros } } }
+            );
+        } else {
+            await db.collection('workspace_avaliacoes').updateOne(
+                { id: req.params.id },
+                { $pull: { ocultos: { $in: idsSeguros } } }
+            );
+        }
+        
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', { type: 'SALA_UPDATE', turmaId: req.params.id, escolaId: 'DEFAULT' });
+        }
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao alterar visibilidade em massa.' }); }
 });
 
 module.exports = router;
