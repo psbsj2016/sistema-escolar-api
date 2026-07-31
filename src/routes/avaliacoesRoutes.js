@@ -369,7 +369,7 @@ router.post('/:id/entregar', async (req, res) => {
                     escolaId: escola,
                     destinatarioNome: autorDaProva,
                     remetenteNome: nomeDoAluno,
-                    mensagem: `entregou a atividade: "${provaOriginal.titulo}".`,
+                    mensagem: `entrou na sessão ao vivo: "${provaOriginal.titulo}".`,
                     origem: 'tarefa', 
                     origemId: provaOriginal.id,
                     destinoNome: 'Avaliação',
@@ -387,12 +387,12 @@ router.post('/:id/entregar', async (req, res) => {
                 }
             }
         } catch (erroNoti) {
-            console.error("Falha ao notificar professor sobre a entrega da prova.", erroNoti);
+            console.error("Falha ao notificar professor sobre a entrada na sessão ao vivo.", erroNoti);
         }
         // ====================================================================
 
         res.json({ success: true, entrega });
-    } catch (error) { res.status(500).json({ success: false, error: "Erro na entrega." }); }
+    } catch (error) { res.status(500).json({ success: false, error: "Erro no acesso." }); }
 });
 
 // 8. PROFESSOR BUSCA TODAS AS ENTREGAS
