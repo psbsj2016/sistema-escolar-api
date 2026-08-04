@@ -1166,21 +1166,27 @@ router.post('/materiais', verificarToken, async (req, res) => {
             // 1. Vai buscar a lista de todos os alunos da escola
             const alunos = await db.collection('alunos').find({ escolaId: escolaId }).toArray();
             
-            // 2. Filtra apenas os alunos que têm acesso a este material
+           // 2. Filtra apenas os alunos que têm acesso a este material
             let alunosAlvo = [];
-            if (destino === 'global') {
+            if (destino === 'global' || (Array.isArray(destino) && destino.includes('global'))) {
                 alunosAlvo = alunos; // Todos recebem
             } else {
                 alunosAlvo = alunos.filter(a => {
                     const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
-                    // Verifica se o aluno pertence à turma do material
-                    return minhasTurmas.some(t => String(t).toLowerCase() === String(destino).toLowerCase() || String(t).toLowerCase() === String(novoMaterial.destinoNome).toLowerCase());
+                    // 🚀 LEITURA MÚLTIPLA NA NUVEM
+                    if (Array.isArray(destino)) {
+                        return minhasTurmas.some(t => destino.includes(String(t)) || (Array.isArray(novoMaterial.destinoNome) && novoMaterial.destinoNome.includes(String(t))));
+                    } else {
+                        return minhasTurmas.some(t => String(t).toLowerCase() === String(destino).toLowerCase() || String(t).toLowerCase() === String(novoMaterial.destinoNome).toLowerCase());
+                    }
                 });
             }
 
             // 3. Se encontrou alunos, fabrica os bilhetes de notificação
             if (alunosAlvo.length > 0) {
                 const nomesDestinatarios = [];
+                // Transforma a lista de nomes num texto amigável para a notificação
+                const nomeDestinoAmigavel = Array.isArray(novoMaterial.destinoNome) ? novoMaterial.destinoNome.join(', ') : (novoMaterial.destinoNome || 'Geral');
                 
                 const notificacoesArray = alunosAlvo.map(aluno => {
                     const nomeAluno = aluno.nome || aluno.login;
@@ -1192,13 +1198,13 @@ router.post('/materiais', verificarToken, async (req, res) => {
                         destinatarioNome: nomeAluno,
                         remetenteNome: autor,
                         mensagem: `compartilhou um novo material: "${tituloMat}"`,
-                        origem: 'material', // O nosso Roteador no alertas.js procura por esta palavra exata!
+                        origem: 'material',
                         origemId: novoMaterial.id,
-                        destinoNome: novoMaterial.destinoNome || 'Geral',
+                        destinoNome: nomeDestinoAmigavel, // Usa o texto formatado
                         lida: false,
                         data: new Date().toISOString()
                     };
-                }).filter(n => n.destinatarioNome); // Remove nulos por segurança
+                }).filter(n => n.destinatarioNome);
 
                 // 4. Salva no cofre e dá o Grito Global em Tempo Real (SSE)
                 if (notificacoesArray.length > 0) {
@@ -1237,11 +1243,13 @@ router.get('/materiais', verificarToken, async (req, res) => {
             const aluno = await db.collection('alunos').findOne({ id: alunoRefId });
             if (aluno) {
                 let minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas || aluno.turma];
-                // Mostra o que é Global + O que é da turma exata dele
+                // 🚀 O MOTOR DE BUSCA DA MONGODB ATUALIZADO:
+                // O operador $in cruza naturalmente uma lista com outra lista!
                 filtro = { 
                     escolaId: escolaId,
                     $or: [
                         { destino: 'global' }, 
+                        { destino: { $in: ['global'] } }, // Prevenção: caso guardem ['global']
                         { destino: { $in: minhasTurmas } }, 
                         { destinoNome: { $in: minhasTurmas } }
                     ] 
