@@ -1275,6 +1275,105 @@ router.delete('/materiais/:id', verificarToken, async (req, res) => {
     }
 });
 
+// 3.5. Atualizar Material (Metadados) e Disparar Atualização Global
+router.put('/materiais/:id', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const materialAtualizado = req.body;
+        const materialId = req.params.id;
+
+        const materialAntigo = await db.collection('workspace_materiais').findOne({ id: materialId });
+        if(!materialAntigo) return res.status(404).json({ error: 'Material não encontrado.' });
+
+        // 1. Atualiza as informações físicas na base de dados
+        await db.collection('workspace_materiais').updateOne(
+            { id: materialId }, 
+            { $set: {
+                titulo: materialAtualizado.titulo,
+                descricao: materialAtualizado.descricao,
+                destino: materialAtualizado.destino,
+                destinoNome: materialAtualizado.destinoNome,
+                url: materialAtualizado.url,
+                tipoFicheiro: materialAtualizado.tipoFicheiro,
+                nomeOriginal: materialAtualizado.nomeOriginal
+            }}
+        );
+
+        // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES (Prof -> Alunos sobre a Atualização)
+        // ====================================================================
+        try {
+            const escolaId = materialAtualizado.escolaId || 'DEFAULT';
+            const destino = materialAtualizado.destino || 'global';
+            const autor = materialAtualizado.autorNome || 'Professor';
+            const tituloMat = materialAtualizado.titulo || 'Material Atualizado';
+
+            const alunos = await db.collection('alunos').find({ escolaId: escolaId }).toArray();
+            
+            let alunosAlvo = [];
+            if (destino === 'global' || (Array.isArray(destino) && destino.includes('global'))) {
+                alunosAlvo = alunos;
+            } else {
+                alunosAlvo = alunos.filter(a => {
+                    const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                    if (Array.isArray(destino)) {
+                        return minhasTurmas.some(t => destino.includes(String(t)) || (Array.isArray(materialAtualizado.destinoNome) && materialAtualizado.destinoNome.includes(String(t))));
+                    } else {
+                        return minhasTurmas.some(t => String(t).toLowerCase() === String(destino).toLowerCase() || String(t).toLowerCase() === String(materialAtualizado.destinoNome).toLowerCase());
+                    }
+                });
+            }
+
+            if (alunosAlvo.length > 0) {
+                const nomesDestinatarios = [];
+                const nomeDestinoAmigavel = Array.isArray(materialAtualizado.destinoNome) ? materialAtualizado.destinoNome.join(', ') : (materialAtualizado.destinoNome || 'Geral');
+                
+                const notificacoesArray = alunosAlvo.map(aluno => {
+                    const nomeAluno = aluno.nome || aluno.login;
+                    if (nomeAluno) nomesDestinatarios.push(nomeAluno);
+                    
+                    return {
+                        id: crypto.randomUUID(),
+                        escolaId: escolaId,
+                        destinatarioNome: nomeAluno,
+                        remetenteNome: autor,
+                        mensagem: `atualizou o material: "${tituloMat}"`, // Mensagem distinta de Criação
+                        origem: 'material', 
+                        origemId: materialId,
+                        destinoNome: nomeDestinoAmigavel,
+                        lida: false,
+                        data: new Date().toISOString()
+                    };
+                }).filter(n => n.destinatarioNome);
+
+                if (notificacoesArray.length > 0) {
+                    await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                    workspaceStream.emit('evento_realtime', { 
+                        type: 'NOVA_NOTIFICACAO', 
+                        destinatarios: nomesDestinatarios, 
+                        escolaId: escolaId 
+                    });
+                }
+            }
+        } catch (eNoti) {
+            console.error("Aviso: Falha ao gerar notificações de atualização de material.", eNoti);
+        }
+
+        // ====================================================================
+        // 🚀 O GRITO DE ATUALIZAÇÃO EM TEMPO REAL PARA RECARREGAR A TELA
+        // ====================================================================
+        workspaceStream.emit('evento_realtime', { 
+            type: 'MATERIAL_UPDATE', 
+            escolaId: materialAtualizado.escolaId || 'DEFAULT' 
+        });
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        console.error("Erro ao atualizar material:", error);
+        res.status(500).json({ success: false, error: 'Erro ao atualizar.' });
+    }
+});
+
 // ============================================================================
 // 📡 ROTA DE MONITORAMENTO EM TEMPO REAL DO WORKSPACE
 // ============================================================================
