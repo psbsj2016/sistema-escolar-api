@@ -77,7 +77,7 @@ const verificarToken = async (req, res, next) => {
 // ============================================================================
 // 🚀 TÚNEL DE CONEXÃO EM TEMPO REAL (SERVER-SENT EVENTS)
 // ============================================================================
-router.get('/stream', (req, res) => {
+router.get('/stream', verificarToken, (req, res) => { // <-- Cadeado adicionado aqui!
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -755,7 +755,7 @@ router.post('/entregas', verificarToken, async (req, res) => {
                         escolaId: escolaId,
                         destinatarioNome: nomeProf,
                         remetenteNome: nomeAluno,
-                        mensagem: `submeteu a resolução de "${tituloTarefa}" em ${turmaNome}.`,
+                        mensagem: `da ${turmaNome} enviou o exercício entitulado "${tituloTarefa}" na área de exercício. Confira.`,
                         origem: 'tarefa', // O clique no sino abrirá o modal de verificação!
                         origemId: novaEntrega.eventoId,
                         destinoNome: turmaNome,
