@@ -1,14 +1,16 @@
 const express = require('express');
 const router = express.Router();
-// 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 90 segundos e liberta a memória!
+const crypto = require('crypto');
+const connectDB = require('../config/db');
+const multer = require('multer');
+const { enviarParaR2 } = require('../config/cloudflareR2');
+const { filtroTenant } = require('../middlewares/auth'); // Vamos usar seu filtro que já existe
+
+// Seu timeout anti-502 (mantenha)
 router.use((req, res, next) => {
-    // Usamos req.setTimeout para poder destruir a conexão física se congelar
     req.setTimeout(90000, () => {
-        console.log('⚠️ Timeout na requisição atingido (90s). Destruindo conexão.');
-        if (!res.headersSent) {
-            res.status(408).json({ error: 'Tempo esgotado. O ficheiro é demasiado pesado para a nuvem.' });
-        }
-        req.destroy(); // <--- O SEGREDO: Corta a linha fisicamente antes do Render!
+        if (!res.headersSent) res.status(408).json({ error: 'Tempo esgotado. Ficheiro muito pesado.' });
+        req.destroy();
     });
     next();
 });
@@ -44,35 +46,16 @@ const storage = multer.memoryStorage();
 // ============================================================================
 // 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA (10MB)
 // ============================================================================
-const upload = multer({ 
+const storage = multer.memoryStorage();
+const upload = multer({
     storage: storage,
-    limits: { 
-        fileSize: 10 * 1024 * 1024 // Limite estrito de 10MB
+    limits: {
+        fileSize: 10 * 1024 * 1024, // 10MB
+        files: 3 // ANTES era 10, agora 3 - evita OOM de 100MB na RAM
     }
 });
 
-const verificarToken = async (req, res, next) => {
-    const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
-    
-    // 🚀 REGISTO AUTOMÁTICO DE ATIVIDADE: Atualiza o último acesso em background
-    try {
-        // Tentamos extrair o ID do utilizador através do token ou de cookies se decodificado, 
-        // ou atualizamos com base nas rotas subsequentes. Para garantir leveza, 
-        // fazemos um registo genérico se houver identificação na sessão.
-        if (req.body && req.body.id) {
-            const db = await connectDB();
-            await db.collection('usuarios').updateOne(
-                { id: req.body.id },
-                { $set: { ultimoAcesso: new Date().toISOString() } }
-            );
-        }
-    } catch (e) {
-        // Silencioso para não atrapalhar o fluxo principal
-    }
 
-    next();
-};
 
 // ============================================================================
 // 🚀 TÚNEL DE CONEXÃO EM TEMPO REAL (SERVER-SENT EVENTS)
@@ -1377,83 +1360,65 @@ router.put('/materiais/:id', verificarToken, async (req, res) => {
 // ============================================================================
 // 📡 ROTA DE MONITORAMENTO EM TEMPO REAL DO WORKSPACE
 // ============================================================================
-router.get('/monitoramento/status', verificarToken, async (req, res) => {
+router.get('/monitoramento/status', async (req, res) => {
     try {
         const db = await connectDB();
-        
-        const alunos = await db.collection('alunos').find({}).toArray();
-        const usuarios = await db.collection('usuarios').find({}).toArray();
+        // AGORA SIM: usa o escolaId do token, não busca tudo
+        const escolaId = req.escolaId; 
+
+        const alunos = await db.collection('alunos').find({ escolaId }).toArray();
+        const usuarios = await db.collection('usuarios').find({ escolaId }).toArray();
         
         const agora = new Date();
-        // 🚀 Janela reduzida para 35 segundos (perfeito para o ping de 30s)
-        const JANELA_ONLINE = 35 * 1000; 
+        const JANELA_ONLINE = 35 * 1000;
 
-        const relatorio = alunos.map(aluno => {
-            const contaUser = usuarios.find(u => u.alunoRefId === aluno.id || (u.tipo === 'Aluno' && u.nome === aluno.nome));
-            
-            const ultimoAcessoStr = contaUser ? contaUser.ultimoAcesso : null;
+        const relatorioFinal = [...alunos, ...usuarios.filter(u => u.tipo !== 'Aluno')].map(item => {
+            const isAluno = !!item.turma || !!item.turmas || alunos.find(a=>a.id===item.id);
+            const contaUser = isAluno ? usuarios.find(u => u.alunoRefId === item.id) : item;
+            const ultimoAcessoStr = contaUser?.ultimoAcesso || null;
             let isOnline = false;
-
             if (ultimoAcessoStr) {
-                const tempoUltimoAcesso = new Date(ultimoAcessoStr).getTime();
-                if ((agora.getTime() - tempoUltimoAcesso) <= JANELA_ONLINE) {
-                    isOnline = true;
-                }
+                if ((agora.getTime() - new Date(ultimoAcessoStr).getTime()) <= JANELA_ONLINE) isOnline = true;
             }
-
             return {
-                id: aluno.id,
-                nome: aluno.nome || 'Aluno Sem Nome',
-                login: contaUser ? contaUser.login : 'Sem Acesso Criado',
-                isOnline: isOnline,
-                ultimoAcesso: ultimoAcessoStr || (contaUser ? contaUser.dataCriacao : null)
+                id: item.id,
+                nome: item.nome || contaUser?.login,
+                login: contaUser?.login || 'Sem Acesso',
+                isOnline,
+                ultimoAcesso: ultimoAcessoStr || contaUser?.dataCriacao
             };
         });
 
-        res.status(200).json(relatorio);
+        res.status(200).json(relatorioFinal);
     } catch (error) {
-        console.error("🚨 Erro ao gerar relatório de monitoramento:", error);
-        res.status(500).json({ error: 'Erro interno ao carregar o radar de status.' });
+        res.status(500).json({ error: 'Erro no radar.' });
     }
 });
 
 // 🚀 ROTA DE "HEARTBEAT" (Recebe o sinal periódico de que o aluno está ativo)
-router.post('/monitoramento/ping', verificarToken, async (req, res) => {
+router.post('/monitoramento/ping', async (req, res) => {
     try {
-        const { usuarioId } = req.body;
-        if (!usuarioId) return res.status(400).json({ error: 'ID em falta.' });
-
+        const usuarioId = req.userId; // SEGURO: vem do seu auth.js principal
         const db = await connectDB();
         await db.collection('usuarios').updateOne(
             { id: usuarioId },
             { $set: { ultimoAcesso: new Date().toISOString() } }
         );
-
         res.status(200).json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: 'Erro no ping.' });
-    }
+    } catch (e) { res.status(500).json({ error: 'Erro no ping.' }); }
 });
 
-// 🚀 ROTA DE SAÍDA INSTANTÂNEA (Força o aluno a ficar offline imediatamente)
-router.post('/monitoramento/offline', verificarToken, async (req, res) => {
+router.post('/monitoramento/offline', async (req, res) => {
     try {
-        const { usuarioId } = req.body;
-        if (!usuarioId) return res.status(200).json({ success: true });
-
+        const usuarioId = req.userId;
         const db = await connectDB();
-        // Atualiza o último acesso e envelhece o timestamp para além da janela de 35 segundos
         const tempoExpirado = new Date(Date.now() - 60000).toISOString();
-        
         await db.collection('usuarios').updateOne(
             { id: usuarioId },
             { $set: { ultimoAcesso: tempoExpirado } }
         );
-
         res.status(200).json({ success: true });
-    } catch (error) {
-        res.status(500).json({ success: true });
-    }
+    } catch (e) { res.status(200).json({ success: true }); }
 });
 
 module.exports = router;

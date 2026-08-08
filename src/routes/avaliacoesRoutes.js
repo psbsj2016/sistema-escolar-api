@@ -1,6 +1,7 @@
 // src/routes/avaliacoesRoutes.js
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const connectDB = require('../config/db'); // 🚀 LIGAÇÃO À BD REAL
 
 // 1. CRIAR NOVA AVALIAÇÃO (E AVISAR ALUNOS)
@@ -11,7 +12,7 @@ router.post('/', async (req, res) => {
         const { titulo, tipo, tempo, dataAgendada, linkSala, questoes, instrucoes, escolaId, autorNome, destino, destinoNome, tentativas } = req.body;
         
         const novaAvaliacao = {
-            id: 'av_' + Date.now(), 
+                id: 'av_' + crypto.randomUUID(), 
             titulo, 
             tipo, 
             tempo: tempo || null, 
@@ -68,7 +69,7 @@ router.post('/', async (req, res) => {
                     }
 
                     return {
-                        id: 'notif_' + Date.now() + Math.random().toString(36).substring(7),
+                           id: 'notif_' + crypto.randomUUID(),
                         escolaId: escola,
                         destinatarioNome: nomeAluno,
                         remetenteNome: autorNome,
@@ -367,7 +368,7 @@ router.post('/:id/entregar', async (req, res) => {
                 const nomeDoAluno = req.body.alunoNome || 'Um aluno';
 
                 const novaNotificacao = {
-                    id: 'notif_' + Date.now() + Math.random().toString(36).substring(7),
+                        id: 'notif_conv_' + crypto.randomUUID(),
                     escolaId: escola,
                     destinatarioNome: autorDaProva,
                     remetenteNome: nomeDoAluno,
@@ -422,41 +423,31 @@ router.get('/minhas-entregas/:alunoId', async (req, res) => {
 // 10. REATIVAR ACESSO INDIVIDUAL (Apaga a presença de 1 aluno específico)
 // Rota acionada no frontend via: DELETE /workspace/avaliacoes/entregas/:entregaId
 router.delete('/entregas/:entregaId', async (req, res) => {
+    if (req.userTipo === 'Aluno') return res.status(403).json({ error: 'Sem permissão.' });
     try {
         const db = await connectDB();
-        
-        // 🚀 O SEGREDO: Fomos à gaveta exata onde a presença foi criada!
-        const result = await db.collection('workspace_entregas_provas').deleteOne({ 
-            id: req.params.entregaId 
+        const result = await db.collection('workspace_entregas_provas').deleteOne({
+            id: req.params.entregaId,
+            escolaId: req.escolaId
         });
-        
-        if (result.deletedCount === 0) {
-            return res.status(404).json({ success: false, error: "Registo não encontrado na base de dados." });
-        }
-        
-        res.json({ success: true, message: "Acesso reativado com sucesso!" });
-    } catch (error) { 
-        console.error("Erro ao reativar aluno:", error);
-        res.status(500).json({ success: false, error: "Erro interno no servidor." }); 
-    }
+        if (result.deletedCount === 0) return res.status(404).json({ error: 'Não encontrado.' });
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
 });
 
 // 11. REATIVAR SALA PARA TODOS (Apaga todas as presenças daquela sala)
 // Rota acionada no frontend via: DELETE /workspace/avaliacoes/:id/entregas
+// Só professor/gestor pode reativar sala
 router.delete('/:id/entregas', async (req, res) => {
+    if (req.userTipo === 'Aluno') return res.status(403).json({ error: 'Sem permissão.' });
     try {
         const db = await connectDB();
-        
-        // 🚀 O SEGREDO: Limpa todos os documentos da gaveta correspondentes a esta sala
-        await db.collection('workspace_entregas_provas').deleteMany({ 
-            avaliacaoId: req.params.id 
+        await db.collection('workspace_entregas_provas').deleteMany({
+            avaliacaoId: req.params.id,
+            escolaId: req.escolaId // Garante que não apaga de outra escola
         });
-        
-        res.json({ success: true, message: "Sala reativada para todos!" });
-    } catch (error) { 
-        console.error("Erro ao limpar sala:", error);
-        res.status(500).json({ success: false, error: "Erro interno no servidor." }); 
-    }
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
 });
 
 // ============================================================================
