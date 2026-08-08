@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 const connectDB = require('../config/db'); // 🚀 LIGAÇÃO À BD REAL
+const { filtroTenant } = require('../middlewares/auth'); // 🚀 IMPORTAR O CADEADO AQUI!
 
 // 1. CRIAR NOVA AVALIAÇÃO (E AVISAR ALUNOS)
 router.post('/', async (req, res) => {
@@ -421,8 +422,7 @@ router.get('/minhas-entregas/:alunoId', async (req, res) => {
 // ============================================================================
 
 // 10. REATIVAR ACESSO INDIVIDUAL (Apaga a presença de 1 aluno específico)
-// Rota acionada no frontend via: DELETE /workspace/avaliacoes/entregas/:entregaId
-router.delete('/entregas/:entregaId', async (req, res) => {
+router.delete('/entregas/:entregaId', filtroTenant, async (req, res) => { // 🚀 CADEADO AQUI
     if (req.userTipo === 'Aluno') return res.status(403).json({ error: 'Sem permissão.' });
     try {
         const db = await connectDB();
@@ -436,15 +436,13 @@ router.delete('/entregas/:entregaId', async (req, res) => {
 });
 
 // 11. REATIVAR SALA PARA TODOS (Apaga todas as presenças daquela sala)
-// Rota acionada no frontend via: DELETE /workspace/avaliacoes/:id/entregas
-// Só professor/gestor pode reativar sala
-router.delete('/:id/entregas', async (req, res) => {
+router.delete('/:id/entregas', filtroTenant, async (req, res) => { // 🚀 CADEADO AQUI
     if (req.userTipo === 'Aluno') return res.status(403).json({ error: 'Sem permissão.' });
     try {
         const db = await connectDB();
         await db.collection('workspace_entregas_provas').deleteMany({
             avaliacaoId: req.params.id,
-            escolaId: req.escolaId // Garante que não apaga de outra escola
+            escolaId: req.escolaId 
         });
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }

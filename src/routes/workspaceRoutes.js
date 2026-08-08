@@ -3,17 +3,66 @@ const router = express.Router();
 const crypto = require('crypto');
 const connectDB = require('../config/db');
 const multer = require('multer');
-const { enviarParaR2 } = require('../config/cloudflareR2');
-const { filtroTenant } = require('../middlewares/auth'); // Vamos usar seu filtro que já existe
+const { v2: cloudinary } = require('cloudinary');
+const multerCloudinary = require('multer-storage-cloudinary');
+const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary;
 
-// Seu timeout anti-502 (mantenha)
+const { enviarParaR2 } = require('../config/cloudflareR2');
+const { filtroTenant } = require('../middlewares/auth'); // 🚀 O SEU NOVO CADEADO INTELIGENTE!
+
+// 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 90 segundos e liberta a memória!
 router.use((req, res, next) => {
     req.setTimeout(90000, () => {
-        if (!res.headersSent) res.status(408).json({ error: 'Tempo esgotado. Ficheiro muito pesado.' });
+        console.log('⚠️ Timeout na requisição atingido (90s). Destruindo conexão.');
+        if (!res.headersSent) {
+            res.status(408).json({ error: 'Tempo esgotado. O ficheiro é demasiado pesado para a nuvem.' });
+        }
         req.destroy();
     });
     next();
 });
+
+// ⚡ MOTOR DE TEMPO REAL (Túnel SSE)
+const EventEmitter = require('events');
+const workspaceStream = new EventEmitter();
+workspaceStream.setMaxListeners(0); 
+global.workspaceStream = workspaceStream;
+
+// ☁️ Configuração Cloudinary
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// 🛡️ CONFIGURAÇÃO DE UPLOAD SEGURO COM LIMITES (10MB e 3 ficheiros)
+const storage = multer.memoryStorage();
+const upload = multer({
+    storage: storage,
+    limits: {
+        fileSize: 10 * 1024 * 1024,
+        files: 3 // Evita OOM de 100MB na RAM
+    }
+});
+
+// O seu verificador antigo (mantido para as restantes rotas não quebrarem)
+const verificarToken = async (req, res, next) => {
+    const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
+    
+    try {
+        if (req.body && req.body.id) {
+            const db = await connectDB();
+            await db.collection('usuarios').updateOne(
+                { id: req.body.id },
+                { $set: { ultimoAcesso: new Date().toISOString() } }
+            );
+        }
+    } catch (e) {}
+
+    next();
+};
+
 const crypto = require('crypto');
 const connectDB = require('../config/db');
 const multer = require('multer');
@@ -1360,10 +1409,10 @@ router.put('/materiais/:id', verificarToken, async (req, res) => {
 // ============================================================================
 // 📡 ROTA DE MONITORAMENTO EM TEMPO REAL DO WORKSPACE
 // ============================================================================
-router.get('/monitoramento/status', async (req, res) => {
+// 🚀 CADEADO ADICIONADO: filtroTenant injeta o req.escolaId
+router.get('/monitoramento/status', filtroTenant, async (req, res) => {
     try {
         const db = await connectDB();
-        // AGORA SIM: usa o escolaId do token, não busca tudo
         const escolaId = req.escolaId; 
 
         const alunos = await db.collection('alunos').find({ escolaId }).toArray();
@@ -1395,10 +1444,10 @@ router.get('/monitoramento/status', async (req, res) => {
     }
 });
 
-// 🚀 ROTA DE "HEARTBEAT" (Recebe o sinal periódico de que o aluno está ativo)
-router.post('/monitoramento/ping', async (req, res) => {
+// 🚀 CADEADO ADICIONADO: filtroTenant injeta o req.userId
+router.post('/monitoramento/ping', filtroTenant, async (req, res) => {
     try {
-        const usuarioId = req.userId; // SEGURO: vem do seu auth.js principal
+        const usuarioId = req.userId;
         const db = await connectDB();
         await db.collection('usuarios').updateOne(
             { id: usuarioId },
@@ -1408,7 +1457,8 @@ router.post('/monitoramento/ping', async (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Erro no ping.' }); }
 });
 
-router.post('/monitoramento/offline', async (req, res) => {
+// 🚀 CADEADO ADICIONADO: filtroTenant injeta o req.userId
+router.post('/monitoramento/offline', filtroTenant, async (req, res) => {
     try {
         const usuarioId = req.userId;
         const db = await connectDB();
