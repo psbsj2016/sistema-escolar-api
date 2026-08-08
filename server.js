@@ -32,7 +32,15 @@ app.set('trust proxy', 1);
 // Segurança e CORS
 app.use(helmet({ crossOriginResourcePolicy: false }));
 
-const dominiosPermitidos = ['https://www.sistemaptt.com.br', 'https://sistemaptt.com.br', 'http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:5500', 'null'];
+const dominiosPermitidos = [
+    'https://www.sistemaptt.com.br', 
+    'https://sistemaptt.com.br', 
+    'http://localhost:3000', 
+    'http://localhost:5173', 
+    'http://127.0.0.1:5500', 
+    'null',
+    'https://sistema-escolar-api-k3o8.onrender.com'
+];
 
 app.use(cors({
     origin: function (origin, callback) {

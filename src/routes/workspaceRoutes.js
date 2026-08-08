@@ -8,7 +8,7 @@ const multerCloudinary = require('multer-storage-cloudinary');
 const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary;
 
 const { enviarParaR2 } = require('../config/cloudflareR2');
-const { filtroTenant } = require('../middlewares/auth'); // 🚀 O SEU NOVO CADEADO INTELIGENTE!
+const { filtroTenant } = require('../middlewares/auth');
 
 // 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 90 segundos e liberta a memória!
 router.use((req, res, next) => {
@@ -41,11 +41,10 @@ const upload = multer({
     storage: storage,
     limits: {
         fileSize: 10 * 1024 * 1024,
-        files: 3 // Evita OOM de 100MB na RAM
+        files: 3 // Evita sobrecarga na RAM
     }
 });
 
-// O seu verificador antigo (mantido para as restantes rotas não quebrarem)
 const verificarToken = async (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
@@ -63,47 +62,10 @@ const verificarToken = async (req, res, next) => {
     next();
 };
 
-const crypto = require('crypto');
-const connectDB = require('../config/db');
-const multer = require('multer');
-const { v2: cloudinary } = require('cloudinary');
-const multerCloudinary = require('multer-storage-cloudinary');
-const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary;
-
-// 🚀 NOVA LINHA: Importamos o Sinaleiro do Cloudflare R2
-const { enviarParaR2 } = require('../config/cloudflareR2');
-
-// ⚡ MOTOR DE TEMPO REAL (Túnel SSE)
-const EventEmitter = require('events');
-const workspaceStream = new EventEmitter();
-workspaceStream.setMaxListeners(0); // Permite infinitas conexões simultâneas
-global.workspaceStream = workspaceStream; // 🚀 MAGIA: Torna o motor acessível a todos os ficheiros!
-
-// ☁️ Configuração Cloudinary
-cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET
-});
-
 // ============================================================================
-// 🛡️ CONFIGURAÇÃO DE UPLOAD SEGURO (USANDO MEMÓRIA TEMPORÁRIA)
+// 🚀 TÚNEL DE CONEXÃO EM TEMPO REAL (SERVER-SENT EVENTS)
 // ============================================================================
-// Em vez de enviar direto, guardamos na memória rápida do Render primeiro
-const storage = multer.memoryStorage();
-
-// ============================================================================
-// 🛡️ CONFIGURAÇÃO DE UPLOAD COM LIMITES DE SEGURANÇA (10MB)
-// ============================================================================
-const storage = multer.memoryStorage();
-const upload = multer({
-    storage: storage,
-    limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB
-        files: 3 // ANTES era 10, agora 3 - evita OOM de 100MB na RAM
-    }
-});
-
+// (O resto do seu código continua a partir daqui com o router.get('/stream'...))
 
 
 // ============================================================================
