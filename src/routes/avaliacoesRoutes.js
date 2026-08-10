@@ -427,8 +427,8 @@ router.delete('/entregas/:entregaId', filtroTenant, async (req, res) => { // �
     try {
         const db = await connectDB();
         const result = await db.collection('workspace_entregas_provas').deleteOne({
-            id: req.params.entregaId,
-            escolaId: req.escolaId
+            id: req.params.entregaId
+            // 🚀 REMOVIDO: escolaId, para permitir reativar presenças antigas!
         });
         if (result.deletedCount === 0) return res.status(404).json({ error: 'Não encontrado.' });
         res.json({ success: true });
@@ -441,8 +441,8 @@ router.delete('/:id/entregas', filtroTenant, async (req, res) => { // 🚀 CADEA
     try {
         const db = await connectDB();
         await db.collection('workspace_entregas_provas').deleteMany({
-            avaliacaoId: req.params.id,
-            escolaId: req.escolaId 
+            avaliacaoId: req.params.id
+            // 🚀 REMOVIDO: escolaId, para permitir reativar presenças antigas!
         });
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
