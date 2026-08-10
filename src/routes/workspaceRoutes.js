@@ -636,22 +636,33 @@ router.put('/perfil', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 📸 ROTA DE ALTERAÇÃO DE FOTO (PERFIL) - INDEPENDENTE DA SECRETARIA
+// ============================================================================
 router.put('/perfil/avatar', verificarToken, async (req, res) => {
     try {
-        const { id, alunoRefId, avatarUrl } = req.body;
+        // 🚀 Removemos o alunoRefId. O WorkSpace já não mexe nos dados oficiais!
+        const { id, avatarUrl } = req.body; 
         const database = await connectDB();
-        await database.collection('usuarios').updateOne({ id: id }, { $set: { avatar: avatarUrl } });
-        if (alunoRefId) await database.collection('alunos').updateOne({ id: alunoRefId }, { $set: { avatar: avatarUrl } });
+        
+        // Atualiza APENAS a identidade de acesso do WorkSpace (coleção usuarios)
+        await database.collection('usuarios').updateOne(
+            { id: id }, 
+            { $set: { avatar: avatarUrl } }
+        );
+        
         res.status(200).json({ success: true, avatar: avatarUrl });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao guardar a foto de perfil.' }); 
+    }
 });
 
 // ============================================================================
-// ⚙️ ROTA DE ALTERAÇÃO DE NOME (PERFIL) COM EFEITO CASCATA BLINDADO
+// ⚙️ ROTA DE ALTERAÇÃO DE NOME (PERFIL) - EFEITO CASCATA ABSOLUTO
 // ============================================================================
 router.put('/perfil/nome', verificarToken, async (req, res) => {
     try {
-        const { id, alunoRefId, novoNome } = req.body;
+        const { id, novoNome } = req.body;
         
         if (!novoNome || novoNome.trim() === '') {
             return res.status(400).json({ error: 'O nome não pode estar vazio.' });
@@ -666,37 +677,30 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
         
         const nomeAntigo = user.nome || user.login;
 
-        // 2. Atualiza o registo principal
+        // 🚀 2. INDEPENDÊNCIA DE CADASTRO: Atualiza APENAS o registo do WorkSpace
         await database.collection('usuarios').updateOne({ id: id }, { $set: { nome: nomeLimpo } });
-        if (alunoRefId) {
-            await database.collection('alunos').updateOne({ id: alunoRefId }, { $set: { nome: nomeLimpo } });
-        }
+        // (A linha que atualizava a coleção 'alunos' foi removida definitivamente)
 
-        // 3. 🚀 O EFEITO CASCATA DEFINITIVO (A MÁGICA DA LIMPEZA)
-        // Criamos uma lista de nomes que devem ser procurados na Base de Dados
+        // 3. 🚀 O EFEITO CASCATA ABSOLUTO (Varre todas as veias do WorkSpace)
         const nomesParaAtualizar = [nomeAntigo];
         
-        // Se quem está a mudar o nome for o Gestor, varremos também os posts antigos que ficaram presos com o nome padrão!
         if (user.tipo === 'Gestor' || user.login === 'gestor' || nomeAntigo === 'Gestor Principal') {
             nomesParaAtualizar.push('Gestor Principal');
         }
 
-        // O filtro mágico que procura qualquer postagem que tenha o nome antigo OU "Gestor Principal"
         const filtroBusca = { autorNome: { $in: nomesParaAtualizar } };
 
-        // Atualiza as publicações principais
+        // A) Atualiza as publicações principais (Feed)
         await database.collection('workspace_posts').updateMany(
-            filtroBusca,
-            { $set: { autorNome: nomeLimpo } }
+            filtroBusca, { $set: { autorNome: nomeLimpo } }
         );
 
-        // Atualiza as mensagens do Bate-papo
+        // B) Atualiza as mensagens do Bate-papo
         await database.collection('workspace_chats').updateMany(
-            filtroBusca,
-            { $set: { autorNome: nomeLimpo } }
+            filtroBusca, { $set: { autorNome: nomeLimpo } }
         );
 
-        // Atualiza os comentários dentro dos posts
+        // C) Atualiza os comentários dentro dos posts
         const postsComComentarios = await database.collection('workspace_posts').find({ "comentarios.autorNome": { $in: nomesParaAtualizar } }).toArray();
         for (let post of postsComComentarios) {
             const novosComentarios = post.comentarios.map(c => {
@@ -705,6 +709,27 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
             });
             await database.collection('workspace_posts').updateOne({ id: post.id }, { $set: { comentarios: novosComentarios } });
         }
+
+        // D) 🚀 NOVIDADE: Atualiza as Entregas de Exercícios e Provas!
+        await database.collection('workspace_entregas').updateMany(
+            { alunoNome: { $in: nomesParaAtualizar } },
+            { $set: { alunoNome: nomeLimpo } }
+        );
+        // Atualiza as Provas (caso o nome da coleção seja workspace_entregas_provas)
+        await database.collection('workspace_entregas_provas').updateMany(
+            { alunoNome: { $in: nomesParaAtualizar } },
+            { $set: { alunoNome: nomeLimpo } }
+        );
+
+        // E) 🚀 NOVIDADE: Atualiza o histórico de Notificações (Sininho)
+        await database.collection('workspace_notificacoes').updateMany(
+            { remetenteNome: { $in: nomesParaAtualizar } },
+            { $set: { remetenteNome: nomeLimpo } }
+        );
+        await database.collection('workspace_notificacoes').updateMany(
+            { destinatarioNome: { $in: nomesParaAtualizar } },
+            { $set: { destinatarioNome: nomeLimpo } }
+        );
 
         res.status(200).json({ success: true, nome: nomeLimpo, nomeAntigo: nomeAntigo });
     } catch (error) {
