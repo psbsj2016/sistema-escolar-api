@@ -1159,10 +1159,18 @@ router.put('/eventos/:id', verificarToken, async (req, res) => {
 router.delete('/eventos/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
+        
+        // 1. Apaga a instrução do exercício principal
         await database.collection('eventos').deleteOne({ id: req.params.id });
-        await database.collection('entregas').deleteMany({ eventoId: req.params.id });
+        
+        // 2. 🚀 CORREÇÃO: Apaga as entregas da gaveta correta do WorkSpace!
+        await database.collection('workspace_entregas').deleteMany({ eventoId: req.params.id });
+        
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { 
+        console.error("Erro ao apagar exercício:", error);
+        res.status(500).json({ error: 'Erro ao apagar o exercício.' }); 
+    }
 });
 
 // ============================================================================
