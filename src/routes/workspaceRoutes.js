@@ -713,6 +713,44 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 💬 GESTÃO DE FEEDBACKS DO PROFESSOR (EDITAR E APAGAR)
+// ============================================================================
+
+router.put('/entregas/:entregaId/feedback/:feedbackId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const { texto } = req.body;
+        
+        await database.collection('workspace_entregas').updateOne(
+            { id: req.params.entregaId, "feedbacks.id": req.params.feedbackId },
+            { $set: { "feedbacks.$.texto": texto } }
+        );
+
+        // Dispara um recarregamento silencioso nas telas (SSE)
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', { type: 'NOVO_FEEDBACK', entregaId: req.params.entregaId, escolaId: 'DEFAULT' });
+        }
+        res.status(200).json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Erro ao editar feedback.' }); }
+});
+
+router.delete('/entregas/:entregaId/feedback/:feedbackId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        
+        await database.collection('workspace_entregas').updateOne(
+            { id: req.params.entregaId },
+            { $pull: { feedbacks: { id: req.params.feedbackId } } }
+        );
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', { type: 'NOVO_FEEDBACK', entregaId: req.params.entregaId, escolaId: 'DEFAULT' });
+        }
+        res.status(200).json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Erro ao apagar feedback.' }); }
+});
+
 // 🚀 Guardar a Entrega de Exercício/Avaliação e AVISAR O PROFESSOR
 router.post('/entregas', verificarToken, async (req, res) => {
     try {
@@ -975,9 +1013,22 @@ router.post('/eventos', verificarToken, async (req, res) => {
 router.put('/eventos/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        await database.collection('eventos').updateOne({ id: req.params.id }, { $set: { descricao: req.body.descricao } });
+        
+        // 🚀 O NOVO MOTOR: Atualiza dinamicamente qualquer campo que o professor envie!
+        const updateFields = {};
+        if (req.body.titulo) updateFields.titulo = req.body.titulo;
+        if (req.body.data) updateFields.data = req.body.data;
+        if (req.body.turma) updateFields.turma = req.body.turma;
+        if (req.body.turmaNome) updateFields.turmaNome = req.body.turmaNome;
+        if (req.body.descricao !== undefined) updateFields.descricao = req.body.descricao;
+        if (req.body.anexoUrl !== undefined) updateFields.anexoUrl = req.body.anexoUrl;
+
+        await database.collection('eventos').updateOne(
+            { id: req.params.id }, 
+            { $set: updateFields }
+        );
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao editar exercício.' }); }
 });
 
 router.delete('/eventos/:id', verificarToken, async (req, res) => {
