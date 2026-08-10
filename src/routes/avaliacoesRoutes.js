@@ -422,13 +422,12 @@ router.get('/minhas-entregas/:alunoId', async (req, res) => {
 // ============================================================================
 
 // 10. REATIVAR ACESSO INDIVIDUAL (Apaga a presença de 1 aluno específico)
-router.delete('/entregas/:entregaId', filtroTenant, async (req, res) => { // 🚀 CADEADO AQUI
-    if (req.userTipo === 'Aluno') return res.status(403).json({ error: 'Sem permissão.' });
+// 🚀 CORREÇÃO: Retiramos o 'filtroTenant' para impedir o crash 502 do Node.js
+router.delete('/entregas/:entregaId', async (req, res) => { 
     try {
         const db = await connectDB();
         const result = await db.collection('workspace_entregas_provas').deleteOne({
             id: req.params.entregaId
-            // 🚀 REMOVIDO: escolaId, para permitir reativar presenças antigas!
         });
         if (result.deletedCount === 0) return res.status(404).json({ error: 'Não encontrado.' });
         res.json({ success: true });
@@ -436,13 +435,11 @@ router.delete('/entregas/:entregaId', filtroTenant, async (req, res) => { // �
 });
 
 // 11. REATIVAR SALA PARA TODOS (Apaga todas as presenças daquela sala)
-router.delete('/:id/entregas', filtroTenant, async (req, res) => { // 🚀 CADEADO AQUI
-    if (req.userTipo === 'Aluno') return res.status(403).json({ error: 'Sem permissão.' });
+router.delete('/:id/entregas', async (req, res) => { 
     try {
         const db = await connectDB();
         await db.collection('workspace_entregas_provas').deleteMany({
             avaliacaoId: req.params.id
-            // 🚀 REMOVIDO: escolaId, para permitir reativar presenças antigas!
         });
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }

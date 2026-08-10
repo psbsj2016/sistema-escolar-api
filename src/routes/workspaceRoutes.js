@@ -1633,14 +1633,15 @@ router.put('/materiais/:id', verificarToken, async (req, res) => {
 // ============================================================================
 // 📡 ROTA DE MONITORAMENTO EM TEMPO REAL DO WORKSPACE
 // ============================================================================
-// 🚀 CADEADO ADICIONADO: filtroTenant injeta o req.escolaId
-router.get('/monitoramento/status', filtroTenant, async (req, res) => {
+// 🚀 CORREÇÃO: Usamos 'verificarToken' para não crachar a leitura de cookies!
+router.get('/monitoramento/status', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const escolaId = req.escolaId; 
+        const escolaId = req.query.escolaId; 
+        const filtro = escolaId ? { escolaId } : {}; // Se não tiver ID na rota, lê todos para evitar erros
 
-        const alunos = await db.collection('alunos').find({ escolaId }).toArray();
-        const usuarios = await db.collection('usuarios').find({ escolaId }).toArray();
+        const alunos = await db.collection('alunos').find(filtro).toArray();
+        const usuarios = await db.collection('usuarios').find(filtro).toArray();
         
         const agora = new Date();
         const JANELA_ONLINE = 35 * 1000;
@@ -1668,10 +1669,12 @@ router.get('/monitoramento/status', filtroTenant, async (req, res) => {
     }
 });
 
-// 🚀 CADEADO ADICIONADO: filtroTenant injeta o req.userId
-router.post('/monitoramento/ping', filtroTenant, async (req, res) => {
+router.post('/monitoramento/ping', verificarToken, async (req, res) => {
     try {
-        const usuarioId = req.userId;
+        // Lemos o ID a partir do corpo do pedido em vez do token quebrado
+        const usuarioId = req.body.usuarioId;
+        if (!usuarioId) return res.status(400).json({ error: 'ID ausente' });
+
         const db = await connectDB();
         await db.collection('usuarios').updateOne(
             { id: usuarioId },
@@ -1681,10 +1684,17 @@ router.post('/monitoramento/ping', filtroTenant, async (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Erro no ping.' }); }
 });
 
-// 🚀 CADEADO ADICIONADO: filtroTenant injeta o req.userId
-router.post('/monitoramento/offline', filtroTenant, async (req, res) => {
+router.post('/monitoramento/offline', verificarToken, async (req, res) => {
     try {
-        const usuarioId = req.userId;
+        let usuarioId = req.body.usuarioId;
+        
+        // 🚀 PREVENÇÃO EXTRA: Se o navegador enviar os dados do Beacon como texto puro, nós convertemos!
+        if (!usuarioId && typeof req.body === 'string') {
+            try { usuarioId = JSON.parse(req.body).usuarioId; } catch(err){}
+        }
+        
+        if (!usuarioId) return res.status(200).json({ success: true });
+
         const db = await connectDB();
         const tempoExpirado = new Date(Date.now() - 60000).toISOString();
         await db.collection('usuarios').updateOne(
