@@ -671,36 +671,40 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
         const nomeLimpo = String(novoNome).trim();
         const database = await connectDB();
 
-        // 1. Descobre quem é o utilizador e qual era o seu nome antigo
+        // 1. Descobre quem é o utilizador
         const user = await database.collection('usuarios').findOne({ id: id });
         if (!user) return res.status(404).json({ error: 'Conta de acesso não encontrada.' });
         
-        const nomeAntigo = user.nome || user.login;
-
-        // 🚀 2. INDEPENDÊNCIA DE CADASTRO: Atualiza APENAS o registo do WorkSpace
-        await database.collection('usuarios').updateOne({ id: id }, { $set: { nome: nomeLimpo } });
-        // (A linha que atualizava a coleção 'alunos' foi removida definitivamente)
-
-        // 3. 🚀 O EFEITO CASCATA ABSOLUTO (Varre todas as veias do WorkSpace)
-        const nomesParaAtualizar = [nomeAntigo];
+        // 2. Coleta TODOS os nomes possíveis (Oficial da Secretaria + Antigos do WorkSpace)
+        let nomesParaAtualizar = [user.nome, user.login].filter(Boolean);
         
-        if (user.tipo === 'Gestor' || user.login === 'gestor' || nomeAntigo === 'Gestor Principal') {
+        if (user.alunoRefId) {
+            const alunoOficial = await database.collection('alunos').findOne({ id: user.alunoRefId });
+            if (alunoOficial && alunoOficial.nome) {
+                nomesParaAtualizar.push(alunoOficial.nome);
+            }
+        }
+        
+        if (user.tipo === 'Gestor' || user.login === 'gestor' || nomesParaAtualizar.includes('Gestor Principal')) {
             nomesParaAtualizar.push('Gestor Principal');
         }
 
+        // Remove nomes duplicados
+        nomesParaAtualizar = [...new Set(nomesParaAtualizar)];
+
+        // 3. Atualiza a Identidade INDEPENDENTE do WorkSpace
+        await database.collection('usuarios').updateOne({ id: id }, { $set: { nome: nomeLimpo } });
+
+        // ====================================================================
+        // 4. 🚀 O EFEITO CASCATA ABSOLUTO (Varre todas as veias do WorkSpace)
+        // ====================================================================
         const filtroBusca = { autorNome: { $in: nomesParaAtualizar } };
 
-        // A) Atualiza as publicações principais (Feed)
-        await database.collection('workspace_posts').updateMany(
-            filtroBusca, { $set: { autorNome: nomeLimpo } }
-        );
+        // A) Publicações e Chats
+        await database.collection('workspace_posts').updateMany(filtroBusca, { $set: { autorNome: nomeLimpo } });
+        await database.collection('workspace_chats').updateMany(filtroBusca, { $set: { autorNome: nomeLimpo } });
 
-        // B) Atualiza as mensagens do Bate-papo
-        await database.collection('workspace_chats').updateMany(
-            filtroBusca, { $set: { autorNome: nomeLimpo } }
-        );
-
-        // C) Atualiza os comentários dentro dos posts
+        // B) Comentários dos posts
         const postsComComentarios = await database.collection('workspace_posts').find({ "comentarios.autorNome": { $in: nomesParaAtualizar } }).toArray();
         for (let post of postsComComentarios) {
             const novosComentarios = post.comentarios.map(c => {
@@ -710,18 +714,20 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
             await database.collection('workspace_posts').updateOne({ id: post.id }, { $set: { comentarios: novosComentarios } });
         }
 
-        // D) 🚀 NOVIDADE: Atualiza as Entregas de Exercícios e Provas!
+        // C) 🚀 CORREÇÃO CRÍTICA: Atualiza os Exercícios e Provas baseando-se no ID do Aluno!
+        const idsDoAluno = [String(id)];
+        if (user.alunoRefId) idsDoAluno.push(String(user.alunoRefId));
+
         await database.collection('workspace_entregas').updateMany(
-            { alunoNome: { $in: nomesParaAtualizar } },
+            { alunoId: { $in: idsDoAluno } },
             { $set: { alunoNome: nomeLimpo } }
         );
-        // Atualiza as Provas (caso o nome da coleção seja workspace_entregas_provas)
         await database.collection('workspace_entregas_provas').updateMany(
-            { alunoNome: { $in: nomesParaAtualizar } },
+            { alunoId: { $in: idsDoAluno } },
             { $set: { alunoNome: nomeLimpo } }
         );
 
-        // E) 🚀 NOVIDADE: Atualiza o histórico de Notificações (Sininho)
+        // D) Histórico de Notificações
         await database.collection('workspace_notificacoes').updateMany(
             { remetenteNome: { $in: nomesParaAtualizar } },
             { $set: { remetenteNome: nomeLimpo } }
@@ -731,7 +737,19 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
             { $set: { destinatarioNome: nomeLimpo } }
         );
 
-        res.status(200).json({ success: true, nome: nomeLimpo, nomeAntigo: nomeAntigo });
+        // E) Feedbacks do Professor (Se um professor mudar de nome, atualiza os balões de feedback dele)
+        if (user.tipo !== 'Aluno') {
+            const entregasComFeedbacks = await database.collection('workspace_entregas').find({ "feedbacks.autorNome": { $in: nomesParaAtualizar } }).toArray();
+            for (let ent of entregasComFeedbacks) {
+                const novosFeedbacks = ent.feedbacks.map(f => {
+                    if (nomesParaAtualizar.includes(f.autorNome)) f.autorNome = nomeLimpo;
+                    return f;
+                });
+                await database.collection('workspace_entregas').updateOne({ id: ent.id }, { $set: { feedbacks: novosFeedbacks } });
+            }
+        }
+
+        res.status(200).json({ success: true, nome: nomeLimpo, nomeAntigo: nomesParaAtualizar[0] });
     } catch (error) {
         console.error("🚨 Erro ao atualizar o nome do perfil e cascata:", error);
         res.status(500).json({ error: 'Erro interno ao tentar atualizar o nome.' });
