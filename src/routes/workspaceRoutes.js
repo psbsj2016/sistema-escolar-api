@@ -1013,8 +1013,13 @@ router.post('/eventos', verificarToken, async (req, res) => {
 router.put('/eventos/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
+        const eventoId = req.params.id;
         
-        // 🚀 O NOVO MOTOR: Atualiza dinamicamente qualquer campo que o professor envie!
+        // 1. Vai buscar a tarefa antiga para saber quem foi o autor original e a escola
+        const eventoOriginal = await database.collection('eventos').findOne({ id: eventoId });
+        if (!eventoOriginal) return res.status(404).json({ error: 'Atividade não encontrada.' });
+
+        // 2. Atualiza a atividade com os novos dados do professor
         const updateFields = {};
         if (req.body.titulo) updateFields.titulo = req.body.titulo;
         if (req.body.data) updateFields.data = req.body.data;
@@ -1023,12 +1028,89 @@ router.put('/eventos/:id', verificarToken, async (req, res) => {
         if (req.body.descricao !== undefined) updateFields.descricao = req.body.descricao;
         if (req.body.anexoUrl !== undefined) updateFields.anexoUrl = req.body.anexoUrl;
 
-        await database.collection('eventos').updateOne(
-            { id: req.params.id }, 
-            { $set: updateFields }
-        );
+        await database.collection('eventos').updateOne({ id: eventoId }, { $set: updateFields });
+
+        // ====================================================================
+        // 🚀 O MOTOR DE ANULAÇÃO JUSTA E NOTIFICAÇÕES SEPARADAS
+        // ====================================================================
+        try {
+            // A) Descobre quem já tinha entregado o trabalho
+            const entregasAnteriores = await database.collection('workspace_entregas').find({ eventoId: eventoId }).toArray();
+            const alunosQueEntregaramIds = entregasAnteriores.map(e => String(e.alunoId));
+            const alunosQueEntregaramNomes = entregasAnteriores.map(e => e.alunoNome);
+
+            // B) Apaga (anula) as entregas existentes na Base de Dados
+            if (entregasAnteriores.length > 0) {
+                await database.collection('workspace_entregas').deleteMany({ eventoId: eventoId });
+            }
+
+            // C) Vai buscar os alunos da turma para enviar os alertas adequados
+            const escolaId = eventoOriginal.escolaId || 'DEFAULT';
+            const autorDaTarefa = eventoOriginal.autorNome || 'Professor';
+            const tituloNovo = req.body.titulo || eventoOriginal.titulo || 'Exercício Atualizado';
+            const turmaAlvo = req.body.turma || eventoOriginal.turma || 'global';
+            
+            const todosAlunos = await database.collection('alunos').find({ escolaId: escolaId }).toArray();
+            
+            // Filtra só os alunos a quem o exercício se destina
+            const alunosDaTurma = todosAlunos.filter(a => {
+                if (turmaAlvo === 'global') return true;
+                const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                return minhasTurmas.some(t => String(t).toLowerCase() === String(turmaAlvo).toLowerCase() || String(t).toLowerCase() === String(req.body.turmaNome || eventoOriginal.turmaNome).toLowerCase());
+            });
+
+            const notificacoesArray = [];
+            const destinatariosGeral = [];
+
+            // D) Escreve os bilhetes personalizados para cada aluno
+            alunosDaTurma.forEach(aluno => {
+                const nomeAluno = aluno.nome || aluno.login;
+                if (!nomeAluno) return;
+                
+                destinatariosGeral.push(nomeAluno);
+
+                // Verifica se o aluno está na lista de quem foi prejudicado pela edição
+                const jaTinhaEntregue = alunosQueEntregaramIds.includes(String(aluno.id)) || alunosQueEntregaramNomes.includes(nomeAluno);
+
+                let mensagemAviso = '';
+                if (jaTinhaEntregue) {
+                    mensagemAviso = `fez modificações estruturais no exercício <strong>"${tituloNovo}"</strong>. <span style="color:#e74c3c;">A sua entrega anterior foi anulada. Por favor, leia as novas instruções e refaça a atividade.</span>`;
+                } else {
+                    mensagemAviso = `atualizou as instruções e regras do exercício <strong>"${tituloNovo}"</strong>. Confirme as novidades antes de enviar!`;
+                }
+
+                notificacoesArray.push({
+                    id: 'notif_upd_' + Date.now() + Math.random().toString(36).substring(7),
+                    escolaId: escolaId,
+                    destinatarioNome: nomeAluno,
+                    remetenteNome: autorDaTarefa,
+                    mensagem: mensagemAviso,
+                    origem: 'tarefa', // Abre o modal do exercício!
+                    origemId: eventoId,
+                    destinoNome: req.body.turmaNome || eventoOriginal.turmaNome || 'Geral',
+                    lida: false,
+                    data: new Date().toISOString()
+                });
+            });
+
+            // E) Guarda os alertas e dá o Grito Global
+            if (notificacoesArray.length > 0) {
+                await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                if (global.workspaceStream) {
+                    global.workspaceStream.emit('evento_realtime', {
+                        type: 'NOVA_NOTIFICACAO', destinatarios: destinatariosGeral, escolaId: escolaId
+                    });
+                }
+            }
+
+        } catch (erroLogica) {
+            console.error("Aviso: A tarefa foi atualizada, mas houve um erro ao processar anulações.", erroLogica);
+        }
+
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro ao editar exercício.' }); }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao processar edição da atividade.' }); 
+    }
 });
 
 router.delete('/eventos/:id', verificarToken, async (req, res) => {
