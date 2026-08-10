@@ -749,7 +749,7 @@ router.post('/entregas', verificarToken, async (req, res) => {
                         escolaId: escolaId,
                         destinatarioNome: nomeProf,
                         remetenteNome: nomeAluno,
-                        mensagem: `da ${turmaNome} enviou o exercício entitulado "${tituloTarefa}" na área de exercício. Confira.`,
+                        mensagem: `da turma de <strong>${turmaNome}</strong>, enviou o exercício intitulado <strong>"${tituloTarefa}"</strong> e já está disponível na área de exercícios. Confira 👀`,
                         origem: 'tarefa', // O clique no sino abrirá o modal de verificação!
                         origemId: novaEntrega.eventoId,
                         destinoNome: turmaNome,
@@ -795,6 +795,84 @@ router.get('/entregas/tarefa/:eventoId', verificarToken, async (req, res) => {
         const entregas = await database.collection('workspace_entregas').find({ eventoId: req.params.eventoId }).sort({ dataEntrega: -1 }).toArray();
         res.status(200).json(entregas);
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+// 🚀 OBTER DETALHES DE UMA ENTREGA (INCLUINDO FEEDBACKS)
+router.get('/entregas/:id', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const entrega = await db.collection('workspace_entregas').findOne({ id: req.params.id });
+        if (!entrega) return res.status(404).json({ error: 'Entrega não encontrada' });
+        res.status(200).json({ success: true, entrega });
+    } catch (error) { res.status(500).json({ error: 'Erro ao buscar entrega.' }); }
+});
+
+// 🚀 PROFESSOR ENVIA FEEDBACK AO ALUNO (E TOCA O SINO DELE)
+router.post('/entregas/:id/feedback', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { texto, professorNome } = req.body;
+        const entregaId = req.params.id;
+
+        const entrega = await db.collection('workspace_entregas').findOne({ id: entregaId });
+        if (!entrega) return res.status(404).json({ error: 'Entrega não encontrada.' });
+
+        const novoFeedback = {
+            id: crypto.randomUUID(),
+            autorNome: professorNome || 'Professor',
+            texto: texto,
+            data: new Date().toISOString()
+        };
+
+        // Guarda o comentário na gaveta do trabalho
+        await db.collection('workspace_entregas').updateOne(
+            { id: entregaId },
+            { $push: { feedbacks: novoFeedback } }
+        );
+
+        // ====================================================================
+        // 🚀 O GATILHO: Avisar o Aluno!
+        // ====================================================================
+        const escolaId = entrega.escolaId || 'DEFAULT';
+        const eventoId = entrega.eventoId;
+        const nomeAluno = entrega.alunoNome;
+
+        const notificacao = {
+            id: 'notif_fb_' + Date.now(),
+            escolaId: escolaId,
+            destinatarioNome: nomeAluno,
+            remetenteNome: professorNome,
+            mensagem: `avaliou e enviou um feedback no seu exercício: "${entrega.eventoTitulo}"`,
+            origem: 'feedback_tarefa', // 🚀 A Palavra Mágica para o Teletransporte!
+            origemId: `${eventoId}|${entrega.id}`, // Guardamos os 2 IDs juntos
+            destinoNome: 'Área de Exercícios',
+            lida: false,
+            data: new Date().toISOString()
+        };
+
+        await db.collection('workspace_notificacoes').insertOne(notificacao);
+
+        if (global.workspaceStream) {
+            // Toca o sininho do aluno
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'NOVA_NOTIFICACAO',
+                destinatarios: [nomeAluno],
+                escolaId: escolaId
+            });
+            // 🚀 Atualiza a janela de Feedback ao vivo (se ele já estiver lá dentro)
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'NOVO_FEEDBACK',
+                entregaId: entregaId,
+                feedback: novoFeedback,
+                escolaId: escolaId
+            });
+        }
+
+        res.status(201).json({ success: true, feedback: novoFeedback });
+    } catch (error) {
+        console.error("Erro ao enviar feedback:", error);
+        res.status(500).json({ error: 'Erro interno.' });
+    }
 });
 
 router.get('/avatars', verificarToken, async (req, res) => {
