@@ -49,16 +49,8 @@ const verificarToken = async (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
     
-    try {
-        if (req.body && req.body.id) {
-            const db = await connectDB();
-            await db.collection('usuarios').updateOne(
-                { id: req.body.id },
-                { $set: { ultimoAcesso: new Date().toISOString() } }
-            );
-        }
-    } catch (e) {}
-
+    // 🚀 O MOTOR "FANTASMA" FOI REMOVIDO!
+    // A presença online passa a ser controlada EXCLUSIVAMENTE pelo Heartbeat (/ping) e só quando a aba está aberta.
     next();
 };
 
@@ -1633,34 +1625,62 @@ router.put('/materiais/:id', verificarToken, async (req, res) => {
 // ============================================================================
 // 📡 ROTA DE MONITORAMENTO EM TEMPO REAL DO WORKSPACE
 // ============================================================================
-// 🚀 CORREÇÃO: Usamos 'verificarToken' para não crachar a leitura de cookies!
 router.get('/monitoramento/status', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const escolaId = req.query.escolaId; 
-        const filtro = escolaId ? { escolaId } : {}; // Se não tiver ID na rota, lê todos para evitar erros
+        const filtro = escolaId ? { escolaId } : {};
 
         const alunos = await db.collection('alunos').find(filtro).toArray();
         const usuarios = await db.collection('usuarios').find(filtro).toArray();
         
         const agora = new Date();
         const JANELA_ONLINE = 35 * 1000;
+        const relatorioFinal = [];
 
-        const relatorioFinal = [...alunos, ...usuarios.filter(u => u.tipo !== 'Aluno')].map(item => {
-            const isAluno = !!item.turma || !!item.turmas || alunos.find(a=>a.id===item.id);
-            const contaUser = isAluno ? usuarios.find(u => u.alunoRefId === item.id) : item;
+        // 1. Processar Alunos (BLINDADO CONTRA FALSOS POSITIVOS)
+        alunos.forEach(aluno => {
+            if (!aluno.id) return; // Ignora registos quebrados
+            
+            // 🚀 A CORREÇÃO MÁGICA: Garante que só junta o aluno ao utilizador se os IDs existirem de verdade!
+            const contaUser = usuarios.find(u => u.alunoRefId && String(u.alunoRefId) === String(aluno.id));
             const ultimoAcessoStr = contaUser?.ultimoAcesso || null;
             let isOnline = false;
+            
             if (ultimoAcessoStr) {
-                if ((agora.getTime() - new Date(ultimoAcessoStr).getTime()) <= JANELA_ONLINE) isOnline = true;
+                const ultimaData = new Date(ultimoAcessoStr).getTime();
+                if (!isNaN(ultimaData) && (agora.getTime() - ultimaData) <= JANELA_ONLINE) {
+                    isOnline = true;
+                }
             }
-            return {
-                id: item.id,
-                nome: item.nome || contaUser?.login,
-                login: contaUser?.login || 'Sem Acesso',
-                isOnline,
-                ultimoAcesso: ultimoAcessoStr || contaUser?.dataCriacao
-            };
+            
+            relatorioFinal.push({
+                id: aluno.id,
+                nome: aluno.nome || contaUser?.login || 'Aluno',
+                isOnline
+            });
+        });
+
+        // 2. Processar Equipa Pedagógica (Professores e Gestores)
+        usuarios.forEach(user => {
+            if (user.tipo === 'Aluno') return; // Já foram processados
+            if (!user.id) return;
+
+            const ultimoAcessoStr = user.ultimoAcesso || null;
+            let isOnline = false;
+            
+            if (ultimoAcessoStr) {
+                const ultimaData = new Date(ultimoAcessoStr).getTime();
+                if (!isNaN(ultimaData) && (agora.getTime() - ultimaData) <= JANELA_ONLINE) {
+                    isOnline = true;
+                }
+            }
+            
+            relatorioFinal.push({
+                id: user.id,
+                nome: user.nome || user.login || 'Equipa',
+                isOnline
+            });
         });
 
         res.status(200).json(relatorioFinal);
