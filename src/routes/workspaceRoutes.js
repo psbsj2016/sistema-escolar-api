@@ -10,12 +10,12 @@ const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary
 const { enviarParaR2 } = require('../config/cloudflareR2');
 const { filtroTenant } = require('../middlewares/auth');
 
-// 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 90 segundos e liberta a memória!
+// 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 15 MINUTOS (para suportar uploads gigantes de 700MB!)
 router.use((req, res, next) => {
-    req.setTimeout(90000, () => {
-        console.log('⚠️ Timeout na requisição atingido (90s). Destruindo conexão.');
+    req.setTimeout(900000, () => { // 900.000 ms = 15 minutos
+        console.log('⚠️ Timeout na requisição atingido (15m). Destruindo conexão.');
         if (!res.headersSent) {
-            res.status(408).json({ error: 'Tempo esgotado. O ficheiro é demasiado pesado para a nuvem.' });
+            res.status(408).json({ error: 'Tempo esgotado. A sua internet pode estar lenta para o tamanho do ficheiro.' });
         }
         req.destroy();
     });
@@ -35,13 +35,13 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// 🛡️ CONFIGURAÇÃO DE UPLOAD SEGURO COM LIMITES (10MB e 3 ficheiros)
+// 🛡️ CONFIGURAÇÃO DE UPLOAD DE ALTA CAPACIDADE COM LIMITES GIGANTES (800MB)
 const storage = multer.memoryStorage();
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 10 * 1024 * 1024,
-        files: 3 // Evita sobrecarga na RAM
+        fileSize: 800 * 1024 * 1024, // 🚀 Limite expandido para 800 MB!
+        files: 3 // Evita sobrecarga simultânea na RAM
     }
 });
 
@@ -124,8 +124,9 @@ router.post('/upload', verificarToken, (req, res) => {
                 if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
                     return res.status(400).json({ error: 'A ligação do aluno foi interrompida.' }); 
                 }
-                if (err.code === 'LIMIT_FILE_SIZE') {
-                    return res.status(400).json({ error: 'O ficheiro excede o limite de 10MB.' });
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                    // 🚀 Nova mensagem alinhada com a nossa nova capacidade
+                    return res.status(400).json({ error: 'O ficheiro excede o limite gigante de 800MB.' });
                 }
                 console.error('🚨 Erro ao receber ficheiro:', err);
                 return res.status(500).json({ error: 'Falha ao processar o ficheiro no servidor.' });
