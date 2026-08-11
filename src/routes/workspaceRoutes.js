@@ -92,13 +92,17 @@ router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
             return res.status(400).json({ error: 'Faltam dados do ficheiro para gerar a autorização.' });
         }
 
+        // 🚀 BLINDAGEM DE NUVEM: Remove espaços e acentos que quebram o link na Cloudflare R2!
+        const nomeSeguro = String(nomeFicheiro).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        const nomeFinal = `doc_${Date.now()}_${nomeSeguro}`;
+
         // Importamos a nossa nova máquina de bilhetes
         const { gerarLinkUploadDireto } = require('../config/cloudflareR2');
         
-        // Fabricamos o link VIP e o link final de leitura
-        const dadosAutorizacao = await gerarLinkUploadDireto(nomeFicheiro, tipoFicheiro);
+        // Fabricamos o link VIP e o link final de leitura com o nome perfeitamente limpo!
+        const dadosAutorizacao = await gerarLinkUploadDireto(nomeFinal, tipoFicheiro);
 
-        // Devolvemos ao navegador do aluno!
+        // Devolvemos ao navegador do aluno/professor!
         res.status(200).json({ success: true, ...dadosAutorizacao });
     } catch (erro) {
         console.error('🚨 Erro na Via Verde:', erro);
