@@ -1640,9 +1640,8 @@ router.get('/monitoramento/status', verificarToken, async (req, res) => {
 
         // 1. Processar Alunos (BLINDADO CONTRA FALSOS POSITIVOS)
         alunos.forEach(aluno => {
-            if (!aluno.id) return; // Ignora registos quebrados
+            if (!aluno.id) return; 
             
-            // 🚀 A CORREÇÃO MÁGICA: Garante que só junta o aluno ao utilizador se os IDs existirem de verdade!
             const contaUser = usuarios.find(u => u.alunoRefId && String(u.alunoRefId) === String(aluno.id));
             const ultimoAcessoStr = contaUser?.ultimoAcesso || null;
             let isOnline = false;
@@ -1657,13 +1656,14 @@ router.get('/monitoramento/status', verificarToken, async (req, res) => {
             relatorioFinal.push({
                 id: aluno.id,
                 nome: aluno.nome || contaUser?.login || 'Aluno',
-                isOnline
+                isOnline,
+                ultimoAcesso: ultimoAcessoStr // 🚀 A RESTAURAÇÃO: Devolve a data de acesso ao painel do Gestor!
             });
         });
 
         // 2. Processar Equipa Pedagógica (Professores e Gestores)
         usuarios.forEach(user => {
-            if (user.tipo === 'Aluno') return; // Já foram processados
+            if (user.tipo === 'Aluno') return; 
             if (!user.id) return;
 
             const ultimoAcessoStr = user.ultimoAcesso || null;
@@ -1679,7 +1679,8 @@ router.get('/monitoramento/status', verificarToken, async (req, res) => {
             relatorioFinal.push({
                 id: user.id,
                 nome: user.nome || user.login || 'Equipa',
-                isOnline
+                isOnline,
+                ultimoAcesso: ultimoAcessoStr // 🚀 A RESTAURAÇÃO: Devolve a data de acesso da Equipa!
             });
         });
 
