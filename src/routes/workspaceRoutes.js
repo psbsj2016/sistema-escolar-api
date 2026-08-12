@@ -117,24 +117,6 @@ router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
 const fs = require('fs');
 const os = require('os');
 
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, os.tmpdir()); // Salva o ficheiro gigante no disco rígido temporário do servidor
-    },
-    filename: function (req, file, cb) {
-        const nomeSeguro = file.originalname.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
-        cb(null, `upload_${Date.now()}_${nomeSeguro}`);
-    }
-});
-
-const upload = multer({
-    storage: storage,
-    limits: {
-        fileSize: 800 * 1024 * 1024, // 🚀 Limite expandido para 800 MB físicos!
-        files: 3 // Evita sobrecarga simultânea
-    }
-});
-
 const verificarToken = async (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
