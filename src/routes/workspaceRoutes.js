@@ -12,7 +12,7 @@ const { filtroTenant } = require('../middlewares/auth');
 
 // 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 15 MINUTOS (para suportar uploads gigantes de 700MB!)
 router.use((req, res, next) => {
-    req.setTimeout(900000, () => { // 900.000 ms = 15 minutos
+    req.setTimeout(900000, () => {
         console.log('⚠️ Timeout na requisição atingido (15m). Destruindo conexão.');
         if (!res.headersSent) {
             res.status(408).json({ error: 'Tempo esgotado. A sua internet pode estar lenta para o tamanho do ficheiro.' });
@@ -35,13 +35,25 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// 🛡️ CONFIGURAÇÃO DE UPLOAD DE ALTA CAPACIDADE COM LIMITES GIGANTES (800MB)
-const storage = multer.memoryStorage();
+// 🛡️ CONFIGURAÇÃO DE UPLOAD DE ALTA CAPACIDADE (SSD) - BLINDADO CONTRA EXPLOSÃO DE RAM
+const fs = require('fs');
+const os = require('os');
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, os.tmpdir()); // Salva o ficheiro gigante no disco rígido temporário do servidor
+    },
+    filename: function (req, file, cb) {
+        const nomeSeguro = file.originalname.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        cb(null, `upload_${Date.now()}_${nomeSeguro}`);
+    }
+});
+
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 800 * 1024 * 1024, // 🚀 Limite expandido para 800 MB!
-        files: 3 // Evita sobrecarga simultânea na RAM
+        fileSize: 800 * 1024 * 1024, // 🚀 Limite expandido para 800 MB físicos!
+        files: 3 // Evita sobrecarga simultânea
     }
 });
 
@@ -53,11 +65,6 @@ const verificarToken = async (req, res, next) => {
     // A presença online passa a ser controlada EXCLUSIVAMENTE pelo Heartbeat (/ping) e só quando a aba está aberta.
     next();
 };
-
-// ============================================================================
-// 🚀 TÚNEL DE CONEXÃO EM TEMPO REAL (SERVER-SENT EVENTS)
-// ============================================================================
-// (O resto do seu código continua a partir daqui com o router.get('/stream'...))
 
 
 // ============================================================================
