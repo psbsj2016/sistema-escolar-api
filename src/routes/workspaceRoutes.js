@@ -35,10 +35,6 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// 🛡️ CONFIGURAÇÃO DE UPLOAD DE ALTA CAPACIDADE (SSD) - BLINDADO CONTRA EXPLOSÃO DE RAM
-const fs = require('fs');
-const os = require('os');
-
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         cb(null, os.tmpdir()); // Salva o ficheiro gigante no disco rígido temporário do servidor
