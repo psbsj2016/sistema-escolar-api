@@ -110,6 +110,71 @@ router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
     }
 });
 
+// 🛡️ CONFIGURAÇÃO DE UPLOAD DE ALTA CAPACIDADE (SSD) - BLINDADO CONTRA EXPLOSÃO DE RAM
+const fs = require('fs');
+const os = require('os');
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, os.tmpdir()); // Salva o ficheiro gigante no disco rígido temporário do servidor
+    },
+    filename: function (req, file, cb) {
+        const nomeSeguro = file.originalname.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        cb(null, `upload_${Date.now()}_${nomeSeguro}`);
+    }
+});
+
+const upload = multer({
+    storage: storage,
+    limits: {
+        fileSize: 800 * 1024 * 1024, // 🚀 Limite expandido para 800 MB físicos!
+        files: 3 // Evita sobrecarga simultânea
+    }
+});
+
+const verificarToken = async (req, res, next) => {
+    const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
+    next();
+};
+
+// ============================================================================
+// 🚀 TÚNEL DE CONEXÃO EM TEMPO REAL E VIA VERDE (PODE MANTER OS SEUS COMO ESTÃO)
+// ============================================================================
+router.get('/stream', verificarToken, (req, res) => { 
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders(); 
+
+    const escolaId = req.query.escolaId;
+
+    const enviarEvento = (data) => {
+        if (data.escolaId === escolaId || data.escolaId === 'DEFAULT') {
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+        }
+    };
+
+    workspaceStream.on('evento_realtime', enviarEvento);
+    req.on('close', () => workspaceStream.off('evento_realtime', enviarEvento));
+});
+
+router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
+    try {
+        const { nomeFicheiro, tipoFicheiro } = req.body;
+        if (!nomeFicheiro || !tipoFicheiro) return res.status(400).json({ error: 'Faltam dados do ficheiro.' });
+
+        const nomeSeguro = String(nomeFicheiro).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        const nomeFinal = `doc_${Date.now()}_${nomeSeguro}`;
+        const { gerarLinkUploadDireto } = require('../config/cloudflareR2');
+        const dadosAutorizacao = await gerarLinkUploadDireto(nomeFinal, tipoFicheiro);
+
+        res.status(200).json({ success: true, ...dadosAutorizacao });
+    } catch (erro) {
+        res.status(500).json({ error: 'Erro ao comunicar com a nuvem de armazenamento.' });
+    }
+});
+
 // ============================================================================
 // 1. UPLOAD BLINDADO COM SINALEIRO INTELIGENTE (CLOUDINARY ↔ CLOUDFLARE R2)
 // ============================================================================
@@ -124,62 +189,56 @@ router.post('/upload', verificarToken, (req, res) => {
                 if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
                     return res.status(400).json({ error: 'A ligação do aluno foi interrompida.' }); 
                 }
-            if (err.code === 'LIMIT_FILE_SIZE') {
-                    // 🚀 Nova mensagem alinhada com a nossa nova capacidade
+                if (err.code === 'LIMIT_FILE_SIZE') {
                     return res.status(400).json({ error: 'O ficheiro excede o limite gigante de 800MB.' });
                 }
-                console.error('🚨 Erro ao receber ficheiro:', err);
                 return res.status(500).json({ error: 'Falha ao processar o ficheiro no servidor.' });
             }
 
-            if (!req.files || req.files.length === 0) {
-                return res.status(400).json({ error: 'Nenhum ficheiro recebido.' });
-            }
+            if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'Nenhum ficheiro recebido.' });
 
             try {
-                // 🚀 O SINALEIRO INTELIGENTE: Decide o destino de cada ficheiro
+                // 🚀 O SINALEIRO INTELIGENTE COM STREAM DO DISCO
                 const promessasUpload = req.files.map(file => {
-                    return new Promise(async (resolve, reject) => { // Adicionado 'async' aqui
+                    return new Promise(async (resolve, reject) => { 
                         try {
-                            // Limpa o nome do ficheiro (remove acentos e espaços)
                             let nomeOriginal = file.originalname || `ficheiro_${Date.now()}.jpg`;
                             let nomeSeguro = String(nomeOriginal).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                            
-                            // O Sinaleiro verifica a identidade do ficheiro
                             const ehDocumento = nomeSeguro.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip)$/i);
                             
                             if (ehDocumento) {
-                                // 🟢 ROTA 1: CLOUDFLARE R2 (Alta velocidade para Documentos)
-                                console.log(`🚀 Enviando DOCUMENTO para Cloudflare R2: ${nomeSeguro}`);
-                                const urlR2 = await enviarParaR2(file.buffer, nomeOriginal, file.mimetype);
-                                resolve({ url: urlR2, nome: file.originalname, tipo: file.mimetype });
+                                // 🟢 ROTA 1: CLOUDFLARE R2 (Bomba o ficheiro do disco para a nuvem via Stream)
+                                try {
+                                    console.log(`🚀 Enviando DOCUMENTO para Cloudflare R2: ${nomeSeguro}`);
+                                    const fileStream = fs.createReadStream(file.path);
+                                    const urlR2 = await enviarParaR2(fileStream, nomeOriginal, file.mimetype);
+                                    resolve({ url: urlR2, nome: file.originalname, tipo: file.mimetype });
+                                } finally {
+                                    // 🧹 Limpa o disco rígido após o envio (Sucesso ou Falha)
+                                    if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+                                }
                             } else {
-                                // 🔵 ROTA 2: CLOUDINARY (Fábrica de Otimização de Multimédia)
+                                // 🔵 ROTA 2: CLOUDINARY
                                 console.log(`📸 Enviando MULTIMÉDIA para Cloudinary: ${nomeSeguro}`);
-                                let recursoTipo = 'auto'; // O Cloudinary descobre sozinho se é imagem ou vídeo
+                                let recursoTipo = 'auto'; 
                                 let publicId = `${Date.now()}_${nomeSeguro.split('.')[0]}`;
 
-                                // Abre o canal de envio com o Cloudinary
-                                const streamEnvio = cloudinary.uploader.upload_stream(
-                                    { folder: 'workspace_escola', resource_type: recursoTipo, public_id: publicId },
-                                    (error, result) => {
-                                        if (error) reject(error);
-                                        else resolve({ url: result.secure_url, nome: file.originalname, tipo: file.mimetype });
-                                    }
-                                );
-                                
-                                // Despeja o ficheiro da memória para o Cloudinary
-                                streamEnvio.end(file.buffer);
+                                // O Cloudinary consegue ler o ficheiro diretamente do disco!
+                                cloudinary.uploader.upload(file.path, { folder: 'workspace_escola', resource_type: recursoTipo, public_id: publicId }, (error, result) => {
+                                    if (fs.existsSync(file.path)) fs.unlinkSync(file.path); // 🧹 Faxina do disco
+                                    
+                                    if (error) reject(error);
+                                    else resolve({ url: result.secure_url, nome: file.originalname, tipo: file.mimetype });
+                                });
                             }
                         } catch (errUpload) {
+                            if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
                             reject(errUpload);
                         }
                     });
                 });
 
-                // Espera que todos os ficheiros (da Cloudflare e do Cloudinary) terminem o envio
                 const urls = await Promise.all(promessasUpload);
-                
                 if (!res.headersSent) res.status(200).json({ success: true, anexos: urls });
                 
             } catch (processError) {
