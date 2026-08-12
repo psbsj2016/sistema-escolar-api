@@ -117,11 +117,6 @@ router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
 const fs = require('fs');
 const os = require('os');
 
-const verificarToken = async (req, res, next) => {
-    const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
-    next();
-};
 
 // ============================================================================
 // 🚀 TÚNEL DE CONEXÃO EM TEMPO REAL E VIA VERDE (PODE MANTER OS SEUS COMO ESTÃO)
