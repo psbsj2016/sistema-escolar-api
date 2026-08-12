@@ -211,8 +211,9 @@ router.post('/upload', verificarToken, (req, res) => {
                         try {
                             let nomeOriginal = file.originalname || `ficheiro_${Date.now()}.jpg`;
                             let nomeSeguro = String(nomeOriginal).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                            // 🚀 CORREÇÃO: Adicionadas extensões .pps, .ppsx, .csv e .rar à lista VIP de documentos pesados!
-const ehDocumento = nomeSeguro.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|pps|ppsx|txt|zip|rar|csv)$/i);
+                            
+                            // 🚀 O DICIONÁRIO ATUALIZADO: Agora ele reconhece .pps e .ppsx e manda-os para o lugar certo!
+                            const ehDocumento = nomeSeguro.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|pps|ppsx|txt|zip|rar|csv)$/i);
                             
                             if (ehDocumento) {
                                 // 🟢 ROTA 1: CLOUDFLARE R2 (Bomba o ficheiro do disco para a nuvem via Stream)
