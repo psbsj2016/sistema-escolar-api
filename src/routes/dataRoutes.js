@@ -107,14 +107,115 @@ router.post('/:collection', async (req, res) => {
     res.json(body);
 });
 
+// ============================================================================
+// 🔄 ROTA DE EDIÇÃO (COM EFEITO CASCATA ABSOLUTO PARA TURMAS)
+// ============================================================================
 router.put('/:collection/:id', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).json({ error: 'Coleção não permitida.' });
     const database = await connectDB();
     const { _id, escolaId, ...body } = req.body;
+
+    // ====================================================================
+    // 🕵️‍♂️ 1. O DETETIVE: Verifica se é uma Turma e se o nome mudou
+    // ====================================================================
+    let nomeAntigo = null;
+    let nomeNovo = body.nome;
+    let precisaDeCascata = false;
+
+    if (req.params.collection === 'turmas' && nomeNovo) {
+        const turmaOriginal = await database.collection('turmas').findOne({ id: req.params.id, ...filtroTenant(req) });
+        if (turmaOriginal && turmaOriginal.nome !== nomeNovo) {
+            nomeAntigo = turmaOriginal.nome;
+            precisaDeCascata = true;
+        }
+    }
+
+    // ====================================================================
+    // 💾 2. ATUALIZA A FICHA ORIGINAL (Comportamento Normal)
+    // ====================================================================
     const resultado = await database.collection(req.params.collection).updateOne(
         { id: req.params.id, ...filtroTenant(req) }, { $set: body }
     );
+    
     if (resultado.matchedCount === 0) return res.status(404).json({ error: 'Registro não encontrado.' });
+
+    // ====================================================================
+    // 🚀 3. O EFEITO CASCATA ABSOLUTO (Varre a Secretaria e o Workspace)
+    // ====================================================================
+    if (precisaDeCascata) {
+        try {
+            const eid = req.escolaId; 
+            console.log(`🔄 Iniciando Efeito Cascata: Substituindo Turma '${nomeAntigo}' por '${nomeNovo}'...`);
+
+            // A) ALUNOS (Verifica se está guardado como Texto simples ou Lista)
+            await database.collection('alunos').updateMany(
+                { turma: nomeAntigo, escolaId: eid, turma: { $type: "string" } },
+                { $set: { turma: nomeNovo } }
+            );
+            await database.collection('alunos').updateMany(
+                { turmas: nomeAntigo, escolaId: eid, turmas: { $type: "array" } },
+                { $set: { "turmas.$": nomeNovo } }
+            );
+
+            // B) TAREFAS / EVENTOS (Sistema Principal)
+            await database.collection('eventos').updateMany(
+                { turmaNome: nomeAntigo, escolaId: eid },
+                { $set: { turmaNome: nomeNovo } }
+            );
+
+            // C) AVALIAÇÕES (Workspace)
+            await database.collection('workspace_avaliacoes').updateMany(
+                { destinoNome: nomeAntigo, escolaId: eid },
+                { $set: { destinoNome: nomeNovo } }
+            );
+
+            // D) MATERIAIS DA ESTANTE (Pode ser String nas antigas ou Array nas novas)
+            await database.collection('workspace_materiais').updateMany(
+                { destinoNome: nomeAntigo, escolaId: eid, destinoNome: { $type: "string" } },
+                { $set: { destinoNome: nomeNovo } }
+            );
+            await database.collection('workspace_materiais').updateMany(
+                { destinoNome: nomeAntigo, escolaId: eid, destinoNome: { $type: "array" } },
+                { $set: { "destinoNome.$": nomeNovo } }
+            );
+
+            // E) ENTREGAS DE TRABALHOS (Workspace)
+            await database.collection('workspace_entregas').updateMany(
+                { turmaNome: nomeAntigo, escolaId: eid },
+                { $set: { turmaNome: nomeNovo } }
+            );
+
+            // F) PUBLICAÇÕES DO FEED (Workspace)
+            await database.collection('workspace_posts').updateMany(
+                { destinoNome: nomeAntigo, escolaId: eid, destinoNome: { $type: "string" } },
+                { $set: { destinoNome: nomeNovo } }
+            );
+            await database.collection('workspace_posts').updateMany(
+                { destinoNome: nomeAntigo, escolaId: eid, destinoNome: { $type: "array" } },
+                { $set: { "destinoNome.$": nomeNovo } }
+            );
+
+            // G) NOTIFICAÇÕES (Workspace)
+            await database.collection('workspace_notificacoes').updateMany(
+                { destinoNome: nomeAntigo, escolaId: eid },
+                { $set: { destinoNome: nomeNovo } }
+            );
+
+            // H) O GRITO DE ALERTA: Força a interface visual dos Chats a atualizar o nome ao vivo!
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'SALA_UPDATE',
+                    turmaId: req.params.id,
+                    escolaId: eid || 'DEFAULT'
+                });
+            }
+            
+            console.log(`✅ Efeito Cascata Concluído! Tudo atualizado para '${nomeNovo}'.`);
+        } catch (errCascata) {
+            console.error("🚨 Erro Crítico durante o Efeito Cascata:", errCascata);
+        }
+    }
+
     res.json({ success: true, ...body });
 });
 
