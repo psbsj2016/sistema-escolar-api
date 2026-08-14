@@ -1772,4 +1772,73 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
     } catch (e) { res.status(200).json({ success: true }); }
 });
 
+// ============================================================================
+// 🏆 RANKING E ALGORITMO COLETIVO (BAÚ DO INGLÊS)
+// ============================================================================
+router.post('/ingles/xp', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { xp, streak } = req.body;
+        
+        // Grava as estatísticas do aluno na base de dados, atualizando ou criando (upsert)
+        await db.collection('workspace_ingles_stats').updateOne(
+            { userId: req.usuario.id },
+            { 
+                $set: { 
+                    userId: req.usuario.id,
+                    escolaId: req.usuario.escolaId,
+                    nome: req.usuario.nome || req.usuario.login,
+                    xp: parseInt(xp) || 0,
+                    streak: parseInt(streak) || 1,
+                    ultimaAtividade: new Date().toISOString()
+                } 
+            },
+            { upsert: true }
+        );
+        
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao sincronizar pontuação.' }); }
+});
+
+router.get('/ingles/ranking', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const escolaId = req.query.escolaId || req.usuario.escolaId;
+        
+        // Puxa o top 50 alunos ordenados por XP (do maior para o menor)
+        const ranking = await db.collection('workspace_ingles_stats')
+            .find({ escolaId: escolaId, xp: { $gt: 0 } })
+            .sort({ xp: -1 })
+            .limit(50)
+            .toArray();
+            
+        res.status(200).json({ success: true, ranking });
+    } catch (error) { res.status(500).json({ error: 'Erro ao buscar o ranking global.' }); }
+});
+
+router.get('/ingles/dados', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        // O Professor e os Alunos puxam sempre a inteligência da sua Escola
+        let dados = await db.collection('workspace_ingles_data').findOne({ escolaId: req.usuario.escolaId });
+        res.status(200).json({ success: true, dados: dados || {} });
+    } catch (error) { res.status(500).json({ error: 'Erro ao conectar à inteligência.' }); }
+});
+
+router.put('/ingles/dados', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { words, phrases, quizzes, pictures, submissions, pool } = req.body;
+        
+        // Salva todo o dataset da escola
+        await db.collection('workspace_ingles_data').updateOne(
+            { escolaId: req.usuario.escolaId },
+            { $set: { words, phrases, quizzes, pictures, submissions, pool, ultimaAtualizacao: new Date().toISOString() } },
+            { upsert: true }
+        );
+        
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao atualizar inteligência.' }); }
+});
+
 module.exports = router;
