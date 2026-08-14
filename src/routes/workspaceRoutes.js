@@ -1780,10 +1780,16 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
 router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { xp, streak } = req.body;
+        // Lemos os dados DIRETAMENTE do pacote enviado pelo ecrã
+        const { userId, escolaId, nome, xp, streak } = req.body;
+        
+        if (!userId) return res.status(400).json({ error: 'ID do utilizador em falta.' });
+        
+        const escolaIdSeguro = escolaId || 'DEFAULT';
+
         await db.collection('workspace_ingles_stats').updateOne(
-            { userId: req.usuario.id },
-            { $set: { userId: req.usuario.id, escolaId: req.usuario.escolaId, nome: req.usuario.nome || req.usuario.login, xp: parseInt(xp) || 0, streak: parseInt(streak) || 1, ultimaAtividade: new Date().toISOString() } },
+            { userId: userId },
+            { $set: { userId: userId, escolaId: escolaIdSeguro, nome: nome, xp: parseInt(xp) || 0, streak: parseInt(streak) || 1, ultimaAtividade: new Date().toISOString() } },
             { upsert: true }
         );
         res.status(200).json({ success: true });
@@ -1794,7 +1800,7 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
 router.get('/ingles/ranking', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const escolaId = req.query.escolaId || req.usuario.escolaId;
+        const escolaId = req.query.escolaId || 'DEFAULT'; 
         const ranking = await db.collection('workspace_ingles_stats').find({ escolaId: escolaId, xp: { $gt: 0 } }).sort({ xp: -1 }).limit(50).toArray();
         res.status(200).json({ success: true, ranking });
     } catch (error) { res.status(500).json({ error: 'Erro no ranking.' }); }
@@ -1804,7 +1810,8 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
 router.get('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        let dados = await db.collection('workspace_ingles_data').findOne({ escolaId: req.usuario.escolaId });
+        const escolaId = req.query.escolaId || 'DEFAULT';
+        let dados = await db.collection('workspace_ingles_data').findOne({ escolaId: escolaId });
         res.status(200).json({ success: true, dados: dados || {} });
     } catch (error) { res.status(500).json({ error: 'Erro ao ler inteligência.' }); }
 });
@@ -1813,20 +1820,23 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
 router.put('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { words, phrases, quizzes, pictures, submissions, pool } = req.body;
-        
+        const { escolaId, words, phrases, quizzes, pictures, submissions, pool } = req.body;
+        const escolaIdSeguro = escolaId || 'DEFAULT';
+
         await db.collection('workspace_ingles_data').updateOne(
-            { escolaId: req.usuario.escolaId },
-            { $set: { words, phrases, quizzes, pictures, submissions, pool, ultimaAtualizacao: new Date().toISOString() } },
+            { escolaId: escolaIdSeguro },
+            { $set: { escolaId: escolaIdSeguro, words, phrases, quizzes, pictures, submissions, pool, ultimaAtualizacao: new Date().toISOString() } },
             { upsert: true }
         );
         
-        // 🚀 O GRITO NA NUVEM: Avisa todos os computadores/telemóveis na mesma fração de segundo!
+        // 🚀 O GRITO NA NUVEM
         if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', { type: 'BAU_INGLES_UPDATE', escolaId: req.usuario.escolaId });
+            global.workspaceStream.emit('evento_realtime', { type: 'BAU_INGLES_UPDATE', escolaId: escolaIdSeguro });
         }
         res.status(200).json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro ao gravar inteligência.' }); }
 });
+
+module.exports = router;
 
 module.exports = router;
