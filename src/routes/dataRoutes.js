@@ -66,6 +66,29 @@ router.put('/sistema/notificacoes/lida/:id', async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao marcar como lida.' }); }
 });
 
+// ============================================================================
+// 💉 VACINA DE HIGIENIZAÇÃO (LIMPEZA DE TURMAS FANTASMAS)
+// ============================================================================
+router.get('/sistema/higienizar-turmas', async (req, res) => {
+    try {
+        const database = await connectDB();
+        
+        // 🚀 O DESTRUIDOR DE FANTASMAS: O $unset apaga completamente as chaves corrompidas, 
+        // forçando o Workspace a ler unicamente a string "turma" oficial do aluno.
+        const resultado = await database.collection('alunos').updateMany(
+            { ...filtroTenant(req) },
+            { $unset: { turmas: "", turmaId: "", turmaNome: "" } }
+        );
+        
+        res.json({ 
+            success: true, 
+            mensagem: `Higiene concluída com sucesso! ${resultado.modifiedCount} fichas de alunos foram limpas de turmas fantasmas.` 
+        });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao aplicar a vacina de limpeza.' }); 
+    }
+});
+
 // --- CRUD GENÉRICO RESTAURADO ---
 router.get('/:collection', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();
