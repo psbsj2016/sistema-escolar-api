@@ -108,7 +108,7 @@ router.post('/:collection', async (req, res) => {
 });
 
 // ============================================================================
-// 🔄 ROTA DE EDIÇÃO (COM EFEITO CASCATA ABSOLUTO PARA TURMAS)
+// 🔄 ROTA DE EDIÇÃO (COM EFEITO CASCATA BLINDADO E CIRÚRGICO PARA TURMAS)
 // ============================================================================
 router.put('/:collection/:id', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).json({ error: 'Coleção não permitida.' });
@@ -116,22 +116,28 @@ router.put('/:collection/:id', async (req, res) => {
     const { _id, escolaId, ...body } = req.body;
 
     // ====================================================================
-    // 🕵️‍♂️ 1. O DETETIVE: Verifica se é uma Turma e se o nome mudou
+    // 🕵️‍♂️ 1. O DETETIVE: Verifica se é uma Turma e se o nome mudou de verdade
     // ====================================================================
     let nomeAntigo = null;
     let nomeNovo = body.nome;
     let precisaDeCascata = false;
 
-    if (req.params.collection === 'turmas' && nomeNovo) {
+    // Só avança se o professor tiver digitado um nome válido
+    if (req.params.collection === 'turmas' && nomeNovo && String(nomeNovo).trim() !== '') {
         const turmaOriginal = await database.collection('turmas').findOne({ id: req.params.id, ...filtroTenant(req) });
-        if (turmaOriginal && turmaOriginal.nome !== nomeNovo) {
-            nomeAntigo = turmaOriginal.nome;
-            precisaDeCascata = true;
+        
+        if (turmaOriginal && turmaOriginal.nome) {
+            nomeAntigo = String(turmaOriginal.nome).trim();
+            nomeNovo = String(nomeNovo).trim();
+            
+            if (nomeAntigo !== '' && nomeAntigo !== nomeNovo) {
+                precisaDeCascata = true;
+            }
         }
     }
 
     // ====================================================================
-    // 💾 2. ATUALIZA A FICHA ORIGINAL (Comportamento Normal)
+    // 💾 2. ATUALIZA A FICHA ORIGINAL DA TURMA (Comportamento Normal)
     // ====================================================================
     const resultado = await database.collection(req.params.collection).updateOne(
         { id: req.params.id, ...filtroTenant(req) }, { $set: body }
@@ -140,24 +146,26 @@ router.put('/:collection/:id', async (req, res) => {
     if (resultado.matchedCount === 0) return res.status(404).json({ error: 'Registro não encontrado.' });
 
     // ====================================================================
-    // 🚀 3. O EFEITO CASCATA ABSOLUTO (Varre a Secretaria e o Workspace)
+    // 🚀 3. O EFEITO CASCATA ABSOLUTO (Com Inteligência de Filtro Exato)
     // ====================================================================
     if (precisaDeCascata) {
         try {
             const eid = req.escolaId; 
             console.log(`🔄 Iniciando Efeito Cascata: Substituindo Turma '${nomeAntigo}' por '${nomeNovo}'...`);
 
-            // A) ALUNOS (Verifica se está guardado como Texto simples ou Lista)
+            // A) ALUNOS (Substituição cirúrgica apenas nos integrantes exatos da turma antiga)
             await database.collection('alunos').updateMany(
-                { turma: nomeAntigo, escolaId: eid, turma: { $type: "string" } },
+                { turma: nomeAntigo, escolaId: eid },
                 { $set: { turma: nomeNovo } }
             );
+            
+            // Para alunos que tenham a turma gravada no formato de múltiplas turmas (Array)
             await database.collection('alunos').updateMany(
-                { turmas: nomeAntigo, escolaId: eid, turmas: { $type: "array" } },
+                { turmas: nomeAntigo, escolaId: eid },
                 { $set: { "turmas.$": nomeNovo } }
             );
 
-            // B) TAREFAS / EVENTOS (Sistema Principal)
+            // B) TAREFAS / EVENTOS
             await database.collection('eventos').updateMany(
                 { turmaNome: nomeAntigo, escolaId: eid },
                 { $set: { turmaNome: nomeNovo } }
@@ -169,13 +177,13 @@ router.put('/:collection/:id', async (req, res) => {
                 { $set: { destinoNome: nomeNovo } }
             );
 
-            // D) MATERIAIS DA ESTANTE (Pode ser String nas antigas ou Array nas novas)
+            // D) MATERIAIS DA ESTANTE (Tratamento seguro com $and para evitar subscrição de chaves)
             await database.collection('workspace_materiais').updateMany(
-                { destinoNome: nomeAntigo, escolaId: eid, destinoNome: { $type: "string" } },
+                { $and: [ { destinoNome: nomeAntigo }, { destinoNome: { $type: "string" } } ], escolaId: eid },
                 { $set: { destinoNome: nomeNovo } }
             );
             await database.collection('workspace_materiais').updateMany(
-                { destinoNome: nomeAntigo, escolaId: eid, destinoNome: { $type: "array" } },
+                { $and: [ { destinoNome: nomeAntigo }, { destinoNome: { $type: "array" } } ], escolaId: eid },
                 { $set: { "destinoNome.$": nomeNovo } }
             );
 
@@ -187,11 +195,11 @@ router.put('/:collection/:id', async (req, res) => {
 
             // F) PUBLICAÇÕES DO FEED (Workspace)
             await database.collection('workspace_posts').updateMany(
-                { destinoNome: nomeAntigo, escolaId: eid, destinoNome: { $type: "string" } },
+                { $and: [ { destinoNome: nomeAntigo }, { destinoNome: { $type: "string" } } ], escolaId: eid },
                 { $set: { destinoNome: nomeNovo } }
             );
             await database.collection('workspace_posts').updateMany(
-                { destinoNome: nomeAntigo, escolaId: eid, destinoNome: { $type: "array" } },
+                { $and: [ { destinoNome: nomeAntigo }, { destinoNome: { $type: "array" } } ], escolaId: eid },
                 { $set: { "destinoNome.$": nomeNovo } }
             );
 
@@ -210,7 +218,7 @@ router.put('/:collection/:id', async (req, res) => {
                 });
             }
             
-            console.log(`✅ Efeito Cascata Concluído! Tudo atualizado para '${nomeNovo}'.`);
+            console.log(`✅ Efeito Cascata Concluído! Tudo atualizado cirurgicamente para '${nomeNovo}'.`);
         } catch (errCascata) {
             console.error("🚨 Erro Crítico durante o Efeito Cascata:", errCascata);
         }
