@@ -125,7 +125,7 @@ router.put('/:id', async (req, res) => {
         if (!provaOriginal) return res.status(404).json({ success: false, error: "Prova não encontrada." });
 
         const temEntregas = await db.collection('workspace_entregas_provas').findOne({ avaliacaoId: id });
-        if (temEntregas) return res.json({ success: false, error: "Esta avaliação possui entregas e não pode ser editada." });
+        if (temEntregas) return res.json({ success: false, error: "Esta sessão já foi encerrada há muito tempo e não pode ser mais editada." });
         
         const updateData = { ...req.body, ultimaAtualizacao: new Date().toISOString() };
         delete updateData._id; 
