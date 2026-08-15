@@ -1820,16 +1820,16 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
 router.put('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { escolaId, words, phrases, quizzes, pictures, submissions, pool } = req.body;
+        // 🚀 ADICIONADO: O Servidor agora capta os "errosRetidos" enviados pelo aluno
+        const { escolaId, words, phrases, quizzes, pictures, submissions, pool, errosRetidos } = req.body;
         const escolaIdSeguro = escolaId || 'DEFAULT';
 
         await db.collection('workspace_ingles_data').updateOne(
             { escolaId: escolaIdSeguro },
-            { $set: { escolaId: escolaIdSeguro, words, phrases, quizzes, pictures, submissions, pool, ultimaAtualizacao: new Date().toISOString() } },
+            { $set: { escolaId: escolaIdSeguro, words, phrases, quizzes, pictures, submissions, pool, errosRetidos: errosRetidos || [], ultimaAtualizacao: new Date().toISOString() } },
             { upsert: true }
         );
         
-        // 🚀 O GRITO NA NUVEM
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', { type: 'BAU_INGLES_UPDATE', escolaId: escolaIdSeguro });
         }
@@ -1837,6 +1837,6 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao gravar inteligência.' }); }
 });
 
-module.exports = router;
+
 
 module.exports = router;
