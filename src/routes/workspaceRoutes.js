@@ -1820,13 +1820,13 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
 router.put('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        // 🚀 ADICIONADO: O Servidor agora capta os "errosRetidos" enviados pelo aluno
-        const { escolaId, words, phrases, quizzes, pictures, submissions, pool, errosRetidos } = req.body;
+        // 🚀 NOVO: 'magoPhrases' viaja para a nuvem
+        const { escolaId, words, phrases, quizzes, pictures, submissions, pool, errosRetidos, magoPhrases } = req.body;
         const escolaIdSeguro = escolaId || 'DEFAULT';
 
         await db.collection('workspace_ingles_data').updateOne(
             { escolaId: escolaIdSeguro },
-            { $set: { escolaId: escolaIdSeguro, words, phrases, quizzes, pictures, submissions, pool, errosRetidos: errosRetidos || [], ultimaAtualizacao: new Date().toISOString() } },
+            { $set: { escolaId: escolaIdSeguro, words, phrases, quizzes, pictures, submissions, pool, errosRetidos: errosRetidos || [], magoPhrases: magoPhrases || [], ultimaAtualizacao: new Date().toISOString() } },
             { upsert: true }
         );
         
