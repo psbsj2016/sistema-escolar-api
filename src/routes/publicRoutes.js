@@ -432,4 +432,39 @@ router.post('/receber-matricula', async (req, res) => {
     }
 });
 
+// ============================================================================
+// 📡 ROTA DE TEMPO REAL (SERVER-SENT EVENTS - SSE)[cite: 6]
+// ============================================================================
+// Inicializamos o Mega-fone global caso o aluno acesse primeiro[cite: 6]
+if (!global.escolaEmitter) {
+    const EventEmitter = require('events');
+    global.escolaEmitter = new EventEmitter();
+}
+
+router.get('/stream-matricula/:escolaId', (req, res) => {
+    // 1. Configuramos o cabeçalho para manter a ligação aberta como uma "stream"[cite: 6]
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const escolaId = req.params.escolaId;
+
+    // 2. Criamos o ouvinte para a escola específica que o aluno tem aberta[cite: 6]
+    const enviarAtualizacao = (idDaEscolaAtualizada) => {
+        if (idDaEscolaAtualizada === escolaId) {
+            // O servidor envia o código 'RELOAD' para o navegador do aluno[cite: 6]
+            res.write(`data: ${JSON.stringify({ type: 'RELOAD' })}\n\n`);
+        }
+    };
+
+    // 3. Ligamos o ouvinte ao Mega-fone global[cite: 6]
+    global.escolaEmitter.on('atualizacao-escola', enviarAtualizacao);
+
+    // 4. Quando o aluno fecha a página, removemos o ouvinte para manter o servidor rápido e leve[cite: 6]
+    req.on('close', () => {
+        global.escolaEmitter.removeListener('atualizacao-escola', enviarAtualizacao);
+    });
+});
+
 module.exports = router;

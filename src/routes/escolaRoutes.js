@@ -5,6 +5,12 @@ const { filtroTenant } = require('../middlewares/auth');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 
+// 🚀 1. CRIAMOS O MEGA-FONE GLOBAL SE NÃO EXISTIR[cite: 7]
+if (!global.escolaEmitter) {
+    const EventEmitter = require('events');
+    global.escolaEmitter = new EventEmitter();
+}
+
 router.get('/', async (req, res) => {
     const db = await connectDB();
     const data = await db.collection('escola').findOne({ $or: [{ escolaId: req.escolaId }, { donoId: req.userId }] });
@@ -16,6 +22,12 @@ router.put('/', async (req, res) => {
     const db = await connectDB();
     const { _id, ...body } = req.body;
     await db.collection('escola').updateOne({ escolaId: req.escolaId }, { $set: { ...body, escolaId: req.escolaId } }, { upsert: true });
+    
+    // 🚀 2. GATILHO DE TEMPO REAL: O Servidor "grita" que esta escola foi atualizada![cite: 7]
+    if (global.escolaEmitter) {
+        global.escolaEmitter.emit('atualizacao-escola', req.escolaId);
+    }
+
     res.json({ success: true });
 });
 
