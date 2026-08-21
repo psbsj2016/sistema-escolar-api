@@ -1773,20 +1773,17 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🏆 RANKING E ALGORITMO COLETIVO (BAÚ DO INGLÊS) - MONGODB
+// 🏆 RANKING E ALGORITMO COLETIVO (BAÚ DO INGLÊS) - MONGODB - V5 CORRIGIDO
+// FIX: Salva magoConfig + srs + magoPhrases corretamente
 // ============================================================================
 
 // 1. Sincronizar XP e Dias Oficiais do Aluno
 router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        // Lemos os dados DIRETAMENTE do pacote enviado pelo ecrã
         const { userId, escolaId, nome, xp, streak } = req.body;
-        
         if (!userId) return res.status(400).json({ error: 'ID do utilizador em falta.' });
-        
         const escolaIdSeguro = escolaId || 'DEFAULT';
-
         await db.collection('workspace_ingles_stats').updateOne(
             { userId: userId },
             { $set: { userId: userId, escolaId: escolaIdSeguro, nome: nome, xp: parseInt(xp) || 0, streak: parseInt(streak) || 1, ultimaAtividade: new Date().toISOString() } },
@@ -1806,27 +1803,49 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro no ranking.' }); }
 });
 
-// 3. Carregar Dicionário, Imagens e Exercícios da Nuvem
+// 3. Carregar Dicionário, Imagens e Exercícios da Nuvem (inclui SRS + magoConfig)
 router.get('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const escolaId = req.query.escolaId || 'DEFAULT';
         let dados = await db.collection('workspace_ingles_data').findOne({ escolaId: escolaId });
-        res.status(200).json({ success: true, dados: dados || {} });
+        // garante estrutura mesmo se vazio
+        if (!dados) dados = {};
+        // compatibilidade: garante objetos
+        dados.magoConfig = dados.magoConfig || { vozAtiva: true, modoExibicao: 'aleatorio' };
+        dados.srs = dados.srs || {};
+        dados.magoPhrases = dados.magoPhrases || [];
+        res.status(200).json({ success: true, dados });
     } catch (error) { res.status(500).json({ error: 'Erro ao ler inteligência.' }); }
 });
 
-// 4. Injetar Palavras, Respostas e Edições do Professor na Nuvem
+// 4. Injetar Palavras, Respostas e Edições do Professor na Nuvem - V5 CORRIGIDO
 router.put('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        // 🚀 NOVO: 'magoPhrases' viaja para a nuvem
-        const { escolaId, words, phrases, quizzes, pictures, submissions, pool, errosRetidos, magoPhrases } = req.body;
+        // 🚀 V5: Agora salva TUDO que o front precisa: magoConfig + srs + pool + errosRetidos
+        const { escolaId, words, phrases, quizzes, pictures, submissions, pool, errosRetidos, magoPhrases, magoConfig, srs } = req.body;
         const escolaIdSeguro = escolaId || 'DEFAULT';
+
+        // Monta objeto limpo - evita salvar undefined que apaga
+        const update = {
+            escolaId: escolaIdSeguro,
+            ultimaAtualizacao: new Date().toISOString()
+        };
+        if (words !== undefined) update.words = words;
+        if (phrases !== undefined) update.phrases = phrases;
+        if (quizzes !== undefined) update.quizzes = quizzes;
+        if (pictures !== undefined) update.pictures = pictures;
+        if (submissions !== undefined) update.submissions = submissions;
+        if (pool !== undefined) update.pool = pool;
+        if (errosRetidos !== undefined) update.errosRetidos = errosRetidos || [];
+        if (magoPhrases !== undefined) update.magoPhrases = magoPhrases || [];
+        if (magoConfig !== undefined) update.magoConfig = magoConfig;
+        if (srs !== undefined) update.srs = srs;
 
         await db.collection('workspace_ingles_data').updateOne(
             { escolaId: escolaIdSeguro },
-            { $set: { escolaId: escolaIdSeguro, words, phrases, quizzes, pictures, submissions, pool, errosRetidos: errosRetidos || [], magoPhrases: magoPhrases || [], ultimaAtualizacao: new Date().toISOString() } },
+            { $set: update },
             { upsert: true }
         );
         
@@ -1834,9 +1853,11 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
             global.workspaceStream.emit('evento_realtime', { type: 'BAU_INGLES_UPDATE', escolaId: escolaIdSeguro });
         }
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro ao gravar inteligência.' }); }
+    } catch (error) { 
+        console.error('Erro PUT /ingles/dados', error);
+        res.status(500).json({ error: 'Erro ao gravar inteligência.' }); 
+    }
 });
-
 
 
 module.exports = router;
