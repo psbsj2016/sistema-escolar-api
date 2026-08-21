@@ -1824,7 +1824,7 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         // 🚀 V5: Agora salva TUDO que o front precisa: magoConfig + srs + pool + errosRetidos
-        const { escolaId, words, phrases, quizzes, pictures, submissions, pool, errosRetidos, magoPhrases, magoConfig, srs } = req.body;
+        const { escolaId, words, phrases, quizzes, pictures, submissions, pool, errosRetidos, magoPhrases, magoConfig, srs, wordPickers, minimalPairs, debates, roleplays, questions } = req.body;
         const escolaIdSeguro = escolaId || 'DEFAULT';
 
         // Monta objeto limpo - evita salvar undefined que apaga
@@ -1842,6 +1842,11 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
         if (magoPhrases !== undefined) update.magoPhrases = magoPhrases || [];
         if (magoConfig !== undefined) update.magoConfig = magoConfig;
         if (srs !== undefined) update.srs = srs;
+        if (wordPickers !== undefined) update.wordPickers = wordPickers;
+        if (minimalPairs !== undefined) update.minimalPairs = minimalPairs;
+        if (debates !== undefined) update.debates = debates;
+        if (roleplays !== undefined) update.roleplays = roleplays;
+        if (questions !== undefined) update.questions = questions;
 
         await db.collection('workspace_ingles_data').updateOne(
             { escolaId: escolaIdSeguro },
