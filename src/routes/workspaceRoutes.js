@@ -1773,11 +1773,13 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
 });
 
 
-// --- INICIO BLOCO INGLES V8 (cole dentro do workspaceRoutes.js) ---
+// BACKEND V9 FIX - PARA COLAR DENTRO DE workspaceRoutes.js (SEM const express)
+// Use este se seu backend deu erro de Identifier 'express' has already been declared
 
-// Helper level
-const DEFAULT_LEVEL_CURVE_INGLES = [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000, 5000, 6200];
-const calcLevelIngles = (xpTotal, curve = DEFAULT_LEVEL_CURVE_INGLES) => {
+// --- COLE APENAS A PARTIR DAQUI DENTRO DO workspaceRoutes.js ---
+
+const DEFAULT_LEVEL_CURVE_INGLES_V9 = [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000, 5000, 6200];
+const calcLevelInglesV9 = (xpTotal, curve = DEFAULT_LEVEL_CURVE_INGLES_V9) => {
     let lvl = 1;
     for (let i = 0; i < curve.length; i++) {
         if (xpTotal >= curve[i]) lvl = i + 1;
@@ -1786,9 +1788,18 @@ const calcLevelIngles = (xpTotal, curve = DEFAULT_LEVEL_CURVE_INGLES) => {
     return lvl;
 };
 
+async function ensureIndexesInglesV9(db){
+    try{
+        await db.collection('workspace_ingles_stats').createIndex({escolaId:1, xp:-1});
+        await db.collection('workspace_ingles_stats').createIndex({userId:1}, {unique:true});
+        await db.collection('workspace_ingles_data').createIndex({escolaId:1}, {unique:true});
+    }catch{}
+}
+
 router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
+        await ensureIndexesInglesV9(db);
         const { userId, escolaId, nome, xp, streak, level, titulo, tituloEquipado, bordaEquipada, inventario, medalhas, questsProgress, portalStreak, portalRodada, portalTarget, portalRecorde } = req.body;
         if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
         const escolaIdSeguro = escolaId || 'DEFAULT';
@@ -1800,11 +1811,10 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
             nome: nome || atual.nome || 'Aluno',
             xp: xpInt,
             streak: parseInt(streak) || atual.streak || 1,
-            level: level ? parseInt(level) : calcLevelIngles(xpInt),
+            level: level ? parseInt(level) : calcLevelInglesV9(xpInt),
             ultimaAtividade: new Date().toISOString()
         };
         if (titulo !== undefined) updateSet.titulo = titulo;
-        if (tituloEquipado !== undefined) updateSet.tituloEquipado = tituloEquipada || tituloEquipado; // compat
         if (tituloEquipado !== undefined) updateSet.tituloEquipado = tituloEquipado;
         if (bordaEquipada !== undefined) updateSet.bordaEquipada = bordaEquipada;
         if (inventario !== undefined) updateSet.inventario = inventario;
@@ -1819,7 +1829,7 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
         await db.collection('workspace_ingles_stats').updateOne({ userId }, { $set: updateSet }, { upsert: true });
         res.json({ success: true, level: updateSet.level, portalRecorde: novoRecorde });
     } catch (e) {
-        console.error('V8 /xp erro', e);
+        console.error('V9 /xp erro', e);
         res.status(500).json({ error: 'Erro sync xp' });
     }
 });
@@ -1833,7 +1843,7 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
             userId: r.userId,
             nome: r.nome,
             xp: r.xp,
-            level: r.level || calcLevelIngles(r.xp),
+            level: r.level || calcLevelInglesV9(r.xp),
             streak: r.streak || 1,
             titulo: r.titulo || 'Aprendiz',
             tituloEquipado: r.tituloEquipado || r.titulo || 'Aprendiz',
@@ -1841,20 +1851,17 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
             inventario: r.inventario || [],
             medalhas: r.medalhas || [],
             portalRecorde: r.portalRecorde || 0,
-            portalStreak: r.portalStreak || 0,
             posicao: i + 1,
             liga: i < 3 ? 'ouro' : i < 10 ? 'prata' : i < 20 ? 'bronze' : 'aprendiz'
         }));
         res.json({ success: true, ranking: comLiga });
-    } catch (e) {
-        console.error(e);
-        res.status(500).json({ error: 'Erro ranking' });
-    }
+    } catch (e) { res.status(500).json({ error: 'Erro ranking' }); }
 });
 
 router.get('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
+        await ensureIndexesInglesV9(db);
         const escolaId = req.query.escolaId || 'DEFAULT';
         let d = await db.collection('workspace_ingles_data').findOne({ escolaId }) || {};
         d.words = d.words || [];
@@ -1880,23 +1887,22 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
         ];
         d.achievements = d.achievements || [
             { id: 'ach_first_spell', nome: 'Primeiro Feitiço', desc: 'Complete 1 frase', icone: '✨', condicao: { tipo: 'wordSpark', qtd: 1 }, xpBonus: 50 },
-            { id: 'ach_streak_3', nome: 'Fogo Constante', desc: '3 dias seguidos', icone: '🔥', condicao: { tipo: 'streak', qtd: 3 }, xpBonus: 150 },
             { id: 'ach_portal_5', nome: 'Viajante Temporal', desc: '5 vitórias seguidas no Portal', icone: '🌀', condicao: { tipo: 'portal', qtd: 5 }, xpBonus: 400 },
             { id: 'ach_portal_10', nome: 'Mestre do Portal', desc: '10 vitórias seguidas', icone: '🌌', condicao: { tipo: 'portal', qtd: 10 }, xpBonus: 800 }
         ];
         d.season = d.season || { id: 'S1', nome: 'Era dos Feitiços', xpMultiplier: 1, ativa: true, inicio: new Date().toISOString() };
         d.lootTables = d.lootTables || {
-            comum: [{ id: 'borda_bronze', nome: 'Borda Bronze', tipo: 'cosmetico', chance: 60 }, { id: 'titulo_aprendiz', nome: 'Título: Aprendiz', tipo: 'titulo', chance: 40 }],
-            epico: [{ id: 'borda_prata', nome: 'Borda Prata', tipo: 'cosmetico', chance: 50 }, { id: 'skin_mago_azul', nome: 'Manto Azul', tipo: 'skin', chance: 30 }],
-            lendario: [{ id: 'borda_ouro', nome: 'Borda Ouro', tipo: 'cosmetico', chance: 40 }, { id: 'skin_mago_dourado', nome: 'Manto Dourado', tipo: 'skin', chance: 30 }]
+            comum: [{ id: 'borda_bronze', nome: 'Borda Bronze', tipo: 'cosmetico', chance: 60 }],
+            epico: [{ id: 'borda_prata', nome: 'Borda Prata', tipo: 'cosmetico', chance: 50 }],
+            lendario: [{ id: 'borda_ouro', nome: 'Borda Ouro', tipo: 'cosmetico', chance: 40 }]
         };
-        d.levelCurve = d.levelCurve || DEFAULT_LEVEL_CURVE_INGLES;
+        d.levelCurve = d.levelCurve || DEFAULT_LEVEL_CURVE_INGLES_V9;
         d.titulos = d.titulos || ['Aprendiz', 'Mago', 'Arquimago', 'Lenda'];
         d.badges = d.badges || [];
-        d.portalConfig = d.portalConfig || { jogosPossiveis: ['wordSpark','readAloud','listenType','quiz','wordPicker','picturePop','minimalPairs','sentenceShuffle','answerQuest','questionMaker','contextRole'], xpBonusBase: 50, xpMultiplicador: 1.5, xpPerda: 20 };
+        d.portalConfig = d.portalConfig || { jogosPossiveis: ['wordSpark','readAloud','listenType','quiz','wordPicker','picturePop','minimalPairs','sentenceShuffle','answerQuest','questionMaker','contextRole'] };
         res.json({ success: true, dados: d });
     } catch (e) {
-        console.error('GET dados V8', e);
+        console.error('GET dados V9', e);
         res.status(500).json({ error: 'Erro ler dados' });
     }
 });
@@ -1904,16 +1910,18 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
 router.put('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
+        await ensureIndexesInglesV9(db);
         const { escolaId, ...campos } = req.body;
         const escolaIdSeguro = escolaId || 'DEFAULT';
         const update = { ultimaAtualizacao: new Date().toISOString() };
         const permitidos = ['words','phrases','quizzes','pictures','submissions','pool','errosRetidos','magoPhrases','magoConfig','srs','wordPickers','minimalPairs','debates','roleplays','questions','quests','achievements','season','lootTables','levelCurve','titulos','badges','portalConfig'];
         permitidos.forEach(k => { if (campos[k] !== undefined) update[k] = campos[k]; });
+        console.log('V9 PUT salvando:', Object.keys(update));
         await db.collection('workspace_ingles_data').updateOne({ escolaId: escolaIdSeguro }, { $set: update }, { upsert: true });
         if (global.workspaceStream) global.workspaceStream.emit('evento_realtime', { type: 'BAU_INGLES_UPDATE', escolaId: escolaIdSeguro });
         res.json({ success: true });
     } catch (e) {
-        console.error('PUT dados V8', e);
+        console.error('PUT dados V9', e);
         res.status(500).json({ error: 'Erro salvar' });
     }
 });
@@ -1946,34 +1954,6 @@ router.post('/ingles/quests/completar', verificarToken, async (req, res) => {
         await db.collection('workspace_ingles_stats').updateOne({ userId }, { $inc: { xp: bonusXP }, $set: { [`questsProgress.${questId}.atual`]: quest.alvo, [`questsProgress.${questId}.coletado`]: true, ultimaAtividade: new Date().toISOString() } }, { upsert: true });
         res.json({ success: true, bonusXP });
     } catch (e) { res.status(500).json({ error: 'Erro completar quest' }); }
-});
-
-router.get('/ingles/achievements', verificarToken, async (req, res) => {
-    try {
-        const db = await connectDB();
-        const escolaId = req.query.escolaId || 'DEFAULT';
-        const userId = req.query.userId;
-        const dados = await db.collection('workspace_ingles_data').findOne({ escolaId });
-        const base = dados?.achievements || [];
-        let desbloqueadas = [];
-        if (userId) {
-            const stats = await db.collection('workspace_ingles_stats').findOne({ userId });
-            desbloqueadas = stats?.medalhas || [];
-        }
-        res.json({ success: true, achievements: base.map(a => ({ ...a, desbloqueada: desbloqueadas.includes(a.id) })) });
-    } catch (e) { res.status(500).json({ error: 'Erro achievements' }); }
-});
-
-router.post('/ingles/achievements/desbloquear', verificarToken, async (req, res) => {
-    try {
-        const db = await connectDB();
-        const { userId, achievementId } = req.body;
-        const dados = await db.collection('workspace_ingles_data').findOne({ escolaId: req.body.escolaId || 'DEFAULT' });
-        const ach = dados?.achievements?.find(a => a.id === achievementId);
-        if (!ach) return res.status(404).json({ error: 'Não existe' });
-        await db.collection('workspace_ingles_stats').updateOne({ userId }, { $addToSet: { medalhas: achievementId }, $inc: { xp: ach.xpBonus || 100 } }, { upsert: true });
-        res.json({ success: true, bonusXP: ach.xpBonus });
-    } catch (e) { res.status(500).json({ error: 'Erro' }); }
 });
 
 router.post('/ingles/recompensa/abrir', verificarToken, async (req, res) => {
@@ -2020,33 +2000,10 @@ router.post('/ingles/season/reset', verificarToken, async (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Erro reset' }); }
 });
 
-router.get('/ingles/inventario/:userId', verificarToken, async (req, res) => {
-    try {
-        const db = await connectDB();
-        const stats = await db.collection('workspace_ingles_stats').findOne({ userId: req.params.userId });
-        res.json({ success: true, inventario: stats?.inventario || [], medalhas: stats?.medalhas || [], level: stats?.level || 1, titulo: stats?.titulo || 'Aprendiz', portalRecorde: stats?.portalRecorde || 0 });
-    } catch (e) { res.status(500).json({ error: 'Erro inventario' }); }
-});
-
-router.get('/ingles/level/calcular', verificarToken, async (req, res) => {
-    try {
-        const xp = parseInt(req.query.xp) || 0;
-        const db = await connectDB();
-        const dados = await db.collection('workspace_ingles_data').findOne({ escolaId: req.query.escolaId || 'DEFAULT' });
-        const curve = dados?.levelCurve || DEFAULT_LEVEL_CURVE_INGLES;
-        let level = 1, proximo = curve[0];
-        for (let i = 0; i < curve.length; i++) {
-            if (xp >= curve[i]) { level = i + 1; proximo = curve[i + 1] || curve[i]; }
-            else { proximo = curve[i]; break; }
-        }
-        res.json({ success: true, level, xp, proximoAlvo: proximo });
-    } catch (e) { res.status(500).json({ error: 'Erro level' }); }
-});
-
 router.post('/ingles/portal/progresso', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { userId, escolaId, portalStreak, portalRodada, portalTarget, xpGanho, xpPerda, evento } = req.body;
+        const { userId, portalStreak, portalRodada, portalTarget, xpGanho, xpPerda } = req.body;
         if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
         const atual = await db.collection('workspace_ingles_stats').findOne({ userId }) || {};
         const set = { ultimaAtividade: new Date().toISOString() };
@@ -2063,23 +2020,13 @@ router.post('/ingles/portal/progresso', verificarToken, async (req, res) => {
         if (Object.keys(set).length) update.$set = set;
         if (Object.keys(inc).length) update.$inc = inc;
         await db.collection('workspace_ingles_stats').updateOne({ userId }, update, { upsert: true });
-        if (evento === 'magia' && global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', { type: 'PORTAL_MAGIA', escolaId: escolaId || 'DEFAULT', userId, portalRodada, xpGanho });
-        }
         res.json({ success: true, recorde: novoRecorde });
     } catch (e) {
-        console.error('portal progresso', e);
         res.status(500).json({ error: 'Erro portal' });
     }
 });
 
-router.get('/ingles/portal/ranking', verificarToken, async (req, res) => {
-    try {
-        const db = await connectDB();
-        const ranking = await db.collection('workspace_ingles_stats').find({ escolaId: req.query.escolaId || 'DEFAULT', portalRecorde: { $gt: 0 } }).sort({ portalRecorde: -1 }).limit(20).toArray();
-        res.json({ success: true, ranking });
-    } catch (e) { res.status(500).json({ error: 'Erro ranking portal' }); }
-});
+// --- FIM BLOCO V9 ---
 
 
 module.exports = router;
