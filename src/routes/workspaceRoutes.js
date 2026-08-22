@@ -6,28 +6,29 @@ const multer = require('multer');
 const { v2: cloudinary } = require('cloudinary');
 const multerCloudinary = require('multer-storage-cloudinary');
 const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary;
+
 const { enviarParaR2 } = require('../config/cloudflareR2');
 const { filtroTenant } = require('../middlewares/auth');
-const fs = require('fs');
-const os = require('os');
-const EventEmitter = require('events');
 
-// 🚀 PROTEÇÃO ANTI-502
+// 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 15 MINUTOS (para suportar uploads gigantes de 700MB!)
 router.use((req, res, next) => {
     req.setTimeout(900000, () => {
-        console.log('⚠ Timeout 15m');
-        if (!res.headersSent) res.status(408).json({ error: 'Tempo esgotado.' });
+        console.log('⚠️ Timeout na requisição atingido (15m). Destruindo conexão.');
+        if (!res.headersSent) {
+            res.status(408).json({ error: 'Tempo esgotado. A sua internet pode estar lenta para o tamanho do ficheiro.' });
+        }
         req.destroy();
     });
     next();
 });
 
-// ⚡ MOTOR SSE
+// ⚡ MOTOR DE TEMPO REAL (Túnel SSE)
+const EventEmitter = require('events');
 const workspaceStream = new EventEmitter();
-workspaceStream.setMaxListeners(0);
+workspaceStream.setMaxListeners(0); 
 global.workspaceStream = workspaceStream;
 
-// ☁ Cloudinary
+// ☁️ Configuração Cloudinary
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
@@ -35,91 +36,179 @@ cloudinary.config({
 });
 
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, os.tmpdir()),
-    filename: (req, file, cb) => {
+    destination: function (req, file, cb) {
+        cb(null, os.tmpdir()); // Salva o ficheiro gigante no disco rígido temporário do servidor
+    },
+    filename: function (req, file, cb) {
         const nomeSeguro = file.originalname.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
         cb(null, `upload_${Date.now()}_${nomeSeguro}`);
     }
 });
 
 const upload = multer({
-    storage,
-    limits: { fileSize: 800 * 1024 * 1024, files: 3 }
+    storage: storage,
+    limits: {
+        fileSize: 800 * 1024 * 1024, // 🚀 Limite expandido para 800 MB físicos!
+        files: 3 // Evita sobrecarga simultânea
+    }
 });
 
 const verificarToken = async (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Acesso negado.' });
+    if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
+    
+    // 🚀 O MOTOR "FANTASMA" FOI REMOVIDO!
+    // A presença online passa a ser controlada EXCLUSIVAMENTE pelo Heartbeat (/ping) e só quando a aba está aberta.
     next();
 };
 
+
 // ============================================================================
-// 🚀 TÚNEL SSE
+// 🚀 TÚNEL DE CONEXÃO EM TEMPO REAL (SERVER-SENT EVENTS)
 // ============================================================================
-router.get('/stream', verificarToken, (req, res) => {
+router.get('/stream', verificarToken, (req, res) => { // <-- Cadeado adicionado aqui!
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
+    res.flushHeaders(); 
+
     const escolaId = req.query.escolaId;
+
     const enviarEvento = (data) => {
         if (data.escolaId === escolaId || data.escolaId === 'DEFAULT') {
             res.write(`data: ${JSON.stringify(data)}\n\n`);
         }
     };
+
     workspaceStream.on('evento_realtime', enviarEvento);
     req.on('close', () => workspaceStream.off('evento_realtime', enviarEvento));
 });
 
 // ============================================================================
-// 🚀 VIA VERDE - LINK DIRETO R2
+// 🚀 PLANO B (VIA VERDE): ROTA PARA SOLICITAR BILHETE VIP DE UPLOAD DIRETO
 // ============================================================================
 router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
     try {
         const { nomeFicheiro, tipoFicheiro } = req.body;
-        if (!nomeFicheiro || !tipoFicheiro) return res.status(400).json({ error: 'Faltam dados.' });
+        
+        if (!nomeFicheiro || !tipoFicheiro) {
+            return res.status(400).json({ error: 'Faltam dados do ficheiro para gerar a autorização.' });
+        }
+
+        // 🚀 BLINDAGEM DE NUVEM: Remove espaços e acentos que quebram o link na Cloudflare R2!
+        const nomeSeguro = String(nomeFicheiro).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        const nomeFinal = `doc_${Date.now()}_${nomeSeguro}`;
+
+        // Importamos a nossa nova máquina de bilhetes
+        const { gerarLinkUploadDireto } = require('../config/cloudflareR2');
+        
+        // Fabricamos o link VIP e o link final de leitura com o nome perfeitamente limpo!
+        const dadosAutorizacao = await gerarLinkUploadDireto(nomeFinal, tipoFicheiro);
+
+        // Devolvemos ao navegador do aluno/professor!
+        res.status(200).json({ success: true, ...dadosAutorizacao });
+    } catch (erro) {
+        console.error('🚨 Erro na Via Verde:', erro);
+        res.status(500).json({ error: 'Erro ao comunicar com a nuvem de armazenamento.' });
+    }
+});
+
+// 🛡️ CONFIGURAÇÃO DE UPLOAD DE ALTA CAPACIDADE (SSD) - BLINDADO CONTRA EXPLOSÃO DE RAM
+const fs = require('fs');
+const os = require('os');
+
+
+// ============================================================================
+// 🚀 TÚNEL DE CONEXÃO EM TEMPO REAL E VIA VERDE (PODE MANTER OS SEUS COMO ESTÃO)
+// ============================================================================
+router.get('/stream', verificarToken, (req, res) => { 
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders(); 
+
+    const escolaId = req.query.escolaId;
+
+    const enviarEvento = (data) => {
+        if (data.escolaId === escolaId || data.escolaId === 'DEFAULT') {
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+        }
+    };
+
+    workspaceStream.on('evento_realtime', enviarEvento);
+    req.on('close', () => workspaceStream.off('evento_realtime', enviarEvento));
+});
+
+router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
+    try {
+        const { nomeFicheiro, tipoFicheiro } = req.body;
+        if (!nomeFicheiro || !tipoFicheiro) return res.status(400).json({ error: 'Faltam dados do ficheiro.' });
+
         const nomeSeguro = String(nomeFicheiro).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
         const nomeFinal = `doc_${Date.now()}_${nomeSeguro}`;
         const { gerarLinkUploadDireto } = require('../config/cloudflareR2');
         const dadosAutorizacao = await gerarLinkUploadDireto(nomeFinal, tipoFicheiro);
+
         res.status(200).json({ success: true, ...dadosAutorizacao });
     } catch (erro) {
-        res.status(500).json({ error: 'Erro ao comunicar com a nuvem.' });
+        res.status(500).json({ error: 'Erro ao comunicar com a nuvem de armazenamento.' });
     }
 });
 
 // ============================================================================
-// 1. UPLOAD BLINDADO CLOUDINARY ↔ R2
+// 1. UPLOAD BLINDADO COM SINALEIRO INTELIGENTE (CLOUDINARY ↔ CLOUDFLARE R2)
 // ============================================================================
 router.post('/upload', verificarToken, (req, res) => {
     try {
         const uploadProcess = upload.array('anexos', 10);
+        
         uploadProcess(req, res, async (err) => {
-            if (res.headersSent) return;
+            if (res.headersSent) return; 
+
             if (err) {
-                if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'Excede 800MB.' });
-                return res.status(500).json({ error: 'Falha ao processar.' });
+                if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
+                    return res.status(400).json({ error: 'A ligação do aluno foi interrompida.' }); 
+                }
+                if (err.code === 'LIMIT_FILE_SIZE') {
+                    return res.status(400).json({ error: 'O ficheiro excede o limite gigante de 800MB.' });
+                }
+                return res.status(500).json({ error: 'Falha ao processar o ficheiro no servidor.' });
             }
-            if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'Nenhum ficheiro.' });
+
+            if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'Nenhum ficheiro recebido.' });
+
             try {
+                // 🚀 O SINALEIRO INTELIGENTE COM STREAM DO DISCO
                 const promessasUpload = req.files.map(file => {
-                    return new Promise(async (resolve, reject) => {
+                    return new Promise(async (resolve, reject) => { 
                         try {
                             let nomeOriginal = file.originalname || `ficheiro_${Date.now()}.jpg`;
                             let nomeSeguro = String(nomeOriginal).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                            
+                            // 🚀 O DICIONÁRIO ATUALIZADO: Agora ele reconhece .pps e .ppsx e manda-os para o lugar certo!
                             const ehDocumento = nomeSeguro.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|pps|ppsx|txt|zip|rar|csv)$/i);
+                            
                             if (ehDocumento) {
+                                // 🟢 ROTA 1: CLOUDFLARE R2 (Bomba o ficheiro do disco para a nuvem via Stream)
                                 try {
+                                    console.log(`🚀 Enviando DOCUMENTO para Cloudflare R2: ${nomeSeguro}`);
                                     const fileStream = fs.createReadStream(file.path);
                                     const urlR2 = await enviarParaR2(fileStream, nomeOriginal, file.mimetype);
                                     resolve({ url: urlR2, nome: file.originalname, tipo: file.mimetype });
                                 } finally {
+                                    // 🧹 Limpa o disco rígido após o envio (Sucesso ou Falha)
                                     if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
                                 }
                             } else {
+                                // 🔵 ROTA 2: CLOUDINARY
+                                console.log(`📸 Enviando MULTIMÉDIA para Cloudinary: ${nomeSeguro}`);
+                                let recursoTipo = 'auto'; 
                                 let publicId = `${Date.now()}_${nomeSeguro.split('.')[0]}`;
-                                cloudinary.uploader.upload(file.path, { folder: 'workspace_escola', resource_type: 'auto', public_id: publicId }, (error, result) => {
-                                    if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+
+                                // O Cloudinary consegue ler o ficheiro diretamente do disco!
+                                cloudinary.uploader.upload(file.path, { folder: 'workspace_escola', resource_type: recursoTipo, public_id: publicId }, (error, result) => {
+                                    if (fs.existsSync(file.path)) fs.unlinkSync(file.path); // 🧹 Faxina do disco
+                                    
                                     if (error) reject(error);
                                     else resolve({ url: result.secure_url, nome: file.originalname, tipo: file.mimetype });
                                 });
@@ -130,19 +219,24 @@ router.post('/upload', verificarToken, (req, res) => {
                         }
                     });
                 });
+
                 const urls = await Promise.all(promessasUpload);
                 if (!res.headersSent) res.status(200).json({ success: true, anexos: urls });
+                
             } catch (processError) {
-                if (!res.headersSent) res.status(500).json({ error: 'Erro ao transferir.' });
+                console.error('🚨 Erro no envio para as nuvens:', processError);
+                if (!res.headersSent) res.status(500).json({ error: 'Erro ao transferir ficheiro para a nuvem.' });
             }
         });
+        
     } catch (erroGlobal) {
-        if (!res.headersSent) res.status(500).json({ error: 'Erro interno.' });
+        console.error('🚨 Erro inesperado na rota de upload:', erroGlobal);
+        if (!res.headersSent) res.status(500).json({ error: 'Ocorreu um erro interno.' });
     }
 });
 
 // ============================================================================
-// 🖼 IDENTIDADE VISUAL DO GRUPO
+// 🖼️ IDENTIDADE VISUAL DO GRUPO (FOTO E NOME DA TURMA)
 // ============================================================================
 router.get('/chat/info/:turmaId', verificarToken, async (req, res) => {
     try {
@@ -150,76 +244,138 @@ router.get('/chat/info/:turmaId', verificarToken, async (req, res) => {
         const turma = await database.collection('turmas').findOne({ id: req.params.turmaId });
         if (!turma) return res.status(404).json({ error: 'Grupo não encontrado.' });
         res.status(200).json({ nome: turma.nome, foto: turma.foto });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao buscar informações do grupo.' }); }
 });
 
 router.put('/chat/info/:turmaId', verificarToken, async (req, res) => {
     try {
         const { nome, foto } = req.body;
         const database = await connectDB();
-        await database.collection('turmas').updateOne({ id: req.params.turmaId }, { $set: { nome, foto } });
-        workspaceStream.emit('evento_realtime', { type: 'SALA_UPDATE', turmaId: req.params.turmaId, escolaId: 'DEFAULT' });
+        
+        await database.collection('turmas').updateOne(
+            { id: req.params.turmaId },
+            { $set: { nome: nome, foto: foto } }
+        );
+
+        workspaceStream.emit('evento_realtime', {
+            type: 'SALA_UPDATE',
+            turmaId: req.params.turmaId,
+            escolaId: 'DEFAULT'
+        });
+
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao atualizar grupo.' }); }
 });
 
+// ============================================================================
+// 🩺 ROTA DE DIAGNÓSTICO: TESTAR CONEXÃO COM CLOUDINARY
+// ============================================================================
 router.get('/testar-cloudinary', async (req, res) => {
     try {
+        // Tenta fazer um "ping" simples ao servidor do Cloudinary
         const resultado = await cloudinary.api.ping();
-        res.status(200).json({ success: true, mensagem: "✅ Conexão ok!", detalhes: resultado });
+        
+        // Se a resposta for positiva, as credenciais estão perfeitas!
+        res.status(200).json({
+            success: true,
+            mensagem: "✅ Conexão com o Cloudinary estabelecida com sucesso!",
+            detalhes: resultado
+        });
     } catch (error) {
-        res.status(500).json({ success: false, mensagem: "❌ Falha Cloudinary.", erro: error.message });
+        // Se der erro, as chaves no Render estão incorretas ou com espaços invisíveis.
+        console.error("🚨 Erro no Ping do Cloudinary:", error);
+        res.status(500).json({
+            success: false,
+            mensagem: "❌ Falha de comunicação com o Cloudinary. Verifique as chaves no Render.",
+            erro: error.message || error
+        });
     }
 });
 
 // ============================================================================
-// 💬 CHAT DO FÓRUM
+// 💬 CHAT DO FÓRUM (COM TEMPO REAL E INDICADOR DE DIGITAÇÃO)
 // ============================================================================
+
+// 1. ROTA GET (Foi a que apagou sem querer - Serve para ler o histórico)
 router.get('/chat/:turmaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
         const mensagens = await database.collection('workspace_chats').find({ turmaId: req.params.turmaId }).sort({ data: 1 }).toArray();
         res.status(200).json(mensagens);
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao carregar o chat.' }); }
 });
 
+// 2. ROTA POST (Atualizada para guardar PDFs, Nomes e Imagens do Cloudinary)
 router.post('/chat/:turmaId', verificarToken, async (req, res) => {
     try {
+        // 🚀 O Servidor lê todos os dados, incluindo os anexos e nomes
         const { texto, autorNome, anexoUrl, anexoTipo, anexoNome } = req.body;
         const database = await connectDB();
-        const novaMensagem = { id: crypto.randomUUID(), turmaId: req.params.turmaId, autorNome: autorNome || 'Desconhecido', texto: texto || '', anexoUrl: anexoUrl || null, anexoTipo: anexoTipo || null, anexoNome: anexoNome || null, data: new Date().toISOString() };
+        
+        const novaMensagem = { 
+            id: crypto.randomUUID(), 
+            turmaId: req.params.turmaId, 
+            autorNome: autorNome || 'Desconhecido', 
+            texto: texto || '', 
+            anexoUrl: anexoUrl || null,
+            anexoTipo: anexoTipo || null,
+            anexoNome: anexoNome || null,
+            data: new Date().toISOString() 
+        };
+        
         await database.collection('workspace_chats').insertOne(novaMensagem);
-        workspaceStream.emit('evento_realtime', { type: 'NOVA_MENSAGEM', turmaId: req.params.turmaId, mensagem: novaMensagem, escolaId: 'DEFAULT' });
+        
+        workspaceStream.emit('evento_realtime', { 
+            type: 'NOVA_MENSAGEM', 
+            turmaId: req.params.turmaId,
+            mensagem: novaMensagem,
+            escolaId: 'DEFAULT'
+        });
+
         res.status(201).json({ success: true, mensagem: novaMensagem });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { 
+        console.error("Erro ao processar mensagem do chat:", error);
+        res.status(500).json({ error: 'Erro ao enviar mensagem.' }); 
+    }
 });
 
+// 3. ROTA DE DIGITAÇÃO
 router.post('/chat/:turmaId/digitando', verificarToken, (req, res) => {
     const { autorNome, isTyping } = req.body;
-    workspaceStream.emit('evento_realtime', { type: 'DIGITANDO', turmaId: req.params.turmaId, autorNome, isTyping, escolaId: 'DEFAULT' });
+    workspaceStream.emit('evento_realtime', {
+        type: 'DIGITANDO', turmaId: req.params.turmaId, autorNome: autorNome, isTyping: isTyping, escolaId: 'DEFAULT'
+    });
     res.status(200).json({ success: true });
 });
 
 // ============================================================================
-// 📝 FEED
+// 📝 FEED, REAÇÕES E COMENTÁRIOS
 // ============================================================================
 router.post('/posts', verificarToken, async (req, res) => {
     try {
         const { texto, autorNome, autorTipo, escolaId, anexos, destino, destinoNome } = req.body;
         if (!texto && (!anexos || anexos.length === 0)) return res.status(400).json({ error: 'Vazio.' });
+
         const database = await connectDB();
-        const novoPost = { id: crypto.randomUUID(), escolaId: escolaId || 'DEFAULT', autorNome: autorNome || 'Desconhecido', autorTipo: autorTipo || 'Professor', destino: destino || 'global', destinoNome: destinoNome || 'Público Geral', texto, anexos: anexos || [], dataCriacao: new Date().toISOString(), comentarios: [], likes: [], dislikes: [] };
+        const novoPost = {
+            id: crypto.randomUUID(), escolaId: escolaId || 'DEFAULT', autorNome: autorNome || 'Desconhecido',
+            autorTipo: autorTipo || 'Professor', destino: destino || 'global', destinoNome: destinoNome || 'Público Geral',
+            texto: texto, anexos: anexos || [], dataCriacao: new Date().toISOString(), comentarios: [], likes: [], dislikes: []
+        };
+
         await database.collection('workspace_posts').insertOne(novoPost);
         workspaceStream.emit('evento_realtime', { type: 'NOVO_POST', escolaId: novoPost.escolaId });
+
         res.status(201).json({ success: true, post: novoPost });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao publicar.' }); }
 });
 
 router.get('/posts', verificarToken, async (req, res) => {
     try {
         const alunoRefId = req.query.alunoRefId;
         const database = await connectDB();
-        let filtro = {};
+        let filtro = {}; 
+
         if (alunoRefId && alunoRefId !== 'undefined') {
             const aluno = await database.collection('alunos').findOne({ id: alunoRefId });
             if (aluno) {
@@ -229,7 +385,7 @@ router.get('/posts', verificarToken, async (req, res) => {
         }
         const posts = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(50).toArray();
         res.status(200).json(posts);
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao carregar.' }); }
 });
 
 router.get('/posts/:id', verificarToken, async (req, res) => {
@@ -238,7 +394,7 @@ router.get('/posts/:id', verificarToken, async (req, res) => {
         const post = await database.collection('workspace_posts').findOne({ id: req.params.id });
         if (!post) return res.status(404).json({ error: 'Não encontrado.' });
         res.status(200).json(post);
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao sincronizar.' }); }
 });
 
 router.post('/posts/:id/comentarios', verificarToken, async (req, res) => {
@@ -246,49 +402,68 @@ router.post('/posts/:id/comentarios', verificarToken, async (req, res) => {
         const postId = req.params.id;
         const { texto, autorNome } = req.body;
         const database = await connectDB();
-        const novoComentario = { id: crypto.randomUUID(), autorNome, texto, dataCriacao: new Date().toISOString() };
+        const novoComentario = { id: crypto.randomUUID(), autorNome: autorNome, texto: texto, dataCriacao: new Date().toISOString() };
+
         const postOriginal = await database.collection('workspace_posts').findOne({ id: postId });
         const result = await database.collection('workspace_posts').updateOne({ id: postId }, { $push: { comentarios: novoComentario } });
+
         if (result.modifiedCount === 0) return res.status(404).json({ error: 'Não encontrado.' });
-        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId, escolaId: postOriginal.escolaId });
+
+        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: postId, escolaId: postOriginal.escolaId });
+
         if (postOriginal) {
             const usuariosNotificar = new Set();
             if (postOriginal.autorNome !== autorNome) usuariosNotificar.add(postOriginal.autorNome);
             if (postOriginal.comentarios) postOriginal.comentarios.forEach(c => { if (c.autorNome !== autorNome) usuariosNotificar.add(c.autorNome); });
+            
             const notificacoesArray = Array.from(usuariosNotificar).map(destinatario => ({
                 id: crypto.randomUUID(), escolaId: postOriginal.escolaId, destinatarioNome: destinatario, remetenteNome: autorNome,
-                mensagem: `comentou: "${texto.substring(0, 30)}..."`, origem: 'comentario_novo', origemId: `${postId}|${novoComentario.id}`, lida: false, data: new Date().toISOString()
+                mensagem: `comentou: "${texto.substring(0, 30)}..."`, 
+                origem: 'comentario_novo', 
+                origemId: `${postId}|${novoComentario.id}`, // 🚀 O SALTO MÁGICO: Guardamos o ID do Post e do Comentário!
+                lida: false, data: new Date().toISOString()
             }));
+
             if (notificacoesArray.length > 0) {
                 await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
                 workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: Array.from(usuariosNotificar), escolaId: postOriginal.escolaId });
             }
         }
         res.status(201).json({ success: true, comentario: novoComentario });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao comentar.' }); }
 });
 
 router.put('/posts/:id/reagir', verificarToken, async (req, res) => {
     try {
         const postId = req.params.id;
-        const { userId, tipo, autorNome } = req.body;
+        const { userId, tipo, autorNome } = req.body; 
         if (!userId) return res.status(400).json({ error: 'Obrigatório.' });
+
         const database = await connectDB();
         const post = await database.collection('workspace_posts').findOne({ id: postId });
         if (!post) return res.status(404).json({ error: 'Não encontrada.' });
+
         let likes = Array.isArray(post.likes) ? post.likes : [];
         let dislikes = Array.isArray(post.dislikes) ? post.dislikes : [];
+
         likes = likes.filter(id => id !== userId);
         dislikes = dislikes.filter(id => id !== userId);
+
         if (tipo === 'like') likes.push(userId);
         if (tipo === 'dislike') dislikes.push(userId);
-        await database.collection('workspace_posts').updateOne({ id: postId }, { $set: { likes, dislikes } });
-        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId, escolaId: post.escolaId });
-        if (autorNome && post.autorNome !== autorNome && tipo !== 'remove') {
+
+        await database.collection('workspace_posts').updateOne({ id: postId }, { $set: { likes: likes, dislikes: dislikes } });
+        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: postId, escolaId: post.escolaId });
+
+        // 🚀 NÃO NOTIFICA SE FOR "REMOVE" (Desfazer a curtida)
+        if (autorNome && post.autorNome !== autorNome && tipo !== 'remove') { 
             const acaoRealizada = tipo === 'like' ? 'curtiu' : 'não curtiu';
             await database.collection('workspace_notificacoes').insertOne({
                 id: crypto.randomUUID(), escolaId: post.escolaId, destinatarioNome: post.autorNome, remetenteNome: autorNome,
-                mensagem: `${acaoRealizada} a sua publicação.`, origem: 'post', origemId: postId, lida: false, data: new Date().toISOString()
+                mensagem: `${acaoRealizada} a sua publicação.`, 
+                origem: 'post', 
+                origemId: postId, 
+                lida: false, data: new Date().toISOString()
             });
             workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: [post.autorNome], escolaId: post.escolaId });
         }
@@ -296,30 +471,47 @@ router.put('/posts/:id/reagir', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
 
+// 🚀 NOVA ROTA: REAÇÃO EM COMENTÁRIOS
 router.put('/posts/:postId/comentarios/:comentarioId/reagir', verificarToken, async (req, res) => {
     try {
         const { postId, comentarioId } = req.params;
-        const { userId, tipo, autorNome } = req.body;
+        const { userId, tipo, autorNome } = req.body; 
         if (!userId) return res.status(400).json({ error: 'Obrigatório.' });
+
         const database = await connectDB();
         const post = await database.collection('workspace_posts').findOne({ id: postId });
         if (!post || !post.comentarios) return res.status(404).json({ error: 'Post não encontrado.' });
+
         const commentIndex = post.comentarios.findIndex(c => c.id === comentarioId);
         if (commentIndex === -1) return res.status(404).json({ error: 'Comentário não encontrado.' });
+
         const comentario = post.comentarios[commentIndex];
         let likes = Array.isArray(comentario.likes) ? comentario.likes : [];
         let dislikes = Array.isArray(comentario.dislikes) ? comentario.dislikes : [];
+
         likes = likes.filter(id => id !== userId);
         dislikes = dislikes.filter(id => id !== userId);
+
         if (tipo === 'like') likes.push(userId);
         if (tipo === 'dislike') dislikes.push(userId);
-        await database.collection('workspace_posts').updateOne({ id: postId, "comentarios.id": comentarioId }, { $set: { "comentarios.$.likes": likes, "comentarios.$.dislikes": dislikes } });
-        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId, escolaId: post.escolaId });
-        if (autorNome && comentario.autorNome !== autorNome && tipo !== 'remove') {
+
+        // Atualiza apenas o comentário específico dentro do Array
+        await database.collection('workspace_posts').updateOne(
+            { id: postId, "comentarios.id": comentarioId },
+            { $set: { "comentarios.$.likes": likes, "comentarios.$.dislikes": dislikes } }
+        );
+        
+        workspaceStream.emit('evento_realtime', { type: 'POST_UPDATE', postId: postId, escolaId: post.escolaId });
+
+        // Notifica o dono do comentário!
+        if (autorNome && comentario.autorNome !== autorNome && tipo !== 'remove') { 
             const acaoRealizada = tipo === 'like' ? 'curtiu' : 'não curtiu';
             await database.collection('workspace_notificacoes').insertOne({
                 id: crypto.randomUUID(), escolaId: post.escolaId, destinatarioNome: comentario.autorNome, remetenteNome: autorNome,
-                mensagem: `${acaoRealizada} o seu comentário.`, origem: 'comentario_reacao', origemId: `${postId}|${comentarioId}`, lida: false, data: new Date().toISOString()
+                mensagem: `${acaoRealizada} o seu comentário.`, 
+                origem: 'comentario_reacao', 
+                origemId: `${postId}|${comentarioId}`, // Salto duplo!
+                lida: false, data: new Date().toISOString()
             });
             workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: [comentario.autorNome], escolaId: post.escolaId });
         }
@@ -330,8 +522,17 @@ router.put('/posts/:postId/comentarios/:comentarioId/reagir', verificarToken, as
 router.delete('/posts/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
+        
+        // 1. Apaga fisicamente da Base de Dados
         await database.collection('workspace_posts').deleteOne({ id: req.params.id });
-        workspaceStream.emit('evento_realtime', { type: 'POST_APAGADO', postId: req.params.id, escolaId: 'DEFAULT' });
+        
+        // 2. 🚀 O GRITO GLOBAL (SSE): Avisa todos os aparelhos online instantaneamente!
+        workspaceStream.emit('evento_realtime', { 
+            type: 'POST_APAGADO', 
+            postId: req.params.id, 
+            escolaId: 'DEFAULT' 
+        });
+
         res.status(200).json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
@@ -363,7 +564,7 @@ router.put('/posts/:postId/comentarios/:comentarioId', verificarToken, async (re
 });
 
 // ============================================================================
-// ⚙ OUTRAS ROTAS GERAIS - NOTIFICAÇÕES, PERFIL, ETC (mantidas)
+// ⚙️ OUTRAS ROTAS GERAIS
 // ============================================================================
 router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
     try {
@@ -381,186 +582,1171 @@ router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
 
+// ============================================================================
+// 🧹 LIMPAR TODAS AS NOTIFICAÇÕES DE UMA VEZ
+// ============================================================================
 router.put('/notificacoes/usuario/:nomeDono/ler-todas', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        await database.collection('workspace_notificacoes').updateMany({ destinatarioNome: req.params.nomeDono, lida: false }, { $set: { lida: true } });
+        
+        // Procura todas as notificações do utilizador que ainda não foram lidas
+        // e atualiza todas de uma vez para lida: true
+        await database.collection('workspace_notificacoes').updateMany(
+            { destinatarioNome: req.params.nomeDono, lida: false },
+            { $set: { lida: true } }
+        );
+        
         res.status(200).json({ success: true });
+    } catch (error) { 
+        console.error("🚨 Erro ao limpar todas as notificações:", error);
+        res.status(500).json({ error: 'Erro ao limpar notificações.' }); 
+    }
+});
+
+// ============================================================================
+// ⚙️ ROTA DE ALTERAÇÃO DE SENHA (PERFIL) - COM CRIPTOGRAFIA
+// ============================================================================
+router.put('/perfil', verificarToken, async (req, res) => {
+    try {
+        const { id, alunoRefId, senhaAtual, novaSenha } = req.body;
+        const database = await connectDB();
+        
+        const senhaLimpa = String(senhaAtual).trim();
+        const novaSenhaLimpa = String(novaSenha).trim();
+
+        // 1. Encontra a ficha do aluno na gaveta de acessos
+        const user = await database.collection('usuarios').findOne({ id: id });
+
+        if (!user) {
+            return res.status(404).json({ error: 'Conta de acesso não encontrada.' });
+        }
+
+        // 2. 🚀 O DESCODIFICADOR: Importamos a biblioteca de segurança (tentando as duas versões mais comuns no Node.js)
+        let bcrypt;
+        try { bcrypt = require('bcrypt'); } catch(e) { try { bcrypt = require('bcryptjs'); } catch(e) { bcrypt = null; } }
+
+        let senhaCorreta = false;
+        let novaSenhaParaGuardar = novaSenhaLimpa; // Por defeito é texto normal
+
+        // 3. A VERIFICAÇÃO INTELIGENTE (Criptografada vs Texto Normal)
+        // Se o sistema usa bcrypt, a senha na Base de Dados começa sempre por "$2"
+        if (bcrypt && user.senha && String(user.senha).startsWith('$2')) {
+            // A senha está criptografada! Usamos o motor para comparar
+            senhaCorreta = await bcrypt.compare(senhaLimpa, user.senha);
+            
+            // Se estiver correta, CRIPTOGRAFAMOS a senha nova antes de guardar para não quebrar o login
+            if (senhaCorreta) {
+                novaSenhaParaGuardar = await bcrypt.hash(novaSenhaLimpa, 10);
+            }
+        } else {
+            // Plano B: Se a senha estiver em texto normal (sistemas mais antigos)
+            const senhasValidas = [
+                String(user.senha).trim(),
+                String(user.senha_provisoria).trim(),
+                String(user.senhaProvisoria).trim()
+            ];
+            senhaCorreta = senhasValidas.includes(senhaLimpa) || senhasValidas.includes(String(Number(senhaLimpa)));
+        }
+
+        if (!senhaCorreta) {
+            return res.status(400).json({ error: 'A senha atual está incorreta. Verifique e tente novamente.' });
+        }
+
+        // 4. ATUALIZAÇÃO DA SENHA SEGURA E LIMPEZA
+        const updateDoc = {
+            $set: { senha: novaSenhaParaGuardar },
+            $unset: { senha_provisoria: "", senhaProvisoria: "" } 
+        };
+
+        // Guarda a senha secreta (Hash) na coleção principal
+        await database.collection('usuarios').updateOne({ id: id }, updateDoc);
+
+        // Espelha para a coleção de alunos (para coerência de dados)
+        if (alunoRefId) {
+            await database.collection('alunos').updateOne({ id: alunoRefId }, updateDoc);
+        }
+
+        res.status(200).json({ success: true });
+        
+    } catch (error) { 
+        console.error("🚨 Erro ao atualizar senha:", error);
+        res.status(500).json({ error: 'Erro interno ao tentar atualizar a senha.' }); 
+    }
+});
+
+// ============================================================================
+// 📸 ROTA DE ALTERAÇÃO DE FOTO (PERFIL) - INDEPENDENTE DA SECRETARIA
+// ============================================================================
+router.put('/perfil/avatar', verificarToken, async (req, res) => {
+    try {
+        // 🚀 Removemos o alunoRefId. O WorkSpace já não mexe nos dados oficiais!
+        const { id, avatarUrl } = req.body; 
+        const database = await connectDB();
+        
+        // Atualiza APENAS a identidade de acesso do WorkSpace (coleção usuarios)
+        await database.collection('usuarios').updateOne(
+            { id: id }, 
+            { $set: { avatar: avatarUrl } }
+        );
+        
+        res.status(200).json({ success: true, avatar: avatarUrl });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao guardar a foto de perfil.' }); 
+    }
+});
+
+// ============================================================================
+// ⚙️ ROTA DE ALTERAÇÃO DE NOME (PERFIL) - EFEITO CASCATA ABSOLUTO
+// ============================================================================
+router.put('/perfil/nome', verificarToken, async (req, res) => {
+    try {
+        const { id, novoNome } = req.body;
+        
+        if (!novoNome || novoNome.trim() === '') {
+            return res.status(400).json({ error: 'O nome não pode estar vazio.' });
+        }
+
+        const nomeLimpo = String(novoNome).trim();
+        const database = await connectDB();
+
+        // 1. Descobre quem é o utilizador
+        const user = await database.collection('usuarios').findOne({ id: id });
+        if (!user) return res.status(404).json({ error: 'Conta de acesso não encontrada.' });
+        
+        // 2. Coleta TODOS os nomes possíveis (Oficial da Secretaria + Antigos do WorkSpace)
+        let nomesParaAtualizar = [user.nome, user.login].filter(Boolean);
+        
+        if (user.alunoRefId) {
+            const alunoOficial = await database.collection('alunos').findOne({ id: user.alunoRefId });
+            if (alunoOficial && alunoOficial.nome) {
+                nomesParaAtualizar.push(alunoOficial.nome);
+            }
+        }
+        
+        if (user.tipo === 'Gestor' || user.login === 'gestor' || nomesParaAtualizar.includes('Gestor Principal')) {
+            nomesParaAtualizar.push('Gestor Principal');
+        }
+
+        // Remove nomes duplicados
+        nomesParaAtualizar = [...new Set(nomesParaAtualizar)];
+
+        // 3. Atualiza a Identidade INDEPENDENTE do WorkSpace
+        await database.collection('usuarios').updateOne({ id: id }, { $set: { nome: nomeLimpo } });
+
+        // ====================================================================
+        // 4. 🚀 O EFEITO CASCATA ABSOLUTO (Varre todas as veias do WorkSpace)
+        // ====================================================================
+        const filtroBusca = { autorNome: { $in: nomesParaAtualizar } };
+
+        // A) Publicações e Chats
+        await database.collection('workspace_posts').updateMany(filtroBusca, { $set: { autorNome: nomeLimpo } });
+        await database.collection('workspace_chats').updateMany(filtroBusca, { $set: { autorNome: nomeLimpo } });
+
+        // B) Comentários dos posts
+        const postsComComentarios = await database.collection('workspace_posts').find({ "comentarios.autorNome": { $in: nomesParaAtualizar } }).toArray();
+        for (let post of postsComComentarios) {
+            const novosComentarios = post.comentarios.map(c => {
+                if (nomesParaAtualizar.includes(c.autorNome)) c.autorNome = nomeLimpo;
+                return c;
+            });
+            await database.collection('workspace_posts').updateOne({ id: post.id }, { $set: { comentarios: novosComentarios } });
+        }
+
+        // C) 🚀 CORREÇÃO CRÍTICA: Atualiza os Exercícios e Provas baseando-se no ID do Aluno!
+        const idsDoAluno = [String(id)];
+        if (user.alunoRefId) idsDoAluno.push(String(user.alunoRefId));
+
+        await database.collection('workspace_entregas').updateMany(
+            { alunoId: { $in: idsDoAluno } },
+            { $set: { alunoNome: nomeLimpo } }
+        );
+        await database.collection('workspace_entregas_provas').updateMany(
+            { alunoId: { $in: idsDoAluno } },
+            { $set: { alunoNome: nomeLimpo } }
+        );
+
+        // D) Histórico de Notificações
+        await database.collection('workspace_notificacoes').updateMany(
+            { remetenteNome: { $in: nomesParaAtualizar } },
+            { $set: { remetenteNome: nomeLimpo } }
+        );
+        await database.collection('workspace_notificacoes').updateMany(
+            { destinatarioNome: { $in: nomesParaAtualizar } },
+            { $set: { destinatarioNome: nomeLimpo } }
+        );
+
+        // E) Feedbacks do Professor (Se um professor mudar de nome, atualiza os balões de feedback dele)
+        if (user.tipo !== 'Aluno') {
+            const entregasComFeedbacks = await database.collection('workspace_entregas').find({ "feedbacks.autorNome": { $in: nomesParaAtualizar } }).toArray();
+            for (let ent of entregasComFeedbacks) {
+                const novosFeedbacks = ent.feedbacks.map(f => {
+                    if (nomesParaAtualizar.includes(f.autorNome)) f.autorNome = nomeLimpo;
+                    return f;
+                });
+                await database.collection('workspace_entregas').updateOne({ id: ent.id }, { $set: { feedbacks: novosFeedbacks } });
+            }
+        }
+
+        res.status(200).json({ success: true, nome: nomeLimpo, nomeAntigo: nomesParaAtualizar[0] });
+    } catch (error) {
+        console.error("🚨 Erro ao atualizar o nome do perfil e cascata:", error);
+        res.status(500).json({ error: 'Erro interno ao tentar atualizar o nome.' });
+    }
+});
+
+// ============================================================================
+// 💬 GESTÃO DE FEEDBACKS DO PROFESSOR (EDITAR E APAGAR)
+// ============================================================================
+
+router.put('/entregas/:entregaId/feedback/:feedbackId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const { texto } = req.body;
+        
+        await database.collection('workspace_entregas').updateOne(
+            { id: req.params.entregaId, "feedbacks.id": req.params.feedbackId },
+            { $set: { "feedbacks.$.texto": texto } }
+        );
+
+        // Dispara um recarregamento silencioso nas telas (SSE)
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', { type: 'NOVO_FEEDBACK', entregaId: req.params.entregaId, escolaId: 'DEFAULT' });
+        }
+        res.status(200).json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Erro ao editar feedback.' }); }
+});
+
+router.delete('/entregas/:entregaId/feedback/:feedbackId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        
+        await database.collection('workspace_entregas').updateOne(
+            { id: req.params.entregaId },
+            { $pull: { feedbacks: { id: req.params.feedbackId } } }
+        );
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', { type: 'NOVO_FEEDBACK', entregaId: req.params.entregaId, escolaId: 'DEFAULT' });
+        }
+        res.status(200).json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Erro ao apagar feedback.' }); }
+});
+
+// 🚀 Guardar a Entrega de Exercício/Avaliação e AVISAR O PROFESSOR
+router.post('/entregas', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const novaEntrega = { ...req.body, id: crypto.randomUUID(), dataEntrega: new Date().toISOString() };
+        
+        // Passo A: A gaveta recebe o trabalho do aluno
+        await database.collection('workspace_entregas').insertOne(novaEntrega);
+
+        // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES (ALUNO -> PROFESSOR/GESTOR)
+        // ====================================================================
+        try {
+            const escolaId = novaEntrega.escolaId || 'DEFAULT';
+            const nomeAluno = novaEntrega.alunoNome || 'Um aluno';
+            const tituloTarefa = novaEntrega.eventoTitulo || 'uma tarefa';
+            const turmaNome = novaEntrega.turmaNome || 'a sua turma';
+
+            // 1. Localiza a Equipa Pedagógica (Professores e Gestores da Escola)
+            const professoresEGestores = await database.collection('usuarios').find({ 
+                escolaId: escolaId,
+                tipo: { $in: ['Professor', 'Gestor'] }
+            }).toArray();
+
+            // 2. Fabrica os bilhetes de alerta para eles
+            if (professoresEGestores.length > 0) {
+                const nomesDestinatarios = [];
+                const notificacoesArray = professoresEGestores.map(prof => {
+                    const nomeProf = prof.nome || prof.login;
+                    if (nomeProf) nomesDestinatarios.push(nomeProf);
+                    
+                    return {
+                        id: crypto.randomUUID(),
+                        escolaId: escolaId,
+                        destinatarioNome: nomeProf,
+                        remetenteNome: nomeAluno,
+                        mensagem: `da turma de <strong>${turmaNome}</strong>, enviou o exercício intitulado <strong>"${tituloTarefa}"</strong> e já está disponível na área de exercícios. Confira 👀`,
+                        origem: 'tarefa', // O clique no sino abrirá o modal de verificação!
+                        origemId: novaEntrega.eventoId,
+                        destinoNome: turmaNome,
+                        lida: false,
+                        data: new Date().toISOString()
+                    };
+                }).filter(n => n.destinatarioNome);
+
+                // 3. Guarda e emite o aviso em Tempo Real
+                if (notificacoesArray.length > 0) {
+                    await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                    
+                    workspaceStream.emit('evento_realtime', { 
+                        type: 'NOVA_NOTIFICACAO', 
+                        destinatarios: nomesDestinatarios, 
+                        escolaId: escolaId 
+                    });
+                }
+            }
+        } catch (erroNoti) {
+            console.error("Aviso: Falha ao notificar professores sobre a entrega.", erroNoti);
+        }
+        // ====================================================================
+
+        res.status(201).json({ success: true, entrega: novaEntrega });
+    } catch (error) { 
+        console.error("Erro no envio da entrega:", error);
+        res.status(500).json({ error: 'Erro interno.' }); 
+    }
+});
+
+router.get('/entregas/verificar/:eventoId/:alunoId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const entrega = await database.collection('workspace_entregas').findOne({ eventoId: req.params.eventoId, alunoId: req.params.alunoId });
+        res.status(200).json(entrega ? { entregue: true, detalhes: entrega } : { entregue: false });
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
 
-// PERFIL - SENHA, AVATAR, NOME, FEEDBACKS, ENTREGAS, MONITORAMENTO (resumido para não estourar limite)
-// ... (suas rotas de perfil, entregas, materiais, monitoramento continuam iguais - copie do seu arquivo original a partir daqui se quiser manter customizações)
+router.get('/entregas/tarefa/:eventoId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const entregas = await database.collection('workspace_entregas').find({ eventoId: req.params.eventoId }).sort({ dataEntrega: -1 }).toArray();
+        res.status(200).json(entregas);
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
 
-// Para garantir que o arquivo fique completo, vou manter as rotas essenciais de entregas e monitoramento que você tinha:
+// 🚀 OBTER DETALHES DE UMA ENTREGA (INCLUINDO FEEDBACKS)
+router.get('/entregas/:id', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const entrega = await db.collection('workspace_entregas').findOne({ id: req.params.id });
+        if (!entrega) return res.status(404).json({ error: 'Entrega não encontrada' });
+        res.status(200).json({ success: true, entrega });
+    } catch (error) { res.status(500).json({ error: 'Erro ao buscar entrega.' }); }
+});
 
+// 🚀 PROFESSOR ENVIA FEEDBACK AO ALUNO (E TOCA O SINO DELE)
+router.post('/entregas/:id/feedback', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { texto, professorNome } = req.body;
+        const entregaId = req.params.id;
+
+        const entrega = await db.collection('workspace_entregas').findOne({ id: entregaId });
+        if (!entrega) return res.status(404).json({ error: 'Entrega não encontrada.' });
+
+        const novoFeedback = {
+            id: crypto.randomUUID(),
+            autorNome: professorNome || 'Professor',
+            texto: texto,
+            data: new Date().toISOString()
+        };
+
+        // Guarda o comentário na gaveta do trabalho
+        await db.collection('workspace_entregas').updateOne(
+            { id: entregaId },
+            { $push: { feedbacks: novoFeedback } }
+        );
+
+        // ====================================================================
+        // 🚀 O GATILHO: Avisar o Aluno!
+        // ====================================================================
+        const escolaId = entrega.escolaId || 'DEFAULT';
+        const eventoId = entrega.eventoId;
+        const nomeAluno = entrega.alunoNome;
+
+        const notificacao = {
+            id: 'notif_fb_' + Date.now(),
+            escolaId: escolaId,
+            destinatarioNome: nomeAluno,
+            remetenteNome: professorNome,
+            mensagem: `avaliou e enviou um feedback no seu exercício: "${entrega.eventoTitulo}"`,
+            origem: 'feedback_tarefa', // 🚀 A Palavra Mágica para o Teletransporte!
+            origemId: `${eventoId}|${entrega.id}`, // Guardamos os 2 IDs juntos
+            destinoNome: 'Área de Exercícios',
+            lida: false,
+            data: new Date().toISOString()
+        };
+
+        await db.collection('workspace_notificacoes').insertOne(notificacao);
+
+        if (global.workspaceStream) {
+            // Toca o sininho do aluno
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'NOVA_NOTIFICACAO',
+                destinatarios: [nomeAluno],
+                escolaId: escolaId
+            });
+            // 🚀 Atualiza a janela de Feedback ao vivo (se ele já estiver lá dentro)
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'NOVO_FEEDBACK',
+                entregaId: entregaId,
+                feedback: novoFeedback,
+                escolaId: escolaId
+            });
+        }
+
+        res.status(201).json({ success: true, feedback: novoFeedback });
+    } catch (error) {
+        console.error("Erro ao enviar feedback:", error);
+        res.status(500).json({ error: 'Erro interno.' });
+    }
+});
+
+router.get('/avatars', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const mapaAvatars = {};
+        const alunos = await database.collection('alunos').find({ avatar: { $exists: true, $ne: null } }).toArray();
+        const usuarios = await database.collection('usuarios').find({ avatar: { $exists: true, $ne: null } }).toArray();
+        alunos.forEach(a => { if(a.nome) mapaAvatars[a.nome] = a.avatar; });
+        usuarios.forEach(u => { const nome = u.nome || u.login; if(nome) mapaAvatars[nome] = u.avatar; });
+        res.status(200).json(mapaAvatars);
+    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+});
+
+// ============================================================================
+// 📝 CRIAR NOVA TAREFA / EXERCÍCIO (E DISPARAR CARTÃO ANIMADO PARA ALUNOS)
+// ============================================================================
+router.post('/eventos', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        
+        // Monta a estrutura da tarefa recebida do sidebar.js
+        const novoEvento = {
+            ...req.body,
+            id: crypto.randomUUID(), // Gera o ID único
+            dataCriacao: new Date().toISOString()
+        };
+
+        // 1. Guarda a Tarefa fisicamente na Base de Dados
+        await db.collection('eventos').insertOne(novoEvento);
+
+        // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES (PROFESSOR -> ALUNOS) PARA EXERCÍCIOS
+        // ====================================================================
+        try {
+            // Recolhe os dados do payload enviado pelo sidebar.js
+            const escola = req.body.escolaId || 'DEFAULT'; 
+            const tituloTarefa = req.body.titulo || 'Novo Exercício';
+            const autorDaTarefa = req.body.autorNome || 'Professor';
+            const destinoTarefa = req.body.turma || 'global';
+            const destinoNomeTarefa = req.body.turmaNome || 'Geral';
+
+            // Busca os alunos da base de dados
+            const alunos = await db.collection('alunos').find({ escolaId: escola }).toArray();
+            
+            // Filtra quem tem o direito de receber o exercício
+            let alunosAlvo = [];
+            if (destinoTarefa === 'global') {
+                alunosAlvo = alunos;
+            } else {
+                alunosAlvo = alunos.filter(a => {
+                    const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                    return minhasTurmas.some(t => String(t).toLowerCase() === String(destinoTarefa).toLowerCase() || String(t).toLowerCase() === String(destinoNomeTarefa).toLowerCase());
+                });
+            }
+
+            if (alunosAlvo.length > 0) {
+                const nomesDestinatarios = [];
+                const notificacoesArray = alunosAlvo.map(aluno => {
+                    const nomeAluno = aluno.nome || aluno.login;
+                    if (nomeAluno) nomesDestinatarios.push(nomeAluno);
+                    
+                    return {
+                        id: 'notif_' + Date.now() + Math.random().toString(36).substring(7),
+                        escolaId: escola,
+                        destinatarioNome: nomeAluno,
+                        remetenteNome: autorDaTarefa,
+                        mensagem: `agendou um novo exercício: "${tituloTarefa}"`,
+                        origem: 'tarefa', // 🚀 Gatilho Mágico: Esta palavra ativa o cartão azul e a animação do sininho!
+                        origemId: novoEvento.id, 
+                        destinoNome: destinoNomeTarefa,
+                        lida: false,
+                        data: new Date().toISOString()
+                    };
+                }).filter(n => n.destinatarioNome);
+
+                // Guarda no cofre e dá o Grito de Tempo Real para o ecrã dos alunos!
+                if (notificacoesArray.length > 0) {
+                    await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                    
+                    if (global.workspaceStream) {
+                        global.workspaceStream.emit('evento_realtime', { 
+                            type: 'NOVA_NOTIFICACAO', destinatarios: nomesDestinatarios, escolaId: escola 
+                        });
+                    }
+                }
+            }
+        } catch (erroNotificacao) {
+            console.error("Aviso: Falha ao gerar notificações da tarefa.", erroNotificacao);
+        }
+        // ====================================================================
+
+        res.status(201).json({ success: true, evento: novoEvento });
+    } catch (error) {
+        console.error("Erro ao criar evento/tarefa:", error);
+        res.status(500).json({ error: 'Erro ao registar a atividade no servidor.' });
+    }
+});
+
+router.put('/eventos/:id', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const eventoId = req.params.id;
+        
+        // 1. Vai buscar a tarefa antiga para saber quem foi o autor original e a escola
+        const eventoOriginal = await database.collection('eventos').findOne({ id: eventoId });
+        if (!eventoOriginal) return res.status(404).json({ error: 'Atividade não encontrada.' });
+
+        // 2. Atualiza a atividade com os novos dados do professor
+        const updateFields = {};
+        if (req.body.titulo) updateFields.titulo = req.body.titulo;
+        if (req.body.data) updateFields.data = req.body.data;
+        if (req.body.turma) updateFields.turma = req.body.turma;
+        if (req.body.turmaNome) updateFields.turmaNome = req.body.turmaNome;
+        if (req.body.descricao !== undefined) updateFields.descricao = req.body.descricao;
+        if (req.body.anexoUrl !== undefined) updateFields.anexoUrl = req.body.anexoUrl;
+
+        await database.collection('eventos').updateOne({ id: eventoId }, { $set: updateFields });
+
+        // ====================================================================
+        // 🚀 O MOTOR DE ANULAÇÃO JUSTA E NOTIFICAÇÕES SEPARADAS
+        // ====================================================================
+        try {
+            // A) Descobre quem já tinha entregado o trabalho
+            const entregasAnteriores = await database.collection('workspace_entregas').find({ eventoId: eventoId }).toArray();
+            const alunosQueEntregaramIds = entregasAnteriores.map(e => String(e.alunoId));
+            const alunosQueEntregaramNomes = entregasAnteriores.map(e => e.alunoNome);
+
+            // B) Apaga (anula) as entregas existentes na Base de Dados
+            if (entregasAnteriores.length > 0) {
+                await database.collection('workspace_entregas').deleteMany({ eventoId: eventoId });
+            }
+
+            // C) Vai buscar os alunos da turma para enviar os alertas adequados
+            const escolaId = eventoOriginal.escolaId || 'DEFAULT';
+            const autorDaTarefa = eventoOriginal.autorNome || 'Professor';
+            const tituloNovo = req.body.titulo || eventoOriginal.titulo || 'Exercício Atualizado';
+            const turmaAlvo = req.body.turma || eventoOriginal.turma || 'global';
+            
+            const todosAlunos = await database.collection('alunos').find({ escolaId: escolaId }).toArray();
+            
+            // Filtra só os alunos a quem o exercício se destina
+            const alunosDaTurma = todosAlunos.filter(a => {
+                if (turmaAlvo === 'global') return true;
+                const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                return minhasTurmas.some(t => String(t).toLowerCase() === String(turmaAlvo).toLowerCase() || String(t).toLowerCase() === String(req.body.turmaNome || eventoOriginal.turmaNome).toLowerCase());
+            });
+
+            const notificacoesArray = [];
+            const destinatariosGeral = [];
+
+            // D) Escreve os bilhetes personalizados para cada aluno
+            alunosDaTurma.forEach(aluno => {
+                const nomeAluno = aluno.nome || aluno.login;
+                if (!nomeAluno) return;
+                
+                destinatariosGeral.push(nomeAluno);
+
+                // Verifica se o aluno está na lista de quem foi prejudicado pela edição
+                const jaTinhaEntregue = alunosQueEntregaramIds.includes(String(aluno.id)) || alunosQueEntregaramNomes.includes(nomeAluno);
+
+                let mensagemAviso = '';
+                if (jaTinhaEntregue) {
+                    mensagemAviso = `fez modificações estruturais no exercício <strong>"${tituloNovo}"</strong>. <span style="color:#e74c3c;">A sua entrega anterior foi anulada. Por favor, leia as novas instruções e refaça a atividade.</span>`;
+                } else {
+                    mensagemAviso = `atualizou as instruções e regras do exercício <strong>"${tituloNovo}"</strong>. Confirme as novidades antes de enviar!`;
+                }
+
+                notificacoesArray.push({
+                    id: 'notif_upd_' + Date.now() + Math.random().toString(36).substring(7),
+                    escolaId: escolaId,
+                    destinatarioNome: nomeAluno,
+                    remetenteNome: autorDaTarefa,
+                    mensagem: mensagemAviso,
+                    origem: 'tarefa', // Abre o modal do exercício!
+                    origemId: eventoId,
+                    destinoNome: req.body.turmaNome || eventoOriginal.turmaNome || 'Geral',
+                    lida: false,
+                    data: new Date().toISOString()
+                });
+            });
+
+            // E) Guarda os alertas e dá o Grito Global
+            if (notificacoesArray.length > 0) {
+                await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                if (global.workspaceStream) {
+                    global.workspaceStream.emit('evento_realtime', {
+                        type: 'NOVA_NOTIFICACAO', destinatarios: destinatariosGeral, escolaId: escolaId
+                    });
+                }
+            }
+
+        } catch (erroLogica) {
+            console.error("Aviso: A tarefa foi atualizada, mas houve um erro ao processar anulações.", erroLogica);
+        }
+
+        res.status(200).json({ success: true });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao processar edição da atividade.' }); 
+    }
+});
+
+router.delete('/eventos/:id', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        
+        // 1. Apaga a instrução do exercício principal
+        await database.collection('eventos').deleteOne({ id: req.params.id });
+        
+        // 2. 🚀 CORREÇÃO: Apaga as entregas da gaveta correta do WorkSpace!
+        await database.collection('workspace_entregas').deleteMany({ eventoId: req.params.id });
+        
+        res.status(200).json({ success: true });
+    } catch (error) { 
+        console.error("Erro ao apagar exercício:", error);
+        res.status(500).json({ error: 'Erro ao apagar o exercício.' }); 
+    }
+});
+
+// ============================================================================
+// 🧹 ROTAS DE DESTRUIÇÃO E REATIVAÇÃO (DELETE)
+// ============================================================================
+
+// 1. Apagar Mensagens em Massa do Chat com SSE Global
+router.delete('/chat/:turmaId/mensagens/massa', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const { ids } = req.body; // Recebemos o "cesto" cheio de IDs
+
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ error: 'Nenhuma mensagem selecionada.' });
+        }
+
+        // 1. Destrói fisicamente todas as mensagens listadas de uma vez
+        await database.collection('workspace_chats').deleteMany({ 
+            id: { $in: ids },
+            turmaId: req.params.turmaId
+        });
+        
+        // 2. 🚀 O GRITO GLOBAL (SSE): Avisa todos para apagarem esta lista do ecrã
+        workspaceStream.emit('evento_realtime', { 
+            type: 'MSG_APAGADA_MASSA', 
+            turmaId: req.params.turmaId, 
+            mensagensIds: ids, // Passamos a lista toda pelo túnel
+            escolaId: 'DEFAULT' 
+        });
+
+        res.status(200).json({ success: true, message: "Mensagens apagadas com sucesso!" });
+    } catch (error) { 
+        console.error("Erro ao apagar mensagens em massa:", error);
+        res.status(500).json({ error: 'Erro interno.' }); 
+    }
+});
+
+// 2. Apagar uma Mensagem Individual do Chat com SSE Global
+router.delete('/chat/:turmaId/mensagem/:mensagemId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        
+        // 1. Apaga fisicamente a mensagem da Base de Dados
+        await database.collection('workspace_chats').deleteOne({ 
+            id: req.params.mensagemId,
+            turmaId: req.params.turmaId
+        });
+        
+        // 2. 🚀 O GRITO GLOBAL (SSE): Avisa os telemóveis conectados para apagarem a msg do ecrã
+        workspaceStream.emit('evento_realtime', { 
+            type: 'MSG_APAGADA', 
+            turmaId: req.params.turmaId, 
+            mensagemId: req.params.mensagemId,
+            escolaId: 'DEFAULT' 
+        });
+
+        res.status(200).json({ success: true, message: "Mensagem apagada com sucesso!" });
+    } catch (error) { 
+        console.error("Erro ao apagar mensagem individual do chat:", error);
+        res.status(500).json({ error: 'Erro ao apagar a mensagem do chat.' }); 
+    }
+});
+
+// 3. Limpar todo o Chat de uma turma
+router.delete('/chat/:turmaId/limpar', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        
+        // Comanda a base de dados para apagar todas as mensagens daquela turma
+        await database.collection('workspace_chats').deleteMany({ turmaId: req.params.turmaId });
+        
+        // Avisa os telemóveis/computadores conectados para atualizarem o ecrã em tempo real
+        workspaceStream.emit('evento_realtime', { 
+            type: 'SALA_UPDATE', 
+            turmaId: req.params.turmaId, 
+            escolaId: 'DEFAULT' 
+        });
+
+        res.status(200).json({ success: true, message: "Chat limpo com sucesso!" });
+    } catch (error) { 
+        console.error("Erro ao limpar chat:", error);
+        res.status(500).json({ error: 'Erro ao limpar o chat.' }); 
+    }
+});
+
+// 4. Reativar Acesso de 1 Aluno na Sala Online (Apaga uma presença específica)
+router.delete('/entregas/:entregaId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_entregas').deleteOne({ id: req.params.entregaId });
+        res.status(200).json({ success: true, message: "Acesso reativado!" });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao reativar aluno.' }); 
+    }
+});
+
+// 5. Reativar Sala para Todos os Alunos (Apaga todas as presenças daquela sala)
+router.delete('/avaliacoes/:id/entregas', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_entregas').deleteMany({ avaliacaoId: req.params.id });
+        res.status(200).json({ success: true, message: "Sala reativada para todos!" });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao limpar presenças.' }); 
+    }
+});
+
+// ============================================================================
+// 🧰 BAÚ DAS MEMÓRIAS (NOTAS E ALARMES)
+// ============================================================================
+
+// 1. Buscar Todas as Notas do Aluno (Lista)
 router.get('/bau/notas', verificarToken, async (req, res) => {
     try {
         const usuarioId = req.query.usuarioId;
         const database = await connectDB();
-        const notas = await database.collection('workspace_bau_notas').find({ usuarioId }).sort({ dataAtualizacao: -1 }).toArray();
+        const notas = await database.collection('workspace_bau_notas')
+            .find({ usuarioId: usuarioId })
+            .sort({ dataAtualizacao: -1 })
+            .toArray();
         res.status(200).json({ dados: notas });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao carregar notas.' }); }
 });
 
+// 2. Criar Nova Nota
 router.post('/bau/notas', verificarToken, async (req, res) => {
     try {
         const { usuarioId, titulo, texto } = req.body;
         const database = await connectDB();
-        const novaNota = { id: crypto.randomUUID(), usuarioId, titulo: titulo || 'Nota sem título', texto, dataCriacao: new Date().toISOString(), dataAtualizacao: new Date().toISOString() };
+        const novaNota = {
+            id: crypto.randomUUID(), usuarioId, titulo: titulo || 'Nota sem título', 
+            texto, dataCriacao: new Date().toISOString(), dataAtualizacao: new Date().toISOString()
+        };
         await database.collection('workspace_bau_notas').insertOne(novaNota);
         res.status(201).json({ success: true, nota: novaNota });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao criar nota.' }); }
 });
 
+// 2.1. Atualizar Nota Existente
 router.put('/bau/notas/:id', verificarToken, async (req, res) => {
     try {
         const { titulo, texto } = req.body;
         const database = await connectDB();
-        await database.collection('workspace_bau_notas').updateOne({ id: req.params.id }, { $set: { titulo, texto, dataAtualizacao: new Date().toISOString() } });
+        await database.collection('workspace_bau_notas').updateOne(
+            { id: req.params.id },
+            { $set: { titulo: titulo, texto: texto, dataAtualizacao: new Date().toISOString() } }
+        );
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao atualizar nota.' }); }
 });
 
+// 2.2. Apagar Nota
 router.delete('/bau/notas/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
         await database.collection('workspace_bau_notas').deleteOne({ id: req.params.id });
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { res.status(500).json({ error: 'Erro ao apagar nota.' }); }
 });
 
+// 3. Buscar Alarmes/Lembretes Pendentes
 router.get('/bau/alarmes', verificarToken, async (req, res) => {
     try {
         const usuarioId = req.query.usuarioId;
         const database = await connectDB();
-        const alarmes = await database.collection('workspace_bau_alarmes').find({ usuarioId }).sort({ tempoDisparo: 1 }).toArray();
+        
+        const alarmes = await database.collection('workspace_bau_alarmes')
+            .find({ usuarioId: usuarioId })
+            .sort({ tempoDisparo: 1 })
+            .toArray();
+            
         res.status(200).json({ dados: alarmes });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao carregar alarmes.' }); 
+    }
 });
 
+// 4. Criar Novo Alarme/Lembrete
 router.post('/bau/alarmes', verificarToken, async (req, res) => {
     try {
         const { usuarioId, mensagem, tempoDisparo } = req.body;
         const database = await connectDB();
-        const novoAlarme = { id: crypto.randomUUID(), usuarioId, mensagem, tempoDisparo, criadoEm: new Date().toISOString() };
+        
+        const novoAlarme = {
+            id: crypto.randomUUID(),
+            usuarioId,
+            mensagem,
+            tempoDisparo,
+            criadoEm: new Date().toISOString()
+        };
+        
         await database.collection('workspace_bau_alarmes').insertOne(novoAlarme);
         res.status(201).json({ success: true, id: novoAlarme.id });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao criar alarme.' }); 
+    }
 });
 
+// 4.1. Marcar Alarme como Disparado (Mantém no Calendário)
 router.put('/bau/alarmes/:id/disparado', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        await database.collection('workspace_bau_alarmes').updateOne({ id: req.params.id }, { $set: { disparado: true } });
+        await database.collection('workspace_bau_alarmes').updateOne(
+            { id: req.params.id },
+            { $set: { disparado: true } }
+        );
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao atualizar alarme.' }); 
+    }
 });
 
+// 5. Apagar Alarme (Após ele disparar na tela)
 router.delete('/bau/alarmes/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
         await database.collection('workspace_bau_alarmes').deleteOne({ id: req.params.id });
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao apagar alarme.' }); 
+    }
 });
 
-// MATERIAIS, MONITORAMENTO, EVENTOS, ENTREGAS - mantidos simplificados (se precisar do completo me avise, mas o inglês é o foco agora)
+// ============================================================================
+// 📚 MATERIAIS DAS AULAS (A ESTANTE DIGITAL)
+// ============================================================================
 
-// ============================================================================
-// 📚 MATERIAIS
-// ============================================================================
+// 1. Guardar metadados do Material e DISPARAR NOTIFICAÇÕES (Prof -> Alunos)
 router.post('/materiais', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const novoMaterial = req.body;
+        
+        // Garante que o material tem um ID seguro antes de guardar
         if (!novoMaterial.id) novoMaterial.id = crypto.randomUUID();
+        
+        // Passo A: Guarda o documento físico na Biblioteca
         await db.collection('workspace_materiais').insertOne(novoMaterial);
-        workspaceStream.emit('evento_realtime', { type: 'MATERIAL_UPDATE', escolaId: novoMaterial.escolaId || 'DEFAULT' });
+
+        // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES: Encontrar os alunos e tocar o sininho!
+        // ====================================================================
+        try {
+            const escolaId = novoMaterial.escolaId || 'DEFAULT';
+            const destino = novoMaterial.destino || 'global';
+            const autor = novoMaterial.autorNome || 'Professor';
+            const tituloMat = novoMaterial.titulo || 'Novo Material';
+
+            // 1. Vai buscar a lista de todos os alunos da escola
+            const alunos = await db.collection('alunos').find({ escolaId: escolaId }).toArray();
+            
+           // 2. Filtra apenas os alunos que têm acesso a este material
+            let alunosAlvo = [];
+            if (destino === 'global' || (Array.isArray(destino) && destino.includes('global'))) {
+                alunosAlvo = alunos; // Todos recebem
+            } else {
+                alunosAlvo = alunos.filter(a => {
+                    const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                    // 🚀 LEITURA MÚLTIPLA NA NUVEM
+                    if (Array.isArray(destino)) {
+                        return minhasTurmas.some(t => destino.includes(String(t)) || (Array.isArray(novoMaterial.destinoNome) && novoMaterial.destinoNome.includes(String(t))));
+                    } else {
+                        return minhasTurmas.some(t => String(t).toLowerCase() === String(destino).toLowerCase() || String(t).toLowerCase() === String(novoMaterial.destinoNome).toLowerCase());
+                    }
+                });
+            }
+
+            // 3. Se encontrou alunos, fabrica os bilhetes de notificação
+            if (alunosAlvo.length > 0) {
+                const nomesDestinatarios = [];
+                // Transforma a lista de nomes num texto amigável para a notificação
+                const nomeDestinoAmigavel = Array.isArray(novoMaterial.destinoNome) ? novoMaterial.destinoNome.join(', ') : (novoMaterial.destinoNome || 'Geral');
+                
+                const notificacoesArray = alunosAlvo.map(aluno => {
+                    const nomeAluno = aluno.nome || aluno.login;
+                    if (nomeAluno) nomesDestinatarios.push(nomeAluno);
+                    
+                    return {
+                        id: crypto.randomUUID(),
+                        escolaId: escolaId,
+                        destinatarioNome: nomeAluno,
+                        remetenteNome: autor,
+                        mensagem: `compartilhou um novo material: "${tituloMat}"`,
+                        origem: 'material',
+                        origemId: novoMaterial.id,
+                        destinoNome: nomeDestinoAmigavel, // Usa o texto formatado
+                        lida: false,
+                        data: new Date().toISOString()
+                    };
+                }).filter(n => n.destinatarioNome);
+
+                // 4. Salva no cofre e dá o Grito Global em Tempo Real (SSE)
+                if (notificacoesArray.length > 0) {
+                    await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                    
+                    workspaceStream.emit('evento_realtime', { 
+                        type: 'NOVA_NOTIFICACAO', 
+                        destinatarios: nomesDestinatarios, 
+                        escolaId: escolaId 
+                    });
+                }
+            }
+        } catch (erroNotificacao) {
+            console.error("Aviso: Material guardado, mas falha ao gerar notificações.", erroNotificacao);
+        }
+        // ====================================================================
+
         res.status(201).json({ success: true, material: novoMaterial });
-    } catch (error) { res.status(500).json({ success: false }); }
+    } catch (error) {
+        console.error("Erro ao guardar material:", error);
+        res.status(500).json({ success: false, error: 'Erro ao registar o material.' });
+    }
 });
 
+// 2. Procurar Materiais (Geral para Professores, Filtrado para Alunos)
 router.get('/materiais', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const escolaId = req.query.escolaId;
         const alunoRefId = req.query.alunoRefId;
-        let filtro = { escolaId };
+        
+        let filtro = { escolaId: escolaId };
+        
+        // Se for um aluno a pedir, o servidor só entrega materiais permitidos
         if (alunoRefId && alunoRefId !== 'undefined') {
             const aluno = await db.collection('alunos').findOne({ id: alunoRefId });
             if (aluno) {
                 let minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas || aluno.turma];
-                filtro = { escolaId, $or: [{ destino: 'global' }, { destino: { $in: ['global'] } }, { destino: { $in: minhasTurmas } }, { destinoNome: { $in: minhasTurmas } }] };
+                // 🚀 O MOTOR DE BUSCA DA MONGODB ATUALIZADO:
+                // O operador $in cruza naturalmente uma lista com outra lista!
+                filtro = { 
+                    escolaId: escolaId,
+                    $or: [
+                        { destino: 'global' }, 
+                        { destino: { $in: ['global'] } }, // Prevenção: caso guardem ['global']
+                        { destino: { $in: minhasTurmas } }, 
+                        { destinoNome: { $in: minhasTurmas } }
+                    ] 
+                };
             }
         }
+        
         const materiais = await db.collection('workspace_materiais').find(filtro).sort({ dataCriacao: -1 }).toArray();
         res.status(200).json({ success: true, materiais });
-    } catch (error) { res.status(500).json({ success: false }); }
+    } catch (error) {
+        res.status(500).json({ success: false });
+    }
 });
 
+// 3. Apagar Material
 router.delete('/materiais/:id', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         await db.collection('workspace_materiais').deleteOne({ id: req.params.id });
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ success: false }); }
+    } catch (error) {
+        res.status(500).json({ success: false });
+    }
 });
 
+// 3.5. Atualizar Material (Metadados) e Disparar Atualização Global
 router.put('/materiais/:id', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const materialId = req.params.id;
         const materialAtualizado = req.body;
-        await db.collection('workspace_materiais').updateOne({ id: materialId }, { $set: { titulo: materialAtualizado.titulo, descricao: materialAtualizado.descricao, destino: materialAtualizado.destino, destinoNome: materialAtualizado.destinoNome, url: materialAtualizado.url } });
-        workspaceStream.emit('evento_realtime', { type: 'MATERIAL_UPDATE', escolaId: materialAtualizado.escolaId || 'DEFAULT' });
+        const materialId = req.params.id;
+
+        const materialAntigo = await db.collection('workspace_materiais').findOne({ id: materialId });
+        if(!materialAntigo) return res.status(404).json({ error: 'Material não encontrado.' });
+
+        // 1. Atualiza as informações físicas na base de dados
+        await db.collection('workspace_materiais').updateOne(
+            { id: materialId }, 
+            { $set: {
+                titulo: materialAtualizado.titulo,
+                descricao: materialAtualizado.descricao,
+                destino: materialAtualizado.destino,
+                destinoNome: materialAtualizado.destinoNome,
+                url: materialAtualizado.url,
+                tipoFicheiro: materialAtualizado.tipoFicheiro,
+                nomeOriginal: materialAtualizado.nomeOriginal
+            }}
+        );
+
+        // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES (Prof -> Alunos sobre a Atualização)
+        // ====================================================================
+        try {
+            const escolaId = materialAtualizado.escolaId || 'DEFAULT';
+            const destino = materialAtualizado.destino || 'global';
+            const autor = materialAtualizado.autorNome || 'Professor';
+            const tituloMat = materialAtualizado.titulo || 'Material Atualizado';
+
+            const alunos = await db.collection('alunos').find({ escolaId: escolaId }).toArray();
+            
+            let alunosAlvo = [];
+            if (destino === 'global' || (Array.isArray(destino) && destino.includes('global'))) {
+                alunosAlvo = alunos;
+            } else {
+                alunosAlvo = alunos.filter(a => {
+                    const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                    if (Array.isArray(destino)) {
+                        return minhasTurmas.some(t => destino.includes(String(t)) || (Array.isArray(materialAtualizado.destinoNome) && materialAtualizado.destinoNome.includes(String(t))));
+                    } else {
+                        return minhasTurmas.some(t => String(t).toLowerCase() === String(destino).toLowerCase() || String(t).toLowerCase() === String(materialAtualizado.destinoNome).toLowerCase());
+                    }
+                });
+            }
+
+            if (alunosAlvo.length > 0) {
+                const nomesDestinatarios = [];
+                const nomeDestinoAmigavel = Array.isArray(materialAtualizado.destinoNome) ? materialAtualizado.destinoNome.join(', ') : (materialAtualizado.destinoNome || 'Geral');
+                
+                const notificacoesArray = alunosAlvo.map(aluno => {
+                    const nomeAluno = aluno.nome || aluno.login;
+                    if (nomeAluno) nomesDestinatarios.push(nomeAluno);
+                    
+                    return {
+                        id: crypto.randomUUID(),
+                        escolaId: escolaId,
+                        destinatarioNome: nomeAluno,
+                        remetenteNome: autor,
+                        mensagem: `atualizou o material: "${tituloMat}"`, // Mensagem distinta de Criação
+                        origem: 'material', 
+                        origemId: materialId,
+                        destinoNome: nomeDestinoAmigavel,
+                        lida: false,
+                        data: new Date().toISOString()
+                    };
+                }).filter(n => n.destinatarioNome);
+
+                if (notificacoesArray.length > 0) {
+                    await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                    workspaceStream.emit('evento_realtime', { 
+                        type: 'NOVA_NOTIFICACAO', 
+                        destinatarios: nomesDestinatarios, 
+                        escolaId: escolaId 
+                    });
+                }
+            }
+        } catch (eNoti) {
+            console.error("Aviso: Falha ao gerar notificações de atualização de material.", eNoti);
+        }
+
+        // ====================================================================
+        // 🚀 O GRITO DE ATUALIZAÇÃO EM TEMPO REAL PARA RECARREGAR A TELA
+        // ====================================================================
+        workspaceStream.emit('evento_realtime', { 
+            type: 'MATERIAL_UPDATE', 
+            escolaId: materialAtualizado.escolaId || 'DEFAULT' 
+        });
+
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ success: false }); }
+    } catch (error) {
+        console.error("Erro ao atualizar material:", error);
+        res.status(500).json({ success: false, error: 'Erro ao atualizar.' });
+    }
 });
 
-// MONITORAMENTO
+// ============================================================================
+// 📡 ROTA DE MONITORAMENTO EM TEMPO REAL DO WORKSPACE
+// ============================================================================
 router.get('/monitoramento/status', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const escolaId = req.query.escolaId;
+        const escolaId = req.query.escolaId; 
         const filtro = escolaId ? { escolaId } : {};
+
         const alunos = await db.collection('alunos').find(filtro).toArray();
         const usuarios = await db.collection('usuarios').find(filtro).toArray();
+        
         const agora = new Date();
         const JANELA_ONLINE = 35 * 1000;
         const relatorioFinal = [];
+
+        // 1. Processar Alunos (BLINDADO CONTRA FALSOS POSITIVOS)
         alunos.forEach(aluno => {
-            if (!aluno.id) return;
+            if (!aluno.id) return; 
+            
             const contaUser = usuarios.find(u => u.alunoRefId && String(u.alunoRefId) === String(aluno.id));
             const ultimoAcessoStr = contaUser?.ultimoAcesso || null;
             let isOnline = false;
+            
             if (ultimoAcessoStr) {
                 const ultimaData = new Date(ultimoAcessoStr).getTime();
-                if (!isNaN(ultimaData) && (agora.getTime() - ultimaData) <= JANELA_ONLINE) isOnline = true;
+                if (!isNaN(ultimaData) && (agora.getTime() - ultimaData) <= JANELA_ONLINE) {
+                    isOnline = true;
+                }
             }
-            relatorioFinal.push({ id: aluno.id, nome: aluno.nome || contaUser?.login || 'Aluno', isOnline, ultimoAcesso: ultimoAcessoStr });
+            
+            relatorioFinal.push({
+                id: aluno.id,
+                nome: aluno.nome || contaUser?.login || 'Aluno',
+                isOnline,
+                ultimoAcesso: ultimoAcessoStr // 🚀 A RESTAURAÇÃO: Devolve a data de acesso ao painel do Gestor!
+            });
         });
+
+        // 2. Processar Equipa Pedagógica (Professores e Gestores)
         usuarios.forEach(user => {
-            if (user.tipo === 'Aluno') return;
+            if (user.tipo === 'Aluno') return; 
             if (!user.id) return;
+
             const ultimoAcessoStr = user.ultimoAcesso || null;
             let isOnline = false;
+            
             if (ultimoAcessoStr) {
                 const ultimaData = new Date(ultimoAcessoStr).getTime();
-                if (!isNaN(ultimaData) && (agora.getTime() - ultimaData) <= JANELA_ONLINE) isOnline = true;
+                if (!isNaN(ultimaData) && (agora.getTime() - ultimaData) <= JANELA_ONLINE) {
+                    isOnline = true;
+                }
             }
-            relatorioFinal.push({ id: user.id, nome: user.nome || user.login || 'Equipa', isOnline, ultimoAcesso: ultimoAcessoStr });
+            
+            relatorioFinal.push({
+                id: user.id,
+                nome: user.nome || user.login || 'Equipa',
+                isOnline,
+                ultimoAcesso: ultimoAcessoStr // 🚀 A RESTAURAÇÃO: Devolve a data de acesso da Equipa!
+            });
         });
+
         res.status(200).json(relatorioFinal);
-    } catch (error) { res.status(500).json({ error: 'Erro no radar.' }); }
+    } catch (error) {
+        res.status(500).json({ error: 'Erro no radar.' });
+    }
 });
 
 router.post('/monitoramento/ping', verificarToken, async (req, res) => {
     try {
+        // Lemos o ID a partir do corpo do pedido em vez do token quebrado
         const usuarioId = req.body.usuarioId;
         if (!usuarioId) return res.status(400).json({ error: 'ID ausente' });
+
         const db = await connectDB();
-        await db.collection('usuarios').updateOne({ id: usuarioId }, { $set: { ultimoAcesso: new Date().toISOString() } });
+        await db.collection('usuarios').updateOne(
+            { id: usuarioId },
+            { $set: { ultimoAcesso: new Date().toISOString() } }
+        );
         res.status(200).json({ success: true });
     } catch (e) { res.status(500).json({ error: 'Erro no ping.' }); }
 });
@@ -568,18 +1754,30 @@ router.post('/monitoramento/ping', verificarToken, async (req, res) => {
 router.post('/monitoramento/offline', verificarToken, async (req, res) => {
     try {
         let usuarioId = req.body.usuarioId;
-        if (!usuarioId && typeof req.body === 'string') { try { usuarioId = JSON.parse(req.body).usuarioId; } catch(err){} }
+        
+        // 🚀 PREVENÇÃO EXTRA: Se o navegador enviar os dados do Beacon como texto puro, nós convertemos!
+        if (!usuarioId && typeof req.body === 'string') {
+            try { usuarioId = JSON.parse(req.body).usuarioId; } catch(err){}
+        }
+        
         if (!usuarioId) return res.status(200).json({ success: true });
+
         const db = await connectDB();
         const tempoExpirado = new Date(Date.now() - 60000).toISOString();
-        await db.collection('usuarios').updateOne({ id: usuarioId }, { $set: { ultimoAcesso: tempoExpirado } });
+        await db.collection('usuarios').updateOne(
+            { id: usuarioId },
+            { $set: { ultimoAcesso: tempoExpirado } }
+        );
         res.status(200).json({ success: true });
     } catch (e) { res.status(200).json({ success: true }); }
 });
 
-// ============================================================================
-// 🌟 BLOCO INGLÊS V9 - FINAL CORRIGIDO - SALVA TUDO + INFINITO
-// ============================================================================
+
+// BACKEND V9 FIX - PARA COLAR DENTRO DE workspaceRoutes.js (SEM const express)
+// Use este se seu backend deu erro de Identifier 'express' has already been declared
+
+// --- COLE APENAS A PARTIR DAQUI DENTRO DO workspaceRoutes.js ---
+
 const DEFAULT_LEVEL_CURVE_INGLES_V9 = [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000, 5000, 6200];
 const calcLevelInglesV9 = (xpTotal, curve = DEFAULT_LEVEL_CURVE_INGLES_V9) => {
     let lvl = 1;
@@ -684,7 +1882,7 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
         d.quests = d.quests || [
             { id: 'q_daily_1', tipo: 'diaria', texto: 'Crie 3 frases com conectores (Although/Because/When)', alvo: 3, recompensaXP: 100, icone: '🔗' },
             { id: 'q_daily_2', tipo: 'diaria', texto: 'Acerte 5 Minimal Pairs (ship/sheep)', alvo: 5, recompensaXP: 80, icone: '👂' },
-            { id: 'q_daily_3', tipo: 'diaria', texto: 'Debata 4 vezes com IA', alvo: 4, recompensaXP: 120, icone: '🗣' },
+            { id: 'q_daily_3', tipo: 'diaria', texto: 'Debata 4 vezes com IA', alvo: 4, recompensaXP: 120, icone: '🗣️' },
             { id: 'q_daily_4', tipo: 'diaria', texto: 'Treine 5 palavras no Portal Mágico', alvo: 5, recompensaXP: 150, icone: '🌀' }
         ];
         d.achievements = d.achievements || [
@@ -828,12 +2026,7 @@ router.post('/ingles/portal/progresso', verificarToken, async (req, res) => {
     }
 });
 
-router.get('/ingles/portal/ranking', verificarToken, async (req, res) => {
-    try {
-        const db = await connectDB();
-        const ranking = await db.collection('workspace_ingles_stats').find({ escolaId: req.query.escolaId || 'DEFAULT', portalRecorde: { $gt: 0 } }).sort({ portalRecorde: -1 }).limit(20).toArray();
-        res.json({ success: true, ranking });
-    } catch (e) { res.status(500).json({ error: 'Erro ranking portal' }); }
-});
+// --- FIM BLOCO V9 ---
+
 
 module.exports = router;
