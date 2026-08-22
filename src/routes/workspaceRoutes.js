@@ -1772,14 +1772,11 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
     } catch (e) { res.status(200).json({ success: true }); }
 });
 
+// BACKEND V10 - ILHA MÁGICA - Só bloco inglês para colar no seu workspaceRoutes.js
+// Já inclui V9 + loja XP + ilha + invasão + roubo
 
-// BACKEND V9 FIX - PARA COLAR DENTRO DE workspaceRoutes.js (SEM const express)
-// Use este se seu backend deu erro de Identifier 'express' has already been declared
-
-// --- COLE APENAS A PARTIR DAQUI DENTRO DO workspaceRoutes.js ---
-
-const DEFAULT_LEVEL_CURVE_INGLES_V9 = [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000, 5000, 6200];
-const calcLevelInglesV9 = (xpTotal, curve = DEFAULT_LEVEL_CURVE_INGLES_V9) => {
+const DEFAULT_LEVEL_CURVE_INGLES_V10 = [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000, 5000, 6200];
+const calcLevelInglesV10 = (xpTotal, curve = DEFAULT_LEVEL_CURVE_INGLES_V10) => {
     let lvl = 1;
     for (let i = 0; i < curve.length; i++) {
         if (xpTotal >= curve[i]) lvl = i + 1;
@@ -1788,18 +1785,22 @@ const calcLevelInglesV9 = (xpTotal, curve = DEFAULT_LEVEL_CURVE_INGLES_V9) => {
     return lvl;
 };
 
-async function ensureIndexesInglesV9(db){
+async function ensureIndexesInglesV10(db){
     try{
         await db.collection('workspace_ingles_stats').createIndex({escolaId:1, xp:-1});
         await db.collection('workspace_ingles_stats').createIndex({userId:1}, {unique:true});
         await db.collection('workspace_ingles_data').createIndex({escolaId:1}, {unique:true});
+        await db.collection('workspace_ingles_ilhas').createIndex({userId:1}, {unique:true});
+        await db.collection('workspace_ingles_ilhas').createIndex({escolaId:1, cristais:-1});
+        await db.collection('workspace_ingles_ilhas').createIndex({escolaId:1, nivel:-1});
     }catch{}
 }
 
+// ==================== XP & RANKING (V9) ====================
 router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        await ensureIndexesInglesV9(db);
+        await ensureIndexesInglesV10(db);
         const { userId, escolaId, nome, xp, streak, level, titulo, tituloEquipado, bordaEquipada, inventario, medalhas, questsProgress, portalStreak, portalRodada, portalTarget, portalRecorde } = req.body;
         if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
         const escolaIdSeguro = escolaId || 'DEFAULT';
@@ -1811,7 +1812,7 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
             nome: nome || atual.nome || 'Aluno',
             xp: xpInt,
             streak: parseInt(streak) || atual.streak || 1,
-            level: level ? parseInt(level) : calcLevelInglesV9(xpInt),
+            level: level ? parseInt(level) : calcLevelInglesV10(xpInt),
             ultimaAtividade: new Date().toISOString()
         };
         if (titulo !== undefined) updateSet.titulo = titulo;
@@ -1829,7 +1830,7 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
         await db.collection('workspace_ingles_stats').updateOne({ userId }, { $set: updateSet }, { upsert: true });
         res.json({ success: true, level: updateSet.level, portalRecorde: novoRecorde });
     } catch (e) {
-        console.error('V9 /xp erro', e);
+        console.error('V10 /xp erro', e);
         res.status(500).json({ error: 'Erro sync xp' });
     }
 });
@@ -1843,7 +1844,7 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
             userId: r.userId,
             nome: r.nome,
             xp: r.xp,
-            level: r.level || calcLevelInglesV9(r.xp),
+            level: r.level || calcLevelInglesV10(r.xp),
             streak: r.streak || 1,
             titulo: r.titulo || 'Aprendiz',
             tituloEquipado: r.tituloEquipado || r.titulo || 'Aprendiz',
@@ -1858,10 +1859,11 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Erro ranking' }); }
 });
 
+// ==================== DADOS GERAIS ====================
 router.get('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        await ensureIndexesInglesV9(db);
+        await ensureIndexesInglesV10(db);
         const escolaId = req.query.escolaId || 'DEFAULT';
         let d = await db.collection('workspace_ingles_data').findOne({ escolaId }) || {};
         d.words = d.words || [];
@@ -1888,7 +1890,8 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
         d.achievements = d.achievements || [
             { id: 'ach_first_spell', nome: 'Primeiro Feitiço', desc: 'Complete 1 frase', icone: '✨', condicao: { tipo: 'wordSpark', qtd: 1 }, xpBonus: 50 },
             { id: 'ach_portal_5', nome: 'Viajante Temporal', desc: '5 vitórias seguidas no Portal', icone: '🌀', condicao: { tipo: 'portal', qtd: 5 }, xpBonus: 400 },
-            { id: 'ach_portal_10', nome: 'Mestre do Portal', desc: '10 vitórias seguidas', icone: '🌌', condicao: { tipo: 'portal', qtd: 10 }, xpBonus: 800 }
+            { id: 'ach_ilha_1', nome: 'Construtor', desc: 'Coloque 5 itens na ilha', icone: '🏝️', condicao: { tipo: 'ilha', qtd: 5 }, xpBonus: 200 },
+            { id: 'ach_roubo_1', nome: 'Pirata Iniciante', desc: 'Roube 1 vez', icone: '🏴‍☠️', condicao: { tipo: 'roubo', qtd: 1 }, xpBonus: 300 }
         ];
         d.season = d.season || { id: 'S1', nome: 'Era dos Feitiços', xpMultiplier: 1, ativa: true, inicio: new Date().toISOString() };
         d.lootTables = d.lootTables || {
@@ -1896,13 +1899,14 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
             epico: [{ id: 'borda_prata', nome: 'Borda Prata', tipo: 'cosmetico', chance: 50 }],
             lendario: [{ id: 'borda_ouro', nome: 'Borda Ouro', tipo: 'cosmetico', chance: 40 }]
         };
-        d.levelCurve = d.levelCurve || DEFAULT_LEVEL_CURVE_INGLES_V9;
+        d.levelCurve = d.levelCurve || DEFAULT_LEVEL_CURVE_INGLES_V10;
         d.titulos = d.titulos || ['Aprendiz', 'Mago', 'Arquimago', 'Lenda'];
         d.badges = d.badges || [];
         d.portalConfig = d.portalConfig || { jogosPossiveis: ['wordSpark','readAloud','listenType','quiz','wordPicker','picturePop','minimalPairs','sentenceShuffle','answerQuest','questionMaker','contextRole'] };
+        d.avatarEquipado = d.avatarEquipado || 'mago_aprendiz';
         res.json({ success: true, dados: d });
     } catch (e) {
-        console.error('GET dados V9', e);
+        console.error('GET dados V10', e);
         res.status(500).json({ error: 'Erro ler dados' });
     }
 });
@@ -1910,22 +1914,233 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
 router.put('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        await ensureIndexesInglesV9(db);
+        await ensureIndexesInglesV10(db);
         const { escolaId, ...campos } = req.body;
         const escolaIdSeguro = escolaId || 'DEFAULT';
         const update = { ultimaAtualizacao: new Date().toISOString() };
-        const permitidos = ['words','phrases','quizzes','pictures','submissions','pool','errosRetidos','magoPhrases','magoConfig','srs','wordPickers','minimalPairs','debates','roleplays','questions','quests','achievements','season','lootTables','levelCurve','titulos','badges','portalConfig'];
+        const permitidos = ['words','phrases','quizzes','pictures','submissions','pool','errosRetidos','magoPhrases','magoConfig','srs','wordPickers','minimalPairs','debates','roleplays','questions','quests','achievements','season','lootTables','levelCurve','titulos','badges','portalConfig','avatarEquipado','ferramentaEquipada'];
         permitidos.forEach(k => { if (campos[k] !== undefined) update[k] = campos[k]; });
-        console.log('V9 PUT salvando:', Object.keys(update));
+        console.log('V10 PUT salvando:', Object.keys(update));
         await db.collection('workspace_ingles_data').updateOne({ escolaId: escolaIdSeguro }, { $set: update }, { upsert: true });
         if (global.workspaceStream) global.workspaceStream.emit('evento_realtime', { type: 'BAU_INGLES_UPDATE', escolaId: escolaIdSeguro });
         res.json({ success: true });
     } catch (e) {
-        console.error('PUT dados V9', e);
+        console.error('PUT dados V10', e);
         res.status(500).json({ error: 'Erro salvar' });
     }
 });
 
+// ==================== LOJA COM XP COMO MOEDA ====================
+router.post('/ingles/loja/comprar', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        await ensureIndexesInglesV10(db);
+        const { userId, escolaId, itemId, tipo, preco, nome } = req.body;
+        if (!userId || !itemId || preco===undefined) return res.status(400).json({ error: 'Dados incompletos' });
+        const precoInt = parseInt(preco)||0;
+        const stats = await db.collection('workspace_ingles_stats').findOne({ userId });
+        if (!stats) return res.status(404).json({ error: 'Aluno não encontrado' });
+        const xpAtual = stats.xp||0;
+        if (xpAtual < precoInt) return res.status(400).json({ error: `XP insuficiente. Você tem ${xpAtual} XP, precisa ${precoInt}` });
+        
+        // Verifica se já tem (para avatar único)
+        if (tipo==='avatar'){
+            const jaTem = (stats.inventario||[]).some(i=>i.id===itemId && i.tipo==='avatar');
+            if (jaTem) return res.status(400).json({ error: 'Você já possui esse avatar' });
+        }
+
+        const novoXp = xpAtual - precoInt;
+        const novoItem = {
+            id: itemId,
+            nome: nome||itemId,
+            tipo: tipo||'geral',
+            preco: precoInt,
+            obtidoEm: new Date().toISOString()
+        };
+        // Adiciona emoji se for ferramenta/decoracao conhecida
+        if (tipo==='avatar') novoItem.emoji = '🧙';
+        if (tipo==='ferramenta') novoItem.durabilidade = 3;
+
+        await db.collection('workspace_ingles_stats').updateOne(
+            { userId },
+            { 
+                $set: { xp: novoXp, ultimaAtividade: new Date().toISOString() },
+                $push: { inventario: novoItem }
+            }
+        );
+        console.log(`V10 LOJA: ${userId} comprou ${itemId} por ${precoInt} XP. Novo XP: ${novoXp}`);
+        res.json({ success: true, novoXp, item: novoItem, mensagem: `Comprado por ${precoInt} XP! Novo saldo: ${novoXp} XP. Jogue mais para farmar!` });
+    } catch (e) {
+        console.error('LOJA comprar erro', e);
+        res.status(500).json({ error: 'Erro ao comprar' });
+    }
+});
+
+// ==================== ILHA MÁGICA ====================
+router.post('/ingles/ilha/salvar', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        await ensureIndexesInglesV10(db);
+        const { userId, escolaId, nome, ilha, avatarEquipado } = req.body;
+        if (!userId || !ilha) return res.status(400).json({ error: 'Dados incompletos' });
+        const escolaIdSeguro = escolaId||'DEFAULT';
+        
+        const doc = {
+            userId,
+            escolaId: escolaIdSeguro,
+            nome: nome||'Ilha Mágica',
+            nivel: ilha.nivel||1,
+            tamanho: ilha.tamanho||4,
+            cristais: ilha.cristais||0,
+            layout: ilha.layout||Array(16).fill(null),
+            escudoAte: ilha.escudoAte||0,
+            invasoesFeitas: ilha.invasoesFeitas||0,
+            invasoesRecebidas: ilha.invasoesRecebidas||0,
+            historicoInvasoes: (ilha.historicoInvasoes||[]).slice(-50),
+            avatarEquipado: avatarEquipado||'mago_aprendiz',
+            ultimaColeta: ilha.ultimaColeta||Date.now(),
+            ultimaAtualizacao: new Date().toISOString()
+        };
+        await db.collection('workspace_ingles_ilhas').updateOne({ userId }, { $set: doc }, { upsert: true });
+        // também atualiza stats com cristais?
+        res.json({ success: true, ilha: doc });
+    } catch (e) {
+        console.error('Salvar ilha erro', e);
+        res.status(500).json({ error: 'Erro salvar ilha' });
+    }
+});
+
+router.get('/ingles/ilha/minha', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const userId = req.query.userId;
+        const escolaId = req.query.escolaId||'DEFAULT';
+        if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
+        let ilha = await db.collection('workspace_ingles_ilhas').findOne({ userId });
+        if (!ilha){
+            // cria ilha inicial
+            ilha = {
+                userId,
+                escolaId,
+                nome: 'Minha Ilha Mágica',
+                nivel:1,
+                tamanho:4,
+                cristais:100,
+                layout:Array(16).fill(null),
+                escudoAte:0,
+                invasoesFeitas:0,
+                invasoesRecebidas:0,
+                historicoInvasoes:[],
+                avatarEquipado:'mago_aprendiz',
+                ultimaColeta:Date.now(),
+                ultimaAtualizacao:new Date().toISOString()
+            };
+            await db.collection('workspace_ingles_ilhas').insertOne(ilha);
+        }
+        res.json({ success: true, ilha });
+    } catch (e) {
+        res.status(500).json({ error: 'Erro carregar ilha' });
+    }
+});
+
+router.get('/ingles/ilhas', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const escolaId = req.query.escolaId||'DEFAULT';
+        const excluir = req.query.excluir;
+        const filtro = { escolaId };
+        if (excluir) filtro.userId = { $ne: excluir };
+        const ilhas = await db.collection('workspace_ingles_ilhas').find(filtro).sort({ nivel:-1, cristais:-1 }).limit(30).toArray();
+        // busca nomes dos donos se não tiver
+        const enriquecidas = await Promise.all(ilhas.map(async i=>{
+            if (!i.nome || i.nome==='Minha Ilha Mágica'){
+                const stats = await db.collection('workspace_ingles_stats').findOne({ userId:i.userId });
+                if (stats) i.nome = stats.nome;
+            }
+            return i;
+        }));
+        res.json({ success: true, ilhas: enriquecidas });
+    } catch (e) {
+        res.status(500).json({ error: 'Erro listar ilhas' });
+    }
+});
+
+router.post('/ingles/ilha/invadir', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        await ensureIndexesInglesV10(db);
+        const { userId, escolaId, alvoId, acao, sucesso } = req.body;
+        if (!userId || !alvoId) return res.status(400).json({ error: 'Dados incompletos' });
+        const escolaIdSeguro = escolaId||'DEFAULT';
+        
+        const atacanteIlha = await db.collection('workspace_ingles_ilhas').findOne({ userId });
+        const alvoIlha = await db.collection('workspace_ingles_ilhas').findOne({ userId: alvoId });
+        const atacanteStats = await db.collection('workspace_ingles_stats').findOne({ userId });
+        const alvoStats = await db.collection('workspace_ingles_ilhas').findOne({ userId: alvoId });
+        
+        if (!atacanteIlha || !alvoIlha) return res.status(404).json({ error: 'Ilha não encontrada' });
+        
+        // verifica escudo alvo
+        const agora = Date.now();
+        if (alvoIlha.escudoAte && alvoIlha.escudoAte > agora){
+            return res.status(400).json({ error: `Ilha protegida por escudo até ${new Date(alvoIlha.escudoAte).toLocaleTimeString()}` });
+        }
+        // verifica cooldown 1h mesmo alvo
+        const histAtacante = atacanteIlha.historicoInvasoes||[];
+        const ultimo = histAtacante.filter(h=>h.alvoId===alvoId).sort((a,b)=>b.data-a.data)[0];
+        if (ultimo && (agora - ultimo.data) < 60*60*1000){
+            const falta = Math.ceil((60*60*1000 - (agora - ultimo.data))/60000);
+            return res.status(400).json({ error: `Cooldown! Você já invadiu essa ilha. Espere ${falta} min` });
+        }
+        // verifica varinha se sucesso
+        if (sucesso){
+            const temVarinha = (atacanteStats?.inventario||[]).some(i=>i.id==='varinha_roubo');
+            if (!temVarinha) return res.status(400).json({ error: 'Precisa de Varinha de Roubo 🪄' });
+        }
+
+        let roubado = 0;
+        if (sucesso){
+            const cristaisAlvo = alvoIlha.cristais||0;
+            roubado = Math.floor(cristaisAlvo * 0.10);
+            roubado = Math.max(10, Math.min(200, roubado)); // min 10 max 200
+            if (cristaisAlvo < 10) roubado = cristaisAlvo;
+            
+            // transfere
+            await db.collection('workspace_ingles_ilhas').updateOne({ userId: alvoId }, { 
+                $inc: { cristais: -roubado, invasoesRecebidas:1 },
+                $set: { escudoAte: agora + 2*60*60*1000, ultimaAtualizacao: new Date().toISOString() },
+                $push: { historicoInvasoes: { $each: [{ alvoId: userId, alvoNome: atacanteIlha.nome||'Atacante', data: agora, sucesso:false, cristais:roubado, tipo:'defesa', detalhe:`Foi roubado por ${atacanteIlha.nome} - perdeu ${roubado}💎` }], $slice: -50 } }
+            });
+            await db.collection('workspace_ingles_ilhas').updateOne({ userId }, { 
+                $inc: { cristais: roubado, invasoesFeitas:1 },
+                $set: { ultimaAtualizacao: new Date().toISOString() },
+                $push: { historicoInvasoes: { $each: [{ alvoId, alvoNome: alvoIlha.nome||'Ilha', data: agora, sucesso:true, cristais:roubado, tipo:'ataque', detalhe:`Roubou ${roubado}💎 de ${alvoIlha.nome}` }], $slice: -50 } }
+            });
+            // consome varinha do atacante stats
+            await db.collection('workspace_ingles_stats').updateOne({ userId }, { $pull: { inventario: { id:'varinha_roubo' } } });
+            
+            console.log(`V10 ROUBO: ${userId} roubou ${roubado} de ${alvoId}`);
+            res.json({ success: true, roubado, mensagem: `Roubo! +${roubado}💎` });
+        } else {
+            // falha - perde 50 XP, ativa escudo alvo
+            await db.collection('workspace_ingles_stats').updateOne({ userId }, { $inc: { xp: -50 } });
+            await db.collection('workspace_ingles_ilhas').updateOne({ userId: alvoId }, { 
+                $set: { escudoAte: agora + 2*60*60*1000 },
+                $inc: { invasoesRecebidas:0 },
+                $push: { historicoInvasoes: { $each: [{ alvoId: userId, alvoNome: atacanteIlha.nome, data: agora, sucesso:false, cristais:0, tipo:'defesa', detalhe:`Defendeu ataque de ${atacanteIlha.nome}` }], $slice: -50 } }
+            });
+            await db.collection('workspace_ingles_ilhas').updateOne({ userId }, { 
+                $push: { historicoInvasoes: { $each: [{ alvoId, alvoNome: alvoIlha.nome, data: agora, sucesso:false, cristais:0, tipo:'ataque', detalhe:`Falhou ao invadir ${alvoIlha.nome} - perdeu 50 XP` }], $slice: -50 } }
+            });
+            res.json({ success: true, roubado:0, mensagem: 'Falhou! -50 XP' });
+        }
+    } catch (e) {
+        console.error('Invadir erro', e);
+        res.status(500).json({ error: 'Erro ao invadir' });
+    }
+});
+
+// ==================== OUTROS (quests, recompensa, season, portal) ====================
 router.get('/ingles/quests', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -2026,7 +2241,13 @@ router.post('/ingles/portal/progresso', verificarToken, async (req, res) => {
     }
 });
 
-// --- FIM BLOCO V9 ---
+router.get('/ingles/portal/ranking', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const ranking = await db.collection('workspace_ingles_stats').find({ escolaId: req.query.escolaId || 'DEFAULT', portalRecorde: { $gt: 0 } }).sort({ portalRecorde: -1 }).limit(20).toArray();
+        res.json({ success: true, ranking });
+    } catch (e) { res.status(500).json({ error: 'Erro ranking portal' }); }
+});
 
 
 module.exports = router;
