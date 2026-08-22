@@ -1773,20 +1773,19 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🏆 BACKEND INGLÊS V6 - GAMIFICADO - 100% COMPATÍVEL COM V5
-// Mantém todas rotas V5, só ADICIONA campos novos com fallback
+// 🌀 BACKEND INGLÊS V7 - PORTAL MÁGICO - COMPATÍVEL V5/V6
+// Adiciona campos portal sem quebrar nada
 // ============================================================================
 
-// 1. Sincronizar XP, Level, Streak, Inventário do Aluno (EXPANDIDO V6)
+// 1. Sincronizar XP + Portal (EXPANDIDO V7)
 router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { userId, escolaId, nome, xp, streak, level, titulo, inventario, medalhas, questsProgress } = req.body;
+        const { userId, escolaId, nome, xp, streak, level, titulo, tituloEquipado, bordaEquipada, inventario, medalhas, questsProgress, portalStreak, portalRodada, portalTarget, portalRecorde } = req.body;
         if (!userId) return res.status(400).json({ error: 'ID do utilizador em falta.' });
         const escolaIdSeguro = escolaId || 'DEFAULT';
         
-        // V6: levelCurve padrão
-        const levelCurve = [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000];
+        const levelCurve = [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000, 5000, 6200];
         const calcLevel = (xpTotal) => {
             let lvl = 1;
             for(let i=0;i<levelCurve.length;i++){ if(xpTotal >= levelCurve[i]) lvl = i+1; else break; }
@@ -1801,9 +1800,24 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
             ultimaAtividade: new Date().toISOString()
         };
         if (titulo !== undefined) updateFields.titulo = titulo;
+        if (tituloEquipado !== undefined) updateFields.tituloEquipado = tituloEquipado;
+        if (bordaEquipada !== undefined) updateFields.bordaEquipada = bordaEquipada;
         if (inventario !== undefined) updateFields.inventario = inventario;
         if (medalhas !== undefined) updateFields.medalhas = medalhas;
         if (questsProgress !== undefined) updateFields.questsProgress = questsProgress;
+        // V7 Portal
+        if (portalStreak !== undefined) updateFields.portalStreak = parseInt(portalStreak)||0;
+        if (portalRodada !== undefined) updateFields.portalRodada = parseInt(portalRodada)||1;
+        if (portalTarget !== undefined) updateFields.portalTarget = parseInt(portalTarget)||5;
+        if (portalRecorde !== undefined) updateFields.portalRecorde = parseInt(portalRecorde)||0;
+        // Atualiza recorde se streak atual maior
+        if (portalStreak !== undefined) {
+            const stats = await db.collection('workspace_ingles_stats').findOne({ userId });
+            const recordeAtual = stats?.portalRecorde || 0;
+            if (parseInt(portalStreak) > recordeAtual) {
+                updateFields.portalRecorde = parseInt(portalStreak);
+            }
+        }
 
         await db.collection('workspace_ingles_stats').updateOne(
             { userId },
@@ -1812,12 +1826,12 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
         );
         res.status(200).json({ success: true, level: updateFields.level });
     } catch (error) { 
-        console.error('Erro POST /ingles/xp V6', error);
+        console.error('Erro POST /ingles/xp V7', error);
         res.status(500).json({ error: 'Erro ao sincronizar.' }); 
     }
 });
 
-// 2. Ranking Global com Ligas (Bronze/Prata/Ouro) - COMPATÍVEL
+// 2. Ranking Global com Ligas + Portal Recorde
 router.get('/ingles/ranking', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -1826,19 +1840,21 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
             .find({ escolaId, xp: { $gt: 0 } })
             .sort({ xp: -1 }).limit(50).toArray();
 
-        // V6: adiciona liga sem quebrar front antigo
         const rankingComLiga = ranking.map((r, i) => ({
             ...r,
             posicao: i+1,
             liga: i < 3 ? 'ouro' : i < 10 ? 'prata' : i < 20 ? 'bronze' : 'aprendiz',
-            level: r.level || 1
+            level: r.level || 1,
+            tituloEquipado: r.tituloEquipado || r.titulo || 'Aprendiz',
+            bordaEquipada: r.bordaEquipada || '',
+            portalRecorde: r.portalRecorde || r.portalStreak || 0
         }));
 
         res.status(200).json({ success: true, ranking: rankingComLiga });
     } catch (error) { res.status(500).json({ error: 'Erro no ranking.' }); }
 });
 
-// 3. Carregar Dicionário + TUDO + NOVO V6 (quests, achievements, season, loot, levelCurve)
+// 3. Carregar Dicionário + V7 (quests, achievements, season, loot, levelCurve, portalConfig)
 router.get('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -1846,7 +1862,7 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
         let dados = await db.collection('workspace_ingles_data').findOne({ escolaId });
         if (!dados) dados = {};
 
-        // V5 fallbacks (mantidos)
+        // V5 fallbacks
         dados.magoConfig = dados.magoConfig || { vozAtiva: true, modoExibicao: 'aleatorio' };
         dados.srs = dados.srs || {};
         dados.magoPhrases = dados.magoPhrases || [];
@@ -1863,7 +1879,7 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
         dados.roleplays = dados.roleplays || [];
         dados.questions = dados.questions || [];
 
-        // V6 NOVOS - com fallbacks seguros (não quebra V5)
+        // V6
         dados.quests = dados.quests || [
             { id: 'q_daily_1', tipo: 'diaria', texto: 'Crie 3 frases com conectores (Although/Because/When)', alvo: 3, recompensaXP: 100, icone: '🔗' },
             { id: 'q_daily_2', tipo: 'diaria', texto: 'Acerte 5 Minimal Pairs (ship/sheep)', alvo: 5, recompensaXP: 80, icone: '👂' },
@@ -1873,7 +1889,9 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
             { id: 'ach_first_spell', nome: 'Primeiro Feitiço', desc: 'Complete 1 frase', icone: '✨', condicao: { tipo: 'wordSpark', qtd: 1 }, xpBonus: 50 },
             { id: 'ach_streak_3', nome: 'Fogo Constante', desc: '3 dias seguidos', icone: '🔥', condicao: { tipo: 'streak', qtd: 3 }, xpBonus: 150 },
             { id: 'ach_debater', nome: 'Orador', desc: '10 debates com IA', icone: '🎙️', condicao: { tipo: 'debateAI', qtd: 10 }, xpBonus: 200 },
-            { id: 'ach_vocab_50', nome: 'Biblioteca Viva', desc: '50 palavras dominadas', icone: '📚', condicao: { tipo: 'vocab', qtd: 50 }, xpBonus: 300 }
+            { id: 'ach_vocab_50', nome: 'Biblioteca Viva', desc: '50 palavras dominadas', icone: '📚', condicao: { tipo: 'vocab', qtd: 50 }, xpBonus: 300 },
+            { id: 'ach_portal_5', nome: 'Viajante Temporal', desc: '5 vitórias seguidas no Portal Mágico', icone: '🌀', condicao: { tipo: 'portal', qtd: 5 }, xpBonus: 400 },
+            { id: 'ach_portal_10', nome: 'Mestre do Portal', desc: '10 vitórias seguidas no Portal Mágico', icone: '🌌', condicao: { tipo: 'portal', qtd: 10 }, xpBonus: 800 }
         ];
         dados.season = dados.season || { 
             id: 'S1', nome: 'Era dos Feitiços', inicio: new Date().toISOString(), fim: null,
@@ -1885,30 +1903,39 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
             lendario: [{ id: 'borda_ouro', nome: 'Borda Ouro', tipo: 'cosmetico', chance: 40 }, { id: 'skin_mago_dourado', nome: 'Manto Dourado', tipo: 'skin', chance: 30 }, { id: 'titulo_arquimago', nome: 'Título: Arquimago', tipo: 'titulo', chance: 30 }]
         };
         dados.levelCurve = dados.levelCurve || [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000, 5000, 6200];
-        dados.titulos = dados.titulos || ['Aprendiz', 'Conjurador', 'Mago', 'Arquimago', 'Lenda'];
+        dados.titulos = dados.titulos || ['Aprendiz', 'Conjurador', 'Mago', 'Arquimago', 'Lenda', 'Viajante Temporal', 'Mestre do Portal'];
         dados.badges = dados.badges || [];
+
+        // V7 Portal Config
+        dados.portalConfig = dados.portalConfig || {
+            jogosPossiveis: ['wordSpark','readAloud','listenType','quiz','wordPicker','picturePop','minimalPairs','sentenceShuffle','answerQuest','questionMaker'],
+            xpBonusBase: 50,
+            xpMultiplicador: 1.5,
+            xpPerda: 20,
+            rodadaInicial: 5,
+            incrementoRodada: 5,
+            bonusMagia: { base: 300, porRodada: 100 }
+        };
 
         res.status(200).json({ success: true, dados });
     } catch (error) { 
-        console.error('Erro GET /ingles/dados V6', error);
+        console.error('Erro GET /ingles/dados V7', error);
         res.status(500).json({ error: 'Erro ao ler inteligência.' }); 
     }
 });
 
-// 4. Salvar TUDO (V5 + V6) - só adiciona, nunca apaga
+// 4. Salvar TUDO (V5+V6+V7) - aditivo
 router.put('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const { 
             escolaId, words, phrases, quizzes, pictures, submissions, pool, errosRetidos, 
             magoPhrases, magoConfig, srs, wordPickers, minimalPairs, debates, roleplays, questions,
-            // V6 novos
-            quests, achievements, season, lootTables, levelCurve, titulos, badges
+            quests, achievements, season, lootTables, levelCurve, titulos, badges, portalConfig
         } = req.body;
         const escolaIdSeguro = escolaId || 'DEFAULT';
 
         const update = { escolaId: escolaIdSeguro, ultimaAtualizacao: new Date().toISOString() };
-        // V5
         if (words !== undefined) update.words = words;
         if (phrases !== undefined) update.phrases = phrases;
         if (quizzes !== undefined) update.quizzes = quizzes;
@@ -1924,7 +1951,6 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
         if (debates !== undefined) update.debates = debates;
         if (roleplays !== undefined) update.roleplays = roleplays;
         if (questions !== undefined) update.questions = questions;
-        // V6 - aditivos
         if (quests !== undefined) update.quests = quests;
         if (achievements !== undefined) update.achievements = achievements;
         if (season !== undefined) update.season = season;
@@ -1932,6 +1958,7 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
         if (levelCurve !== undefined) update.levelCurve = levelCurve;
         if (titulos !== undefined) update.titulos = titulos;
         if (badges !== undefined) update.badges = badges;
+        if (portalConfig !== undefined) update.portalConfig = portalConfig;
 
         await db.collection('workspace_ingles_data').updateOne(
             { escolaId: escolaIdSeguro },
@@ -1944,16 +1971,15 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
         }
         res.status(200).json({ success: true });
     } catch (error) { 
-        console.error('Erro PUT /ingles/dados V6', error);
+        console.error('Erro PUT /ingles/dados V7', error);
         res.status(500).json({ error: 'Erro ao gravar inteligência.' }); 
     }
 });
 
 // ============================================================================
-// V6 - NOVAS ROTAS GAMIFICADAS (coleções separadas, não quebram V5)
+// V6/V7 - ROTAS GAMIFICADAS
 // ============================================================================
 
-// 5. Quests Diárias - progresso por aluno
 router.get('/ingles/quests', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -1961,21 +1987,17 @@ router.get('/ingles/quests', verificarToken, async (req, res) => {
         const userId = req.query.userId;
         const dados = await db.collection('workspace_ingles_data').findOne({ escolaId });
         const questsBase = dados?.quests || [];
-        
-        // Se tem userId, pega progresso do aluno
         let progresso = {};
         if(userId){
             const stats = await db.collection('workspace_ingles_stats').findOne({ userId });
             progresso = stats?.questsProgress || {};
         }
-
         const questsComProgresso = questsBase.map(q => ({
             ...q,
             progresso: progresso[q.id]?.atual || 0,
             completo: (progresso[q.id]?.atual || 0) >= q.alvo,
             coletado: progresso[q.id]?.coletado || false
         }));
-
         res.json({ success: true, quests: questsComProgresso });
     } catch(e){ res.status(500).json({ error: 'Erro quests' }); }
 });
@@ -1985,18 +2007,11 @@ router.post('/ingles/quests/completar', verificarToken, async (req, res) => {
         const db = await connectDB();
         const { userId, questId, escolaId } = req.body;
         if(!userId || !questId) return res.status(400).json({ error: 'Falta userId/questId' });
-
-        // Busca quest para saber recompensa
         const dados = await db.collection('workspace_ingles_data').findOne({ escolaId: escolaId||'DEFAULT' });
         const quest = dados?.quests?.find(q=>q.id===questId);
         if(!quest) return res.status(404).json({ error: 'Quest não encontrada' });
-
-        // Incrementa progresso e dá XP
-        const stats = await db.collection('workspace_ingles_stats').findOne({ userId });
-        const atualXP = stats?.xp || 0;
         const seasonMult = dados?.season?.xpMultiplier || 1;
         const bonusXP = Math.floor((quest.recompensaXP||100) * seasonMult);
-
         await db.collection('workspace_ingles_stats').updateOne(
             { userId },
             { 
@@ -2005,16 +2020,13 @@ router.post('/ingles/quests/completar', verificarToken, async (req, res) => {
             },
             { upsert: true }
         );
-
         if(global.workspaceStream){
             global.workspaceStream.emit('evento_realtime', { type: 'QUEST_COMPLETA', escolaId: escolaId||'DEFAULT', userId, questId, bonusXP });
         }
-
         res.json({ success: true, bonusXP, quest });
     } catch(e){ console.error(e); res.status(500).json({ error: 'Erro completar quest' }); }
 });
 
-// 6. Achievements / Medalhas
 router.get('/ingles/achievements', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -2022,18 +2034,15 @@ router.get('/ingles/achievements', verificarToken, async (req, res) => {
         const userId = req.query.userId;
         const dados = await db.collection('workspace_ingles_data').findOne({ escolaId });
         const base = dados?.achievements || [];
-
         let desbloqueadas = [];
         if(userId){
             const stats = await db.collection('workspace_ingles_stats').findOne({ userId });
             desbloqueadas = stats?.medalhas || [];
         }
-
         const lista = base.map(a => ({
             ...a,
             desbloqueada: desbloqueadas.includes(a.id)
         }));
-
         res.json({ success: true, achievements: lista });
     } catch(e){ res.status(500).json({ error: 'Erro achievements' }); }
 });
@@ -2045,35 +2054,28 @@ router.post('/ingles/achievements/desbloquear', verificarToken, async (req, res)
         const dados = await db.collection('workspace_ingles_data').findOne({ escolaId: escolaId||'DEFAULT' });
         const ach = dados?.achievements?.find(a=>a.id===achievementId);
         if(!ach) return res.status(404).json({ error: 'Achievement não existe' });
-
         const bonusXP = ach.xpBonus || 100;
         await db.collection('workspace_ingles_stats').updateOne(
             { userId },
             { $addToSet: { medalhas: achievementId }, $inc: { xp: bonusXP } },
             { upsert: true }
         );
-
         if(global.workspaceStream){
             global.workspaceStream.emit('evento_realtime', { type: 'ACHIEVEMENT_UNLOCK', escolaId: escolaId||'DEFAULT', userId, achievementId });
         }
-
         res.json({ success: true, bonusXP, achievement: ach });
     } catch(e){ res.status(500).json({ error: 'Erro desbloquear' }); }
 });
 
-// 7. Baú / Loot - abre baú e sorteia recompensa
 router.post('/ingles/recompensa/abrir', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const { userId, escolaId, raridade, xpSessao } = req.body;
         const escolaIdSeguro = escolaId || 'DEFAULT';
         const rar = raridade || (xpSessao > 300 ? 'lendario' : xpSessao > 150 ? 'epico' : 'comum');
-
         const dados = await db.collection('workspace_ingles_data').findOne({ escolaId: escolaIdSeguro });
         const tabela = dados?.lootTables?.[rar] || dados?.lootTables?.comum || [];
         if(!tabela.length) return res.json({ success: true, recompensa: null, raridade: rar });
-
-        // Sorteio ponderado por chance
         const totalChance = tabela.reduce((s,i)=>s+(i.chance||50),0);
         let r = Math.random()*totalChance;
         let escolhido = tabela[0];
@@ -2081,19 +2083,15 @@ router.post('/ingles/recompensa/abrir', verificarToken, async (req, res) => {
             r -= (item.chance||50);
             if(r<=0){ escolhido=item; break; }
         }
-
-        // Salva no inventário do aluno
         await db.collection('workspace_ingles_stats').updateOne(
             { userId },
             { $push: { inventario: { ...escolhido, obtidoEm: new Date().toISOString(), raridade: rar } } },
             { upsert: true }
         );
-
         res.json({ success: true, recompensa: escolhido, raridade: rar });
     } catch(e){ console.error(e); res.status(500).json({ error: 'Erro loot' }); }
 });
 
-// 8. Season / Temporada
 router.get('/ingles/season/atual', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -2108,8 +2106,6 @@ router.post('/ingles/season/reset', verificarToken, async (req, res) => {
         const db = await connectDB();
         const { escolaId, novaSeason } = req.body;
         const escolaIdSeguro = escolaId || 'DEFAULT';
-
-        // Guarda histórico
         const rankingAtual = await db.collection('workspace_ingles_stats').find({ escolaId: escolaIdSeguro }).toArray();
         if(rankingAtual.length){
             await db.collection('workspace_ingles_historico').insertOne({
@@ -2119,38 +2115,30 @@ router.post('/ingles/season/reset', verificarToken, async (req, res) => {
                 encerradoEm: new Date().toISOString()
             });
         }
-
-        // Zera XP mas mantém level, medalhas e inventário (ou reseta tudo se quiser - aqui mantém)
         await db.collection('workspace_ingles_stats').updateMany(
             { escolaId: escolaIdSeguro },
             { $set: { xp: 0, questsProgress: {} } }
         );
-
-        // Atualiza season
         await db.collection('workspace_ingles_data').updateOne(
             { escolaId: escolaIdSeguro },
             { $set: { season: { ...novaSeason, inicio: new Date().toISOString() }, ultimaAtualizacao: new Date().toISOString() } },
             { upsert: true }
         );
-
         if(global.workspaceStream){
             global.workspaceStream.emit('evento_realtime', { type: 'SEASON_RESET', escolaId: escolaIdSeguro });
         }
-
         res.json({ success: true });
     } catch(e){ console.error(e); res.status(500).json({ error: 'Erro reset season' }); }
 });
 
-// 9. Inventário do aluno
 router.get('/ingles/inventario/:userId', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const stats = await db.collection('workspace_ingles_stats').findOne({ userId: req.params.userId });
-        res.json({ success: true, inventario: stats?.inventario || [], medalhas: stats?.medalhas || [], level: stats?.level || 1, titulo: stats?.titulo || 'Aprendiz' });
+        res.json({ success: true, inventario: stats?.inventario || [], medalhas: stats?.medalhas || [], level: stats?.level || 1, titulo: stats?.titulo || 'Aprendiz', portalRecorde: stats?.portalRecorde || 0 });
     } catch(e){ res.status(500).json({ error: 'Erro inventario' }); }
 });
 
-// 10. Helper: calcula level (pode ser chamado pelo front)
 router.get('/ingles/level/calcular', verificarToken, async (req, res) => {
     try {
         const xp = parseInt(req.query.xp)||0;
@@ -2168,6 +2156,56 @@ router.get('/ingles/level/calcular', verificarToken, async (req, res) => {
         res.json({ success: true, level, xp, proximoAlvo: proximo, progresso: Math.min(100, Math.max(0, progresso)), curve });
     } catch(e){ res.status(500).json({ error: 'Erro calc level' }); }
 });
+
+// ================= V7 NOVAS ROTAS PORTAL =================
+
+router.post('/ingles/portal/progresso', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { userId, escolaId, portalStreak, portalRodada, portalTarget, xpGanho, xpPerda, evento } = req.body;
+        if(!userId) return res.status(400).json({ error: 'userId obrigatório' });
+        
+        const inc = {};
+        if(xpGanho) inc.xp = parseInt(xpGanho);
+        if(xpPerda) inc.xp = -parseInt(xpPerda);
+
+        const set = { ultimaAtividade: new Date().toISOString() };
+        if(portalStreak !== undefined) set.portalStreak = parseInt(portalStreak);
+        if(portalRodada !== undefined) set.portalRodada = parseInt(portalRodada);
+        if(portalTarget !== undefined) set.portalTarget = parseInt(portalTarget);
+
+        // Recorde
+        const stats = await db.collection('workspace_ingles_stats').findOne({ userId });
+        const recordeAtual = stats?.portalRecorde || 0;
+        if(portalStreak !== undefined && parseInt(portalStreak) > recordeAtual){
+            set.portalRecorde = parseInt(portalStreak);
+        }
+
+        const update = {};
+        if(Object.keys(set).length) update.$set = set;
+        if(Object.keys(inc).length) update.$inc = inc;
+
+        await db.collection('workspace_ingles_stats').updateOne({ userId }, update, { upsert: true });
+
+        if(evento==='magia' && global.workspaceStream){
+            global.workspaceStream.emit('evento_realtime', { type: 'PORTAL_MAGIA', escolaId: escolaId||'DEFAULT', userId, portalRodada, xpGanho });
+        }
+
+        res.json({ success: true, recorde: set.portalRecorde || recordeAtual });
+    } catch(e){ console.error('Erro portal progresso', e); res.status(500).json({ error: 'Erro portal' }); }
+});
+
+router.get('/ingles/portal/ranking', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const escolaId = req.query.escolaId || 'DEFAULT';
+        const ranking = await db.collection('workspace_ingles_stats')
+            .find({ escolaId, portalRecorde: { $gt: 0 } })
+            .sort({ portalRecorde: -1 }).limit(20).toArray();
+        res.json({ success: true, ranking });
+    } catch(e){ res.status(500).json({ error: 'Erro ranking portal' }); }
+});
+
 
 
 module.exports = router;
