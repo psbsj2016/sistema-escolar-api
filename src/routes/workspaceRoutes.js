@@ -1772,6 +1772,7 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
     } catch (e) { res.status(200).json({ success: true }); }
 });
 
+
 // ==================== BACKEND V40 COMPLETO FINAL - ORGANIZADO ====================
 // PARTE 1: HUB - dados gerais
 // PARTE 2: ECONOMIA - coins bronze/prata/ouro + diamantes + pedras + energia
@@ -2331,7 +2332,6 @@ router.get('/ingles/portal/ranking', verificarToken, async (req, res) => {
         res.json({ success: true, ranking });
     } catch (e) { res.status(500).json({ error: 'Erro ranking portal' }); }
 });
-
 
 
 module.exports = router;
