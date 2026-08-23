@@ -1772,6 +1772,14 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
     } catch (e) { res.status(200).json({ success: true }); }
 });
 
+// ==================== BACKEND V40 COMPLETO FINAL - ORGANIZADO ====================
+// PARTE 1: HUB - dados gerais
+// PARTE 2: ECONOMIA - coins bronze/prata/ouro + diamantes + pedras + energia
+// PARTE 3: ILHA - salvar, minha, listar, invadir, coletar
+// PARTE 4: LOJA - comprar com coins e diamantes (protegido vs roubável)
+// PARTE 5: MISSÕES, GUILDAS, GUERRA, RANKING, PORTAL, SEASON
+// Tudo compatível com frontend V40, sem quebrar rotas antigas
+
 // BACKEND V11 COMPLETO - ILHA TOP RPG VICIANTE
 // Baseado no V10 + suporte a todos os novos sistemas sem quebrar nada
 // Novos: energia, baús, pets, ovos, classe, skills, craft, mapa, clima, mercador, guildas
