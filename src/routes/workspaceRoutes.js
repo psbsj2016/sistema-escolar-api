@@ -1772,11 +1772,12 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
     } catch (e) { res.status(200).json({ success: true }); }
 });
 
-// BACKEND V10 - ILHA MÁGICA - Só bloco inglês para colar no seu workspaceRoutes.js
-// Já inclui V9 + loja XP + ilha + invasão + roubo
+// BACKEND V11 COMPLETO - ILHA TOP RPG VICIANTE
+// Baseado no V10 + suporte a todos os novos sistemas sem quebrar nada
+// Novos: energia, baús, pets, ovos, classe, skills, craft, mapa, clima, mercador, guildas
 
-const DEFAULT_LEVEL_CURVE_INGLES_V10 = [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000, 5000, 6200];
-const calcLevelInglesV10 = (xpTotal, curve = DEFAULT_LEVEL_CURVE_INGLES_V10) => {
+const DEFAULT_LEVEL_CURVE_INGLES_V11 = [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000, 5000, 6200];
+const calcLevelInglesV11 = (xpTotal, curve = DEFAULT_LEVEL_CURVE_INGLES_V11) => {
     let lvl = 1;
     for (let i = 0; i < curve.length; i++) {
         if (xpTotal >= curve[i]) lvl = i + 1;
@@ -1785,23 +1786,24 @@ const calcLevelInglesV10 = (xpTotal, curve = DEFAULT_LEVEL_CURVE_INGLES_V10) => 
     return lvl;
 };
 
-async function ensureIndexesInglesV10(db){
+async function ensureIndexesInglesV11(db){
     try{
         await db.collection('workspace_ingles_stats').createIndex({escolaId:1, xp:-1});
         await db.collection('workspace_ingles_stats').createIndex({userId:1}, {unique:true});
         await db.collection('workspace_ingles_data').createIndex({escolaId:1}, {unique:true});
         await db.collection('workspace_ingles_ilhas').createIndex({userId:1}, {unique:true});
         await db.collection('workspace_ingles_ilhas').createIndex({escolaId:1, cristais:-1});
-        await db.collection('workspace_ingles_ilhas').createIndex({escolaId:1, nivel:-1});
+        await db.collection('workspace_ingles_guildas').createIndex({escolaId:1});
+        await db.collection('workspace_ingles_guildas').createIndex({nome:1, escolaId:1}, {unique:true});
     }catch{}
 }
 
-// ==================== XP & RANKING (V9) ====================
+// ==================== XP & RANKING ====================
 router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        await ensureIndexesInglesV10(db);
-        const { userId, escolaId, nome, xp, streak, level, titulo, tituloEquipado, bordaEquipada, inventario, medalhas, questsProgress, portalStreak, portalRodada, portalTarget, portalRecorde } = req.body;
+        await ensureIndexesInglesV11(db);
+        const { userId, escolaId, nome, xp, streak, level, titulo, tituloEquipado, bordaEquipada, inventario, medalhas, questsProgress, portalStreak, portalRodada, portalTarget, portalRecorde, energia, energiaMax, bausAbertura, petsInventario, petEquipado, ovosChocando, classe, skillPoints, skills, mapaExplorado, nivelIlha, xpIlha } = req.body;
         if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
         const escolaIdSeguro = escolaId || 'DEFAULT';
         const xpInt = parseInt(xp) || 0;
@@ -1812,7 +1814,7 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
             nome: nome || atual.nome || 'Aluno',
             xp: xpInt,
             streak: parseInt(streak) || atual.streak || 1,
-            level: level ? parseInt(level) : calcLevelInglesV10(xpInt),
+            level: level ? parseInt(level) : calcLevelInglesV11(xpInt),
             ultimaAtividade: new Date().toISOString()
         };
         if (titulo !== undefined) updateSet.titulo = titulo;
@@ -1824,13 +1826,25 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
         if (portalStreak !== undefined) updateSet.portalStreak = parseInt(portalStreak) || 0;
         if (portalRodada !== undefined) updateSet.portalRodada = parseInt(portalRodada) || 1;
         if (portalTarget !== undefined) updateSet.portalTarget = parseInt(portalTarget) || 5;
+        if (energia !== undefined) updateSet.energia = parseInt(energia);
+        if (energiaMax !== undefined) updateSet.energiaMax = parseInt(energiaMax);
+        if (bausAbertura !== undefined) updateSet.bausAbertura = bausAbertura;
+        if (petsInventario !== undefined) updateSet.petsInventario = petsInventario;
+        if (petEquipado !== undefined) updateSet.petEquipado = petEquipado;
+        if (ovosChocando !== undefined) updateSet.ovosChocando = ovosChocando;
+        if (classe !== undefined) updateSet.classe = classe;
+        if (skillPoints !== undefined) updateSet.skillPoints = parseInt(skillPoints);
+        if (skills !== undefined) updateSet.skills = skills;
+        if (mapaExplorado !== undefined) updateSet.mapaExplorado = mapaExplorado;
+        if (nivelIlha !== undefined) updateSet.nivelIlha = parseInt(nivelIlha);
+        if (xpIlha !== undefined) updateSet.xpIlha = parseInt(xpIlha);
         const recordeAtual = atual.portalRecorde || 0;
         const novoRecorde = Math.max(recordeAtual, parseInt(portalRecorde) || 0, parseInt(portalStreak) || 0);
         updateSet.portalRecorde = novoRecorde;
         await db.collection('workspace_ingles_stats').updateOne({ userId }, { $set: updateSet }, { upsert: true });
         res.json({ success: true, level: updateSet.level, portalRecorde: novoRecorde });
     } catch (e) {
-        console.error('V10 /xp erro', e);
+        console.error('V11 /xp erro', e);
         res.status(500).json({ error: 'Erro sync xp' });
     }
 });
@@ -1844,7 +1858,7 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
             userId: r.userId,
             nome: r.nome,
             xp: r.xp,
-            level: r.level || calcLevelInglesV10(r.xp),
+            level: r.level || calcLevelInglesV11(r.xp),
             streak: r.streak || 1,
             titulo: r.titulo || 'Aprendiz',
             tituloEquipado: r.tituloEquipado || r.titulo || 'Aprendiz',
@@ -1852,6 +1866,8 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
             inventario: r.inventario || [],
             medalhas: r.medalhas || [],
             portalRecorde: r.portalRecorde || 0,
+            classe: r.classe || 'mago',
+            nivelIlha: r.nivelIlha || 1,
             posicao: i + 1,
             liga: i < 3 ? 'ouro' : i < 10 ? 'prata' : i < 20 ? 'bronze' : 'aprendiz'
         }));
@@ -1859,13 +1875,14 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Erro ranking' }); }
 });
 
-// ==================== DADOS GERAIS ====================
+// ==================== DADOS GERAIS - AGORA ACEITA TUDO SEM QUEBRAR ====================
 router.get('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        await ensureIndexesInglesV10(db);
+        await ensureIndexesInglesV11(db);
         const escolaId = req.query.escolaId || 'DEFAULT';
         let d = await db.collection('workspace_ingles_data').findOne({ escolaId }) || {};
+        // defaults se não existir
         d.words = d.words || [];
         d.phrases = d.phrases || [];
         d.quizzes = d.quizzes || [];
@@ -1885,13 +1902,17 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
             { id: 'q_daily_1', tipo: 'diaria', texto: 'Crie 3 frases com conectores (Although/Because/When)', alvo: 3, recompensaXP: 100, icone: '🔗' },
             { id: 'q_daily_2', tipo: 'diaria', texto: 'Acerte 5 Minimal Pairs (ship/sheep)', alvo: 5, recompensaXP: 80, icone: '👂' },
             { id: 'q_daily_3', tipo: 'diaria', texto: 'Debata 4 vezes com IA', alvo: 4, recompensaXP: 120, icone: '🗣️' },
-            { id: 'q_daily_4', tipo: 'diaria', texto: 'Treine 5 palavras no Portal Mágico', alvo: 5, recompensaXP: 150, icone: '🌀' }
+            { id: 'q_daily_4', tipo: 'diaria', texto: 'Treine 5 palavras no Portal Mágico', alvo: 5, recompensaXP: 150, icone: '🌀' },
+            { id: 'q_ilha_1', tipo: 'diaria', texto: 'Colete 100 cristais na ilha', alvo: 100, recompensaXP: 200, icone: '💎' },
+            { id: 'q_ilha_2', tipo: 'diaria', texto: 'Construa 2 itens na ilha', alvo: 2, recompensaXP: 150, icone: '🔨' }
         ];
         d.achievements = d.achievements || [
             { id: 'ach_first_spell', nome: 'Primeiro Feitiço', desc: 'Complete 1 frase', icone: '✨', condicao: { tipo: 'wordSpark', qtd: 1 }, xpBonus: 50 },
             { id: 'ach_portal_5', nome: 'Viajante Temporal', desc: '5 vitórias seguidas no Portal', icone: '🌀', condicao: { tipo: 'portal', qtd: 5 }, xpBonus: 400 },
             { id: 'ach_ilha_1', nome: 'Construtor', desc: 'Coloque 5 itens na ilha', icone: '🏝️', condicao: { tipo: 'ilha', qtd: 5 }, xpBonus: 200 },
-            { id: 'ach_roubo_1', nome: 'Pirata Iniciante', desc: 'Roube 1 vez', icone: '🏴‍☠️', condicao: { tipo: 'roubo', qtd: 1 }, xpBonus: 300 }
+            { id: 'ach_roubo_1', nome: 'Pirata Iniciante', desc: 'Roube 1 vez', icone: '🏴‍☠️', condicao: { tipo: 'roubo', qtd: 1 }, xpBonus: 300 },
+            { id: 'ach_pet_1', nome: 'Amigo Fiel', desc: 'Choque 1 ovo de pet', icone: '🐾', condicao: { tipo: 'pet', qtd: 1 }, xpBonus: 400 },
+            { id: 'ach_mapa_1', nome: 'Explorador', desc: 'Explore 5 áreas do mapa', icone: '🗺️', condicao: { tipo: 'mapa', qtd: 5 }, xpBonus: 500 }
         ];
         d.season = d.season || { id: 'S1', nome: 'Era dos Feitiços', xpMultiplier: 1, ativa: true, inicio: new Date().toISOString() };
         d.lootTables = d.lootTables || {
@@ -1899,14 +1920,19 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
             epico: [{ id: 'borda_prata', nome: 'Borda Prata', tipo: 'cosmetico', chance: 50 }],
             lendario: [{ id: 'borda_ouro', nome: 'Borda Ouro', tipo: 'cosmetico', chance: 40 }]
         };
-        d.levelCurve = d.levelCurve || DEFAULT_LEVEL_CURVE_INGLES_V10;
+        d.levelCurve = d.levelCurve || DEFAULT_LEVEL_CURVE_INGLES_V11;
         d.titulos = d.titulos || ['Aprendiz', 'Mago', 'Arquimago', 'Lenda'];
         d.badges = d.badges || [];
         d.portalConfig = d.portalConfig || { jogosPossiveis: ['wordSpark','readAloud','listenType','quiz','wordPicker','picturePop','minimalPairs','sentenceShuffle','answerQuest','questionMaker','contextRole'] };
         d.avatarEquipado = d.avatarEquipado || 'mago_aprendiz';
+        d.climas = d.climas || [
+            {id:'sol', nome:'Ensolarado', emoji:'☀️', bonus:{cristais:0}},
+            {id:'chuva', nome:'Chuva Mágica', emoji:'🌧️', bonus:{cristais:50}, duracao:1800},
+            {id:'arco_iris', nome:'Arco-Íris', emoji:'🌈', bonus:{cristais:100, xp:100}, duracao:900}
+        ];
         res.json({ success: true, dados: d });
     } catch (e) {
-        console.error('GET dados V10', e);
+        console.error('GET dados V11', e);
         res.status(500).json({ error: 'Erro ler dados' });
     }
 });
@@ -1914,18 +1940,29 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
 router.put('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        await ensureIndexesInglesV10(db);
+        await ensureIndexesInglesV11(db);
         const { escolaId, ...campos } = req.body;
         const escolaIdSeguro = escolaId || 'DEFAULT';
         const update = { ultimaAtualizacao: new Date().toISOString() };
-        const permitidos = ['words','phrases','quizzes','pictures','submissions','pool','errosRetidos','magoPhrases','magoConfig','srs','wordPickers','minimalPairs','debates','roleplays','questions','quests','achievements','season','lootTables','levelCurve','titulos','badges','portalConfig','avatarEquipado','ferramentaEquipada'];
-        permitidos.forEach(k => { if (campos[k] !== undefined) update[k] = campos[k]; });
-        console.log('V10 PUT salvando:', Object.keys(update));
+        // V11: aceita TUDO que vier, sem quebrar - lista expandida
+        const permitidos = [
+            'words','phrases','quizzes','pictures','submissions','pool','errosRetidos','magoPhrases','magoConfig','srs',
+            'wordPickers','minimalPairs','debates','roleplays','questions','quests','achievements','season','lootTables','levelCurve','titulos','badges','portalConfig',
+            'avatarEquipado','ferramentaEquipada','energia','energiaMax','bausAbertura','petsInventario','petEquipado','ovosChocando','classe','skillPoints','skills',
+            'mapaExplorado','tesourosEnterrados','nivelIlha','xpIlha','climaAtual','climaAte','mercadorAtivo','mercadorAte','guilda','fabricas','visitasFeitas'
+        ];
+        // Se vier campo novo que não está na lista, ainda salva (para não quebrar futuro)
+        Object.keys(campos).forEach(k=>{
+            if(permitidos.includes(k) || !k.startsWith('_')){
+                update[k] = campos[k];
+            }
+        });
+        console.log('V11 PUT salvando:', Object.keys(update));
         await db.collection('workspace_ingles_data').updateOne({ escolaId: escolaIdSeguro }, { $set: update }, { upsert: true });
         if (global.workspaceStream) global.workspaceStream.emit('evento_realtime', { type: 'BAU_INGLES_UPDATE', escolaId: escolaIdSeguro });
         res.json({ success: true });
     } catch (e) {
-        console.error('PUT dados V10', e);
+        console.error('PUT dados V11', e);
         res.status(500).json({ error: 'Erro salvar' });
     }
 });
@@ -1934,7 +1971,7 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
 router.post('/ingles/loja/comprar', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        await ensureIndexesInglesV10(db);
+        await ensureIndexesInglesV11(db);
         const { userId, escolaId, itemId, tipo, preco, nome } = req.body;
         if (!userId || !itemId || preco===undefined) return res.status(400).json({ error: 'Dados incompletos' });
         const precoInt = parseInt(preco)||0;
@@ -1942,54 +1979,34 @@ router.post('/ingles/loja/comprar', verificarToken, async (req, res) => {
         if (!stats) return res.status(404).json({ error: 'Aluno não encontrado' });
         const xpAtual = stats.xp||0;
         if (xpAtual < precoInt) return res.status(400).json({ error: `XP insuficiente. Você tem ${xpAtual} XP, precisa ${precoInt}` });
-        
-        // Verifica se já tem (para avatar único)
         if (tipo==='avatar'){
             const jaTem = (stats.inventario||[]).some(i=>i.id===itemId && i.tipo==='avatar');
             if (jaTem) return res.status(400).json({ error: 'Você já possui esse avatar' });
         }
-
         const novoXp = xpAtual - precoInt;
-        const novoItem = {
-            id: itemId,
-            nome: nome||itemId,
-            tipo: tipo||'geral',
-            preco: precoInt,
-            obtidoEm: new Date().toISOString()
-        };
-        // Adiciona emoji se for ferramenta/decoracao conhecida
-        if (tipo==='avatar') novoItem.emoji = '🧙';
-        if (tipo==='ferramenta') novoItem.durabilidade = 3;
-
-        await db.collection('workspace_ingles_stats').updateOne(
-            { userId },
-            { 
-                $set: { xp: novoXp, ultimaAtividade: new Date().toISOString() },
-                $push: { inventario: novoItem }
-            }
-        );
-        console.log(`V10 LOJA: ${userId} comprou ${itemId} por ${precoInt} XP. Novo XP: ${novoXp}`);
-        res.json({ success: true, novoXp, item: novoItem, mensagem: `Comprado por ${precoInt} XP! Novo saldo: ${novoXp} XP. Jogue mais para farmar!` });
+        const novoItem = { id: itemId, nome: nome||itemId, tipo: tipo||'geral', preco: precoInt, obtidoEm: new Date().toISOString() };
+        await db.collection('workspace_ingles_stats').updateOne({ userId }, { $set: { xp: novoXp, ultimaAtividade: new Date().toISOString() }, $push: { inventario: novoItem } });
+        console.log(`V11 LOJA: ${userId} comprou ${itemId} por ${precoInt} XP. Novo XP: ${novoXp}`);
+        res.json({ success: true, novoXp, item: novoItem, mensagem: `Comprado por ${precoInt} XP!` });
     } catch (e) {
         console.error('LOJA comprar erro', e);
         res.status(500).json({ error: 'Erro ao comprar' });
     }
 });
 
-// ==================== ILHA MÁGICA ====================
+// ==================== ILHA MÁGICA - COMPATÍVEL V10 + NOVOS CAMPOS ====================
 router.post('/ingles/ilha/salvar', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        await ensureIndexesInglesV10(db);
-        const { userId, escolaId, nome, ilha, avatarEquipado } = req.body;
+        await ensureIndexesInglesV11(db);
+        const { userId, escolaId, nome, ilha, avatarEquipado, energia, pets, baus, mapaExplorado, tesouros, clima, mercador, skills, skillPoints, classe, nivelIlha } = req.body;
         if (!userId || !ilha) return res.status(400).json({ error: 'Dados incompletos' });
         const escolaIdSeguro = escolaId||'DEFAULT';
-        
         const doc = {
             userId,
             escolaId: escolaIdSeguro,
             nome: nome||'Ilha Mágica',
-            nivel: ilha.nivel||1,
+            nivel: ilha.nivel||nivelIlha||1,
             tamanho: ilha.tamanho||4,
             cristais: ilha.cristais||0,
             layout: ilha.layout||Array(16).fill(null),
@@ -1997,12 +2014,23 @@ router.post('/ingles/ilha/salvar', verificarToken, async (req, res) => {
             invasoesFeitas: ilha.invasoesFeitas||0,
             invasoesRecebidas: ilha.invasoesRecebidas||0,
             historicoInvasoes: (ilha.historicoInvasoes||[]).slice(-50),
+            producaoAcumulada: ilha.producaoAcumulada||0,
+            limiteProducao: ilha.limiteProducao||500,
             avatarEquipado: avatarEquipado||'mago_aprendiz',
+            energia: energia||100,
+            pets: pets||[],
+            baus: baus||[],
+            mapaExplorado: mapaExplorado||{},
+            tesouros: tesouros||[],
+            clima: clima||{id:'sol'},
+            mercador: mercador||null,
+            skills: skills||{},
+            skillPoints: skillPoints||0,
+            classe: classe||'mago',
             ultimaColeta: ilha.ultimaColeta||Date.now(),
             ultimaAtualizacao: new Date().toISOString()
         };
         await db.collection('workspace_ingles_ilhas').updateOne({ userId }, { $set: doc }, { upsert: true });
-        // também atualiza stats com cristais?
         res.json({ success: true, ilha: doc });
     } catch (e) {
         console.error('Salvar ilha erro', e);
@@ -2018,7 +2046,6 @@ router.get('/ingles/ilha/minha', verificarToken, async (req, res) => {
         if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
         let ilha = await db.collection('workspace_ingles_ilhas').findOne({ userId });
         if (!ilha){
-            // cria ilha inicial
             ilha = {
                 userId,
                 escolaId,
@@ -2031,7 +2058,18 @@ router.get('/ingles/ilha/minha', verificarToken, async (req, res) => {
                 invasoesFeitas:0,
                 invasoesRecebidas:0,
                 historicoInvasoes:[],
+                producaoAcumulada:0,
+                limiteProducao:500,
                 avatarEquipado:'mago_aprendiz',
+                energia:100,
+                pets:[],
+                baus:[],
+                mapaExplorado:{},
+                tesouros:[],
+                clima:{id:'sol'},
+                skills:{},
+                skillPoints:0,
+                classe:'mago',
                 ultimaColeta:Date.now(),
                 ultimaAtualizacao:new Date().toISOString()
             };
@@ -2051,7 +2089,6 @@ router.get('/ingles/ilhas', verificarToken, async (req, res) => {
         const filtro = { escolaId };
         if (excluir) filtro.userId = { $ne: excluir };
         const ilhas = await db.collection('workspace_ingles_ilhas').find(filtro).sort({ nivel:-1, cristais:-1 }).limit(30).toArray();
-        // busca nomes dos donos se não tiver
         const enriquecidas = await Promise.all(ilhas.map(async i=>{
             if (!i.nome || i.nome==='Minha Ilha Mágica'){
                 const stats = await db.collection('workspace_ingles_stats').findOne({ userId:i.userId });
@@ -2068,44 +2105,36 @@ router.get('/ingles/ilhas', verificarToken, async (req, res) => {
 router.post('/ingles/ilha/invadir', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        await ensureIndexesInglesV10(db);
+        await ensureIndexesInglesV11(db);
         const { userId, escolaId, alvoId, acao, sucesso } = req.body;
         if (!userId || !alvoId) return res.status(400).json({ error: 'Dados incompletos' });
         const escolaIdSeguro = escolaId||'DEFAULT';
-        
         const atacanteIlha = await db.collection('workspace_ingles_ilhas').findOne({ userId });
         const alvoIlha = await db.collection('workspace_ingles_ilhas').findOne({ userId: alvoId });
         const atacanteStats = await db.collection('workspace_ingles_stats').findOne({ userId });
-        const alvoStats = await db.collection('workspace_ingles_ilhas').findOne({ userId: alvoId });
-        
         if (!atacanteIlha || !alvoIlha) return res.status(404).json({ error: 'Ilha não encontrada' });
-        
-        // verifica escudo alvo
         const agora = Date.now();
         if (alvoIlha.escudoAte && alvoIlha.escudoAte > agora){
-            return res.status(400).json({ error: `Ilha protegida por escudo até ${new Date(alvoIlha.escudoAte).toLocaleTimeString()}` });
+            return res.status(400).json({ error: `Ilha protegida até ${new Date(alvoIlha.escudoAte).toLocaleTimeString()}` });
         }
-        // verifica cooldown 1h mesmo alvo
         const histAtacante = atacanteIlha.historicoInvasoes||[];
         const ultimo = histAtacante.filter(h=>h.alvoId===alvoId).sort((a,b)=>b.data-a.data)[0];
         if (ultimo && (agora - ultimo.data) < 60*60*1000){
             const falta = Math.ceil((60*60*1000 - (agora - ultimo.data))/60000);
-            return res.status(400).json({ error: `Cooldown! Você já invadiu essa ilha. Espere ${falta} min` });
+            return res.status(400).json({ error: `Cooldown! Espere ${falta} min` });
         }
-        // verifica varinha se sucesso
         if (sucesso){
-            const temVarinha = (atacanteStats?.inventario||[]).some(i=>i.id==='varinha_roubo');
-            if (!temVarinha) return res.status(400).json({ error: 'Precisa de Varinha de Roubo 🪄' });
+            const temVarinha = (atacanteStats?.inventario||[]).some(i=>i.id==='varinha_roubo' || i.id==='varinha_roubo_suprema');
+            if (!temVarinha) return res.status(400).json({ error: 'Precisa de Varinha 🪄' });
         }
-
         let roubado = 0;
         if (sucesso){
             const cristaisAlvo = alvoIlha.cristais||0;
             roubado = Math.floor(cristaisAlvo * 0.10);
-            roubado = Math.max(10, Math.min(200, roubado)); // min 10 max 200
+            const temSuprema = (atacanteStats?.inventario||[]).some(i=>i.id==='varinha_roubo_suprema');
+            if(temSuprema) roubado = Math.floor(cristaisAlvo * 0.20);
+            roubado = Math.max(10, Math.min(300, roubado));
             if (cristaisAlvo < 10) roubado = cristaisAlvo;
-            
-            // transfere
             await db.collection('workspace_ingles_ilhas').updateOne({ userId: alvoId }, { 
                 $inc: { cristais: -roubado, invasoesRecebidas:1 },
                 $set: { escudoAte: agora + 2*60*60*1000, ultimaAtualizacao: new Date().toISOString() },
@@ -2116,17 +2145,13 @@ router.post('/ingles/ilha/invadir', verificarToken, async (req, res) => {
                 $set: { ultimaAtualizacao: new Date().toISOString() },
                 $push: { historicoInvasoes: { $each: [{ alvoId, alvoNome: alvoIlha.nome||'Ilha', data: agora, sucesso:true, cristais:roubado, tipo:'ataque', detalhe:`Roubou ${roubado}💎 de ${alvoIlha.nome}` }], $slice: -50 } }
             });
-            // consome varinha do atacante stats
             await db.collection('workspace_ingles_stats').updateOne({ userId }, { $pull: { inventario: { id:'varinha_roubo' } } });
-            
-            console.log(`V10 ROUBO: ${userId} roubou ${roubado} de ${alvoId}`);
+            console.log(`V11 ROUBO: ${userId} roubou ${roubado} de ${alvoId}`);
             res.json({ success: true, roubado, mensagem: `Roubo! +${roubado}💎` });
         } else {
-            // falha - perde 50 XP, ativa escudo alvo
             await db.collection('workspace_ingles_stats').updateOne({ userId }, { $inc: { xp: -50 } });
             await db.collection('workspace_ingles_ilhas').updateOne({ userId: alvoId }, { 
                 $set: { escudoAte: agora + 2*60*60*1000 },
-                $inc: { invasoesRecebidas:0 },
                 $push: { historicoInvasoes: { $each: [{ alvoId: userId, alvoNome: atacanteIlha.nome, data: agora, sucesso:false, cristais:0, tipo:'defesa', detalhe:`Defendeu ataque de ${atacanteIlha.nome}` }], $slice: -50 } }
             });
             await db.collection('workspace_ingles_ilhas').updateOne({ userId }, { 
@@ -2140,7 +2165,53 @@ router.post('/ingles/ilha/invadir', verificarToken, async (req, res) => {
     }
 });
 
-// ==================== OUTROS (quests, recompensa, season, portal) ====================
+// ==================== GUILDAS - NOVO SEM QUEBRAR ====================
+router.post('/ingles/guilda/criar', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { userId, escolaId, nome, descricao } = req.body;
+        if(!userId || !nome) return res.status(400).json({error:'Dados incompletos'});
+        const existe = await db.collection('workspace_ingles_guildas').findOne({escolaId:escolaId||'DEFAULT', nome});
+        if(existe) return res.status(400).json({error:'Guilda já existe'});
+        const guilda = {
+            nome,
+            descricao:descricao||'',
+            escolaId:escolaId||'DEFAULT',
+            lider:userId,
+            membros:[userId],
+            nivel:1,
+            xp:0,
+            cristais:0,
+            criadoEm:new Date().toISOString()
+        };
+        await db.collection('workspace_ingles_guildas').insertOne(guilda);
+        await db.collection('workspace_ingles_ilhas').updateOne({userId}, {$set:{guilda:nome}});
+        res.json({success:true, guilda});
+    } catch(e){ res.status(500).json({error:'Erro criar guilda'}); }
+});
+
+router.get('/ingles/guildas', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const guildas = await db.collection('workspace_ingles_guildas').find({escolaId:req.query.escolaId||'DEFAULT'}).sort({nivel:-1, xp:-1}).limit(20).toArray();
+        res.json({success:true, guildas});
+    } catch(e){ res.status(500).json({error:'Erro listar guildas'}); }
+});
+
+router.post('/ingles/guilda/entrar', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { userId, escolaId, nomeGuilda } = req.body;
+        const guilda = await db.collection('workspace_ingles_guildas').findOne({escolaId:escolaId||'DEFAULT', nome:nomeGuilda});
+        if(!guilda) return res.status(404).json({error:'Guilda não encontrada'});
+        if(guilda.membros.length>=5) return res.status(400).json({error:'Guilda cheia (max 5)'});
+        await db.collection('workspace_ingles_guildas').updateOne({escolaId:escolaId||'DEFAULT', nome:nomeGuilda}, {$addToSet:{membros:userId}});
+        await db.collection('workspace_ingles_ilhas').updateOne({userId}, {$set:{guilda:nomeGuilda}});
+        res.json({success:true});
+    } catch(e){ res.status(500).json({error:'Erro entrar guilda'}); }
+});
+
+// ==================== QUESTS, RECOMPENSA, SEASON, PORTAL (igual V10) ====================
 router.get('/ingles/quests', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -2166,8 +2237,8 @@ router.post('/ingles/quests/completar', verificarToken, async (req, res) => {
         if (!quest) return res.status(404).json({ error: 'Quest não encontrada' });
         const mult = dados?.season?.xpMultiplier || 1;
         const bonusXP = Math.floor((quest.recompensaXP || 100) * mult);
-        await db.collection('workspace_ingles_stats').updateOne({ userId }, { $inc: { xp: bonusXP }, $set: { [`questsProgress.${questId}.atual`]: quest.alvo, [`questsProgress.${questId}.coletado`]: true, ultimaAtividade: new Date().toISOString() } }, { upsert: true });
-        res.json({ success: true, bonusXP });
+        await db.collection('workspace_ingles_stats').updateOne({ userId }, { $inc: { xp: bonusXP, energia: 5 }, $set: { [`questsProgress.${questId}.atual`]: quest.alvo, [`questsProgress.${questId}.coletado`]: true, ultimaAtividade: new Date().toISOString() } }, { upsert: true });
+        res.json({ success: true, bonusXP, energia:5 });
     } catch (e) { res.status(500).json({ error: 'Erro completar quest' }); }
 });
 
@@ -2187,7 +2258,7 @@ router.post('/ingles/recompensa/abrir', verificarToken, async (req, res) => {
             r -= (item.chance || 50);
             if (r <= 0) { escolhido = item; break; }
         }
-        await db.collection('workspace_ingles_stats').updateOne({ userId }, { $push: { inventario: { ...escolhido, obtidoEm: new Date().toISOString(), raridade: rar } } }, { upsert: true });
+        await db.collection('workspace_ingles_stats').updateOne({ userId }, { $push: { inventario: { ...escolhido, obtidoEm: new Date().toISOString(), raridade: rar } }, $inc:{energia:10} }, { upsert: true });
         res.json({ success: true, recompensa: escolhido, raridade: rar });
     } catch (e) { res.status(500).json({ error: 'Erro loot' }); }
 });
@@ -2228,6 +2299,7 @@ router.post('/ingles/portal/progresso', verificarToken, async (req, res) => {
         if (portalTarget !== undefined) set.portalTarget = parseInt(portalTarget) || 5;
         if (xpGanho) inc.xp = parseInt(xpGanho);
         if (xpPerda) inc.xp = -parseInt(xpPerda);
+        if (xpGanho) inc.energia = 2;
         const recordeAtual = atual.portalRecorde || 0;
         const novoRecorde = Math.max(recordeAtual, parseInt(portalStreak) || 0);
         if (novoRecorde > recordeAtual) set.portalRecorde = novoRecorde;
