@@ -1803,7 +1803,7 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         await ensureIndexesInglesV11(db);
-        const { userId, escolaId, nome, xp, streak, level, titulo, tituloEquipado, bordaEquipada, inventario, medalhas, questsProgress, portalStreak, portalRodada, portalTarget, portalRecorde, energia, energiaMax, bausAbertura, petsInventario, petEquipado, ovosChocando, classe, skillPoints, skills, mapaExplorado, nivelIlha, xpIlha } = req.body;
+        const { userId, escolaId, nome, xp, streak, level, titulo, tituloEquipado, bordaEquipada, inventario, medalhas, questsProgress, portalStreak, portalRodada, portalTarget, portalRecorde, energia, energiaMax, bausAbertura, petsInventario, petEquipado, ovosChocando, classe, skillPoints, skills, mapaExplorado, nivelIlha, xpIlha, coins, diamantes, pedras } = req.body;
         if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
         const escolaIdSeguro = escolaId || 'DEFAULT';
         const xpInt = parseInt(xp) || 0;
@@ -1838,6 +1838,9 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
         if (mapaExplorado !== undefined) updateSet.mapaExplorado = mapaExplorado;
         if (nivelIlha !== undefined) updateSet.nivelIlha = parseInt(nivelIlha);
         if (xpIlha !== undefined) updateSet.xpIlha = parseInt(xpIlha);
+        if (coins !== undefined) updateSet.coins = coins;
+        if (diamantes !== undefined) updateSet.diamantes = parseInt(diamantes);
+        if (pedras !== undefined) updateSet.pedras = pedras;
         const recordeAtual = atual.portalRecorde || 0;
         const novoRecorde = Math.max(recordeAtual, parseInt(portalRecorde) || 0, parseInt(portalStreak) || 0);
         updateSet.portalRecorde = novoRecorde;
@@ -2320,6 +2323,7 @@ router.get('/ingles/portal/ranking', verificarToken, async (req, res) => {
         res.json({ success: true, ranking });
     } catch (e) { res.status(500).json({ error: 'Erro ranking portal' }); }
 });
+
 
 
 module.exports = router;
