@@ -2342,4 +2342,5 @@ router.get('/ingles/portal/ranking', verificarToken, async (req, res) => {
 });
 
 
+
 module.exports = router;
