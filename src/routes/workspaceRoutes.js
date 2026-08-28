@@ -199,10 +199,18 @@ router.post('/upload', verificarToken, (req, res) => {
                                     // 🧹 Limpa o disco rígido após o envio (Sucesso ou Falha)
                                     if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
                                 }
-                            } else {
+                           } else {
                                 // 🔵 ROTA 2: CLOUDINARY
                                 console.log(`📸 Enviando MULTIMÉDIA para Cloudinary: ${nomeSeguro}`);
+                                
+                                // 🚀 FIX: Força o Cloudinary a processar vídeos corretamente para que não rodem apenas como áudio
                                 let recursoTipo = 'auto'; 
+                                if (file.mimetype.startsWith('video/') || file.mimetype.startsWith('audio/')) {
+                                    recursoTipo = 'video';
+                                } else if (file.mimetype.startsWith('image/')) {
+                                    recursoTipo = 'image';
+                                }
+                                
                                 let publicId = `${Date.now()}_${nomeSeguro.split('.')[0]}`;
 
                                 // O Cloudinary consegue ler o ficheiro diretamente do disco!
