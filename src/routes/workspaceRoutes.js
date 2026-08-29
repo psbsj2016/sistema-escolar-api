@@ -1915,9 +1915,9 @@ router.post('/ingles/debate', verificarToken, async (req, res) => {
             return res.status(500).json({ success: false, error: 'Chave da API do Gemini não configurada.' });
         }
 
-        // 2. Ligamos o Motor do Gemini (Usamos o 1.5 Flash por ser o mais rápido e inteligente para conversas)
+        // 2. Ligamos o Motor do Gemini (Usamos o gemini-pro, o modelo universal mais estável)
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
         // 3. A ENGENHARIA DE PROMPT (Damos a personalidade ao Mago)
         const instrucaoDoMestre = `You are 'Mago IA', an English teacher acting as a wise, slightly challenging wizard in a debate game with a student.
@@ -1960,7 +1960,8 @@ Your rules:
 
     } catch (error) {
         console.error("🚨 Erro na magia do Mago IA (Gemini):", error);
-        res.status(500).json({ success: false, error: 'O Mago IA perdeu a ligação ao plano astral.' });
+        // Retorna o erro detalhado para o frontend se falhar
+        res.status(500).json({ success: false, error: 'O Mago IA perdeu a ligação ao plano astral. Tente novamente em instantes.' });
     }
 });
 
