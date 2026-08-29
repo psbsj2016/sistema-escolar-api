@@ -1900,4 +1900,68 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🧙‍♂️ O CÉREBRO DO MAGO IA (DUELO DE MENTES COM GOOGLE GEMINI)
+// ============================================================================
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+router.post('/ingles/debate', verificarToken, async (req, res) => {
+    try {
+        const { topico, historico } = req.body;
+        
+        // 1. Verificamos se o servidor tem a Chave Mágica do Google
+        if (!process.env.GEMINI_API_KEY) {
+            console.error("Falta a chave GEMINI_API_KEY no ficheiro .env");
+            return res.status(500).json({ success: false, error: 'Chave da API do Gemini não configurada.' });
+        }
+
+        // 2. Ligamos o Motor do Gemini (Usamos o 1.5 Flash por ser o mais rápido e inteligente para conversas)
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+        // 3. A ENGENHARIA DE PROMPT (Damos a personalidade ao Mago)
+        const instrucaoDoMestre = `You are 'Mago IA', an English teacher acting as a wise, slightly challenging wizard in a debate game with a student.
+The topic of our debate is: "${topico}".
+Your rules:
+1. Debate the student, challenge their ideas, and keep the conversation going.
+2. If the student makes a clear grammar or vocabulary mistake in English, gently correct them in your response.
+3. Keep your responses short (maximum 2 or 3 sentences).
+4. ALWAYS reply strictly in English.`;
+
+        // 4. Transformar o nosso histórico de conversa para o formato que o Google Gemini exige
+        const formatacaoGemini = [];
+        
+        // Retiramos a última mensagem do aluno, pois essa é a "pergunta" que vai disparar a IA
+        const mensagensAnteriores = historico.slice(0, -1);
+        const ultimaMensagemDoAluno = historico[historico.length - 1].text;
+
+        mensagensAnteriores.forEach(msg => {
+            formatacaoGemini.push({
+                role: msg.role === 'ai' ? 'model' : 'user',
+                parts: [{ text: msg.text }]
+            });
+        });
+
+        // 5. Iniciamos a conversa, injetando as regras secretas logo no início
+        const chat = model.startChat({
+            history: [
+                { role: 'user', parts: [{ text: instrucaoDoMestre }] },
+                { role: 'model', parts: [{ text: 'I understand my role perfectly. Let the debate begin.' }] },
+                ...formatacaoGemini
+            ]
+        });
+
+        // 6. Enviamos o argumento do aluno e aguardamos a magia acontecer
+        const resultado = await chat.sendMessage(ultimaMensagemDoAluno);
+        const respostaGerada = resultado.response.text();
+
+        // 7. Devolvemos a resposta da IA para o ecrã do aluno!
+        res.json({ success: true, resposta: respostaGerada });
+
+    } catch (error) {
+        console.error("🚨 Erro na magia do Mago IA (Gemini):", error);
+        res.status(500).json({ success: false, error: 'O Mago IA perdeu a ligação ao plano astral.' });
+    }
+});
+
 module.exports = router;
