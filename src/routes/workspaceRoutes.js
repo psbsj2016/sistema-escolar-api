@@ -10,6 +10,14 @@ const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary
 const { enviarParaR2 } = require('../config/cloudflareR2');
 const { filtroTenant } = require('../middlewares/auth');
 
+// ============================================================================
+// 🧠 INICIALIZAÇÃO DO CÉREBRO DA IA (PTT CURSOS)
+// ============================================================================
+const PttAIEngine = require('./PttAIEngine'); 
+
+// Inicia o Cérebro assim que o servidor arranca
+PttAIEngine.init();
+
 // 🚀 PROTEÇÃO ANTI-502: Interceta a demora aos 15 MINUTOS (para suportar uploads gigantes de 700MB!)
 router.use((req, res, next) => {
     req.setTimeout(900000, () => {
@@ -1975,6 +1983,48 @@ router.post('/ingles/debate', verificarToken, async (req, res) => {
     } catch (error) {
         console.error("🚨 Erro na Super IA Nativa:", error);
         res.status(500).json({ success: false, error: 'O Mago IA está focado noutro feitiço. Tente novamente!' });
+    }
+});
+
+// ============================================================================
+// 🧠 ROTAS DA NOSSA IA NATIVA PTT (JOGO DE TESTE / LABORATÓRIO)
+// ============================================================================
+
+// 1. Rota para o Aluno conversar com a Ptt AI
+router.post('/ingles/ia-teste/falar', verificarToken, async (req, res) => {
+    try {
+        const { mensagem } = req.body;
+        if (!mensagem) return res.status(400).json({ error: 'Mensagem vazia.' });
+
+        // O Cérebro processa a mensagem
+        const pensamento = PttAIEngine.pensar(mensagem);
+
+        res.json({ 
+            success: true, 
+            resposta: pensamento.resposta,
+            // Enviamos também o que a IA pensou "nos bastidores" para podermos ver no painel!
+            bastidores: `A Ptt AI classificou esta frase como: [${pensamento.intencaoDetetada}]`
+        });
+
+    } catch (error) {
+        console.error("🚨 Erro na Ptt AI de Teste:", error);
+        res.status(500).json({ success: false, error: 'O cérebro falhou.' });
+    }
+});
+
+// 2. Rota para o Professor (O Paulo) ensinar coisas novas à Ptt AI!
+router.post('/ingles/ia-teste/ensinar', verificarToken, async (req, res) => {
+    try {
+        const { frase, categoria } = req.body;
+        if (!frase || !categoria) return res.status(400).json({ error: 'Faltam dados para ensinar a IA.' });
+
+        // Injetamos o novo conhecimento no cérebro
+        const resultadoAprendizagem = await PttAIEngine.ensinarNovaFrase(frase, categoria);
+
+        res.json({ success: true, mensagem: resultadoAprendizagem });
+    } catch (error) {
+        console.error("🚨 Erro ao ensinar a Ptt AI:", error);
+        res.status(500).json({ success: false, error: 'Erro ao treinar o cérebro.' });
     }
 });
 
