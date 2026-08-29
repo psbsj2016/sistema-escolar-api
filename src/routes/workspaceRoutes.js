@@ -1901,73 +1901,68 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🧙‍♂️ O CÉREBRO DO MAGO IA (DUELO DE MENTES COM GOOGLE GEMINI)
+// 🧙‍♂️ O CÉREBRO DO MAGO IA (IA NATIVA / MÁQUINA DE DEBATE PRÁTICA)
 // ============================================================================
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+// Já não precisamos de bibliotecas externas nem chaves de API!
 
 router.post('/ingles/debate', verificarToken, async (req, res) => {
     try {
         const { topico, historico } = req.body;
         
-        // 1. Verificamos se o servidor tem a Chave Mágica do Google
-        if (!process.env.GEMINI_API_KEY) {
-            console.error("Falta a chave GEMINI_API_KEY no ficheiro .env");
-            return res.status(500).json({ success: false, error: 'Chave da API do Gemini não configurada.' });
+        // 1. Extraímos a última mensagem enviada pelo aluno e quantos turnos já passaram
+        const ultimaMensagem = historico[historico.length - 1];
+        const mensagemDoAluno = ultimaMensagem.text.toLowerCase();
+        const totalTurnos = historico.length;
+
+        // Limpamos o tópico para parecer mais natural nas frases
+        const topicoLimpo = topico.replace(/[^a-zA-Z0-9 ]/g, '').toLowerCase();
+
+        // 2. A NOSSA ÁRVORE DE INTELIGÊNCIA (HEURÍSTICA)
+        let respostaGerada = "";
+
+        // Simulamos um pequeno tempo de "pensamento" (1 segundo) para parecer mais real
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Regra A: O aluno fez uma pergunta? (why, how, what)
+        if (mensagemDoAluno.includes("why") || mensagemDoAluno.includes("how") || mensagemDoAluno.includes("what")) {
+            respostaGerada = `You ask a very interesting question about ${topicoLimpo}. The reality is quite complex, but it usually depends on our perspective. How would you answer your own question?`;
+        } 
+        // Regra B: O aluno concordou? (agree, yes, true, absolutely)
+        else if (mensagemDoAluno.includes("agree") || mensagemDoAluno.includes("yes") || Math.abs(mensagemDoAluno.indexOf("true")) !== -1) {
+            respostaGerada = `I'm glad we agree on that point! But let's play devil's advocate: what if we consider the negative impacts of ${topicoLimpo}?`;
+        } 
+        // Regra C: O aluno discordou? (disagree, no, false, don't, disagree)
+        else if (mensagemDoAluno.includes("disagree") || Math.abs(mensagemDoAluno.indexOf(" no ")) !== -1 || mensagemDoAluno.includes("don't")) {
+            respostaGerada = `I understand your disagreement. However, some experts argue that ${topicoLimpo} has undeniable benefits. How would you counter that argument?`;
+        } 
+        // Regra D: O aluno deu uma justificação? (because, since)
+        else if (mensagemDoAluno.includes("because") || mensagemDoAluno.includes("since")) {
+            respostaGerada = `That is a strong argument! But is that reason enough to justify everything? Please, elaborate a bit more on that point.`;
+        } 
+        // Regra E: Respostas genéricas inteligentes para manter o debate vivo
+        else {
+            const respostasGenericas = [
+                `You make a fair point. But how does that apply to the broader context of ${topicoLimpo}?`,
+                `I hadn't thought of it exactly that way. Still, we must consider the long-term consequences. What's your take on that?`,
+                `That's one way to look at it. However, isn't it also true that this could lead to other different issues?`,
+                `Interesting perspective! Can you give me a real-world example to support your idea?`
+            ];
+            // Escolhe uma resposta aleatória da lista genérica
+            respostaGerada = respostasGenericas[Math.floor(Math.random() * respostasGenericas.length)];
         }
 
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-        // 2. A ENGENHARIA DE PROMPT OFICIAL
-        const instrucaoDoMestre = `You are 'Mago IA', an English teacher acting as a wise, slightly challenging wizard in a debate game with a student.
-The topic of our debate is: "${topico}".
-Your rules:
-1. Debate the student, challenge their ideas, and keep the conversation going.
-2. If the student makes a clear grammar or vocabulary mistake in English, gently correct them in your response.
-3. Keep your responses short (maximum 2 or 3 sentences).
-4. ALWAYS reply strictly in English.`;
-
-        // 3. Ligamos o Motor do Gemini (AGORA COM A TAG -latest INFALÍVEL)
-        const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash-latest", // <-- A CORREÇÃO ESTÁ AQUI
-            systemInstruction: instrucaoDoMestre 
-        });
-
-        // 4. Transformar o histórico de conversa
-        const formatacaoGemini = [];
-        const mensagensAnteriores = historico.slice(0, -1);
-        const ultimaMensagemDoAluno = historico[historico.length - 1].text;
-
-        mensagensAnteriores.forEach(msg => {
-            formatacaoGemini.push({
-                role: msg.role === 'ai' ? 'model' : 'user',
-                parts: [{ text: msg.text }]
-            });
-        });
-
-        // O Gemini recusa-se a aceitar um histórico onde a IA fala primeiro.
-        // Se a primeira mensagem for do Mago ('model'), injetamos uma "falsa" mensagem inicial do 'user'.
-        if (formatacaoGemini.length > 0 && formatacaoGemini[0].role === 'model') {
-            formatacaoGemini.unshift({
-                role: 'user',
-                parts: [{ text: `Let's start our debate about: "${topico}". You go first.` }]
-            });
+        // 3. Controlo de Duração do Debate
+        // Se a conversa já for muito longa (mais de 8 interações), o Mago tenta concluir o debate.
+        if (totalTurnos > 8) {
+            respostaGerada = "We've had a fantastic debate so far! You defended your ideas very well in English. Do you have any final thoughts to conclude?";
         }
 
-        // 5. Iniciamos a conversa com o histórico agora validado
-        const chat = model.startChat({
-            history: formatacaoGemini
-        });
-
-        // 6. Enviamos o argumento real do aluno
-        const resultado = await chat.sendMessage(ultimaMensagemDoAluno);
-        const respostaGerada = resultado.response.text();
-
-        // 7. Devolvemos a resposta limpa e sem erros
+        // 4. Devolvemos a resposta instantaneamente e sem falhas!
         res.json({ success: true, resposta: respostaGerada });
 
     } catch (error) {
-        console.error("🚨 Erro na magia do Mago IA (Gemini):", error);
-        res.status(500).json({ success: false, error: 'O Mago IA perdeu a ligação ao plano astral. Tente de novo!' });
+        console.error("🚨 Erro na IA Nativa:", error);
+        res.status(500).json({ success: false, error: 'O Mago IA teve uma falha de raciocínio. Tente de novo!' });
     }
 });
 
