@@ -1926,9 +1926,9 @@ Your rules:
 3. Keep your responses short (maximum 2 or 3 sentences).
 4. ALWAYS reply strictly in English.`;
 
-        // 3. Ligamos o Motor do Gemini
+        // 3. Ligamos o Motor do Gemini (AGORA COM A TAG -latest INFALÍVEL)
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
+            model: "gemini-1.5-flash-latest", // <-- A CORREÇÃO ESTÁ AQUI
             systemInstruction: instrucaoDoMestre 
         });
 
@@ -1944,7 +1944,6 @@ Your rules:
             });
         });
 
-        // 🚀 A CORREÇÃO MÁGICA ESTÁ AQUI!
         // O Gemini recusa-se a aceitar um histórico onde a IA fala primeiro.
         // Se a primeira mensagem for do Mago ('model'), injetamos uma "falsa" mensagem inicial do 'user'.
         if (formatacaoGemini.length > 0 && formatacaoGemini[0].role === 'model') {
