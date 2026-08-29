@@ -1901,68 +1901,80 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🧙‍♂️ O CÉREBRO DO MAGO IA (IA NATIVA / MÁQUINA DE DEBATE PRÁTICA)
+// 🧙‍♂️ SUPER MAGO IA (IA NATIVA AVANÇADA COM ANÁLISE HEURÍSTICA E REGEX)
 // ============================================================================
-// Já não precisamos de bibliotecas externas nem chaves de API!
 
 router.post('/ingles/debate', verificarToken, async (req, res) => {
     try {
         const { topico, historico } = req.body;
         
-        // 1. Extraímos a última mensagem enviada pelo aluno e quantos turnos já passaram
         const ultimaMensagem = historico[historico.length - 1];
-        const mensagemDoAluno = ultimaMensagem.text.toLowerCase();
+        const mensagemDoAluno = ultimaMensagem.text.trim();
+        const textoMinusculo = mensagemDoAluno.toLowerCase();
         const totalTurnos = historico.length;
+        const topicoLimpo = topico.replace(/[^a-zA-Z0-9 ]/g, '');
 
-        // Limpamos o tópico para parecer mais natural nas frases
-        const topicoLimpo = topico.replace(/[^a-zA-Z0-9 ]/g, '').toLowerCase();
-
-        // 2. A NOSSA ÁRVORE DE INTELIGÊNCIA (HEURÍSTICA)
         let respostaGerada = "";
+        let dicaGramatical = "";
 
-        // Simulamos um pequeno tempo de "pensamento" (1 segundo) para parecer mais real
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Simulamos o tempo de pensamento para realismo
+        await new Promise(resolve => setTimeout(resolve, 1200));
 
-        // Regra A: O aluno fez uma pergunta? (why, how, what)
-        if (mensagemDoAluno.includes("why") || mensagemDoAluno.includes("how") || mensagemDoAluno.includes("what")) {
-            respostaGerada = `You ask a very interesting question about ${topicoLimpo}. The reality is quite complex, but it usually depends on our perspective. How would you answer your own question?`;
+        // 🧠 CAMADA 1: SIMULADOR DE CORREÇÃO GRAMATICAL (RegEx)
+        // Expressões regulares procuram por padrões de erros clássicos de quem aprende inglês
+        if (/\b(he|she|it)\s+(dont|do)\b/i.test(textoMinusculo)) {
+            dicaGramatical = " 🧙‍♂️ Magic Tip: Remember to use 'doesn't' or 'does' with He, She, and It!";
+        } else if (/\bi\s+(is|has)\b/i.test(textoMinusculo)) {
+            dicaGramatical = " 🧙‍♂️ Magic Tip: With 'I', we always use 'am' or 'have'.";
+        } else if (/\b(more better|more good)\b/i.test(textoMinusculo)) {
+            dicaGramatical = " 🧙‍♂️ Magic Tip: We just say 'better', no need for 'more'!";
+        }
+
+        // 🧠 CAMADA 2: ANÁLISE DE ESFORÇO (O aluno escreveu pouco?)
+        const quantidadePalavras = mensagemDoAluno.split(/\s+/).length;
+        if (quantidadePalavras < 4) {
+            respostaGerada = `That's a very short answer! Come on, use your English skills. Tell me exactly WHY you think that about ${topicoLimpo}.`;
         } 
-        // Regra B: O aluno concordou? (agree, yes, true, absolutely)
-        else if (mensagemDoAluno.includes("agree") || mensagemDoAluno.includes("yes") || Math.abs(mensagemDoAluno.indexOf("true")) !== -1) {
-            respostaGerada = `I'm glad we agree on that point! But let's play devil's advocate: what if we consider the negative impacts of ${topicoLimpo}?`;
+        // 🧠 CAMADA 3: ANÁLISE DE INTENÇÃO (É uma pergunta?)
+        else if (/^(why|how|what|when|where|is|are|do|does|can|could|would)\b/i.test(textoMinusculo) || textoMinusculo.includes('?')) {
+            respostaGerada = `You are asking the right questions! However, in the context of ${topicoLimpo}, I want to hear YOUR perspective first. How would you answer that?`;
         } 
-        // Regra C: O aluno discordou? (disagree, no, false, don't, disagree)
-        else if (mensagemDoAluno.includes("disagree") || Math.abs(mensagemDoAluno.indexOf(" no ")) !== -1 || mensagemDoAluno.includes("don't")) {
-            respostaGerada = `I understand your disagreement. However, some experts argue that ${topicoLimpo} has undeniable benefits. How would you counter that argument?`;
+        // 🧠 CAMADA 4: CONCORDÂNCIA E DISCORDÂNCIA COM CONTEXTO
+        else if (/\b(agree|yes|absolutely|true|right)\b/.test(textoMinusculo)) {
+            respostaGerada = `I'm glad we are on the same page. But what if the opposite were true? How would society handle ${topicoLimpo} if we took away the main benefits you just mentioned?`;
         } 
-        // Regra D: O aluno deu uma justificação? (because, since)
-        else if (mensagemDoAluno.includes("because") || mensagemDoAluno.includes("since")) {
-            respostaGerada = `That is a strong argument! But is that reason enough to justify everything? Please, elaborate a bit more on that point.`;
+        else if (/\b(disagree|no|false|wrong|dont think so)\b/.test(textoMinusculo)) {
+            respostaGerada = `A strong counter-argument! You clearly disagree. But consider this: many experts believe ${topicoLimpo} brings hidden advantages. Can you think of at least one positive aspect?`;
         } 
-        // Regra E: Respostas genéricas inteligentes para manter o debate vivo
+        // 🧠 CAMADA 5: JUSTIFICATIVAS E EXEMPLOS
+        else if (/\b(because|since|for example|like)\b/.test(textoMinusculo)) {
+            respostaGerada = `Excellent point, applying reasons and examples makes your English sound very natural! But let's dig deeper: does that rule apply to everyone, everywhere?`;
+        } 
+        // 🧠 CAMADA 6: RESPOSTA DINÂMICA PADRÃO
         else {
-            const respostasGenericas = [
-                `You make a fair point. But how does that apply to the broader context of ${topicoLimpo}?`,
-                `I hadn't thought of it exactly that way. Still, we must consider the long-term consequences. What's your take on that?`,
-                `That's one way to look at it. However, isn't it also true that this could lead to other different issues?`,
-                `Interesting perspective! Can you give me a real-world example to support your idea?`
+            const respostasDinâmicas = [
+                `That is a fascinating way to look at ${topicoLimpo}. But let me challenge you: what is the biggest flaw in that line of thought?`,
+                `You express yourself very well. Still, regarding ${topicoLimpo}, don't you think technology or culture will change that perspective in 10 years?`,
+                `I see your point. To keep our debate moving, what would you say to someone who completely disagrees with what you just wrote?`
             ];
-            // Escolhe uma resposta aleatória da lista genérica
-            respostaGerada = respostasGenericas[Math.floor(Math.random() * respostasGenericas.length)];
+            respostaGerada = respostasDinâmicas[Math.floor(Math.random() * respostasDinâmicas.length)];
         }
 
-        // 3. Controlo de Duração do Debate
-        // Se a conversa já for muito longa (mais de 8 interações), o Mago tenta concluir o debate.
-        if (totalTurnos > 8) {
-            respostaGerada = "We've had a fantastic debate so far! You defended your ideas very well in English. Do you have any final thoughts to conclude?";
+        // 🧠 CAMADA 7: GESTÃO DO FIM DO DEBATE
+        if (totalTurnos > 8 && totalTurnos < 11) {
+            respostaGerada = `We have explored ${topicoLimpo} thoroughly! Your English argumentation is getting stronger. Please, give me your final concluding statement on this matter.`;
+        } else if (totalTurnos >= 11) {
+            respostaGerada = `Debate successfully concluded! 🌟 You did an amazing job defending your thoughts. Feel free to close this training and collect your Bronze Coins!`;
         }
 
-        // 4. Devolvemos a resposta instantaneamente e sem falhas!
-        res.json({ success: true, resposta: respostaGerada });
+        // Juntamos a resposta inteligente com a dica gramatical (se o aluno tiver cometido algum erro rastreado)
+        const respostaFinal = respostaGerada + dicaGramatical;
+
+        res.json({ success: true, resposta: respostaFinal });
 
     } catch (error) {
-        console.error("🚨 Erro na IA Nativa:", error);
-        res.status(500).json({ success: false, error: 'O Mago IA teve uma falha de raciocínio. Tente de novo!' });
+        console.error("🚨 Erro na Super IA Nativa:", error);
+        res.status(500).json({ success: false, error: 'O Mago IA está focado noutro feitiço. Tente novamente!' });
     }
 });
 
