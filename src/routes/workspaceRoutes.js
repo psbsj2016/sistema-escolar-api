@@ -2051,7 +2051,7 @@ router.post('/ingles/ia-teste/ensinar-correcao', verificarToken, async (req, res
 const Groq = require('groq-sdk');
 // NOTA: Para funcionar na vida real, precisará de colocar a sua chave na variável GROQ_API_KEY no Render.
 // Mas para este código não quebrar se não tiver chave, colocámos um fallback vazio.
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || 'COLOQUE_A_SUA_CHAVE_AQUI_DEPOIS' });
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
     try {
