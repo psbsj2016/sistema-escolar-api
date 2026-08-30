@@ -2044,4 +2044,51 @@ router.post('/ingles/ia-teste/ensinar-correcao', verificarToken, async (req, res
     }
 });
 
+// ============================================================================
+// 🚀 ROTA DA IA GERATIVA PREMIUM (GROQ) - LABORATÓRIO DE TESTES
+// ============================================================================
+// Importa e liga o motor Groq
+const Groq = require('groq-sdk');
+// NOTA: Para funcionar na vida real, precisará de colocar a sua chave na variável GROQ_API_KEY no Render.
+// Mas para este código não quebrar se não tiver chave, colocámos um fallback vazio.
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || 'COLOQUE_A_SUA_CHAVE_AQUI_DEPOIS' });
+
+router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
+    try {
+        const { mensagem } = req.body;
+        if (!mensagem) return res.status(400).json({ error: 'Mensagem vazia.' });
+
+        // 🧠 O SYSTEM PROMPT (A alma do professor de inglês)
+        // Aqui dizemos à IA EXATAMENTE como ela se deve comportar!
+        const INSTRUCOES_PROFESSOR = `
+            You are 'Ptt AI', an expert, friendly, and highly motivating English teacher.
+            Follow these rules strictly:
+            1. Maintain a positive, didactic, and helpful tone.
+            2. If the student makes a grammatical or spelling mistake, kindly correct them first, explain the rule briefly, and then answer their message.
+            3. Do not answer questions outside the scope of English learning. If asked about other subjects, politely redirect the conversation back to English practice.
+            4. Keep your answers relatively short (max 3-4 sentences) so the student is not overwhelmed.
+            5. Always end by asking a question to keep the conversation flowing.
+        `;
+
+        // O Groq processa a magia em milissegundos
+        const respostaGroq = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: INSTRUCOES_PROFESSOR }, // Regras do Jogo
+                { role: 'user', content: mensagem }                // O que o aluno digitou
+            ],
+            model: 'llama3-8b-8192', // Modelo Llama 3 gratuito e ultrarrápido
+            temperature: 0.7,        // Criatividade (0.0 a 1.0)
+        });
+
+        // Extraímos o texto gerado
+        const textoGerado = respostaGroq.choices[0]?.message?.content || 'A IA ficou sem palavras.';
+
+        res.json({ success: true, resposta: textoGerado });
+
+    } catch (error) {
+        console.error("🚨 Erro no Motor Groq:", error);
+        res.status(500).json({ success: false, error: 'O motor Groq falhou. Tem a certeza que configurou a GROQ_API_KEY?' });
+    }
+});
+
 module.exports = router;
