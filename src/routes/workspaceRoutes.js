@@ -2077,14 +2077,15 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
             5. Always end by asking a question to keep the conversation flowing.
         `;
 
-        // 5. PROCESSAMENTO NA NUVEM
+       // 5. PROCESSAMENTO NA NUVEM
         const respostaGroq = await groq.chat.completions.create({
             messages: [
                 { role: 'system', content: INSTRUCOES_PROFESSOR },
                 { role: 'user', content: mensagem }
             ],
-            model: 'llama3-8b-8192',
-            temperature: 0.7,
+            // 🚀 CORREÇÃO: Usamos agora o modelo atualizado e ativo do Groq!
+            model: 'llama-3.1-8b-instant', 
+            temperature: 0.7, // Criatividade equilibrada
         });
 
         const textoGerado = respostaGroq.choices[0]?.message?.content || 'A IA ficou sem palavras.';
