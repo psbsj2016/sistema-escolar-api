@@ -2045,21 +2045,28 @@ router.post('/ingles/ia-teste/ensinar-correcao', verificarToken, async (req, res
 });
 
 // ============================================================================
-// 🚀 ROTA DA IA GERATIVA PREMIUM (GROQ) - LABORATÓRIO DE TESTES
+// 🚀 ROTA DA IA GERATIVA PREMIUM (GROQ) - CARREGAMENTO DINÂMICO
 // ============================================================================
-// Importa e liga o motor Groq
-const Groq = require('groq-sdk');
-// NOTA: Para funcionar na vida real, precisará de colocar a sua chave na variável GROQ_API_KEY no Render.
-// Mas para este código não quebrar se não tiver chave, colocámos um fallback vazio.
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
 router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
     try {
         const { mensagem } = req.body;
         if (!mensagem) return res.status(400).json({ error: 'Mensagem vazia.' });
 
-        // 🧠 O SYSTEM PROMPT (A alma do professor de inglês)
-        // Aqui dizemos à IA EXATAMENTE como ela se deve comportar!
+        // 1. CARREGAMENTO DINÂMICO (Lazy Loading)
+        // Chamamos a biblioteca e a chave APENAS no momento em que a rota é usada.
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+
+        // 2. VERIFICAÇÃO DE SEGURANÇA
+        if (!chaveApi) {
+            console.error("🚨 ERRO: A chave GROQ_API_KEY não foi encontrada no servidor!");
+            return res.status(500).json({ success: false, error: 'A chave API não está configurada no servidor (.env ou Render).' });
+        }
+
+        // 3. INICIA O MOTOR COM A CHAVE SEGURA
+        const groq = new Groq({ apiKey: chaveApi.trim() }); // .trim() remove espaços invisíveis por acidente!
+
+        // 4. O SYSTEM PROMPT (A alma do professor)
         const INSTRUCOES_PROFESSOR = `
             You are 'Ptt AI', an expert, friendly, and highly motivating English teacher.
             Follow these rules strictly:
@@ -2070,24 +2077,23 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
             5. Always end by asking a question to keep the conversation flowing.
         `;
 
-        // O Groq processa a magia em milissegundos
+        // 5. PROCESSAMENTO NA NUVEM
         const respostaGroq = await groq.chat.completions.create({
             messages: [
-                { role: 'system', content: INSTRUCOES_PROFESSOR }, // Regras do Jogo
-                { role: 'user', content: mensagem }                // O que o aluno digitou
+                { role: 'system', content: INSTRUCOES_PROFESSOR },
+                { role: 'user', content: mensagem }
             ],
-            model: 'llama3-8b-8192', // Modelo Llama 3 gratuito e ultrarrápido
-            temperature: 0.7,        // Criatividade (0.0 a 1.0)
+            model: 'llama3-8b-8192',
+            temperature: 0.7,
         });
 
-        // Extraímos o texto gerado
         const textoGerado = respostaGroq.choices[0]?.message?.content || 'A IA ficou sem palavras.';
-
         res.json({ success: true, resposta: textoGerado });
 
     } catch (error) {
+        // Se a Nuvem do Groq falhar, escrevemos o erro exato na consola do servidor!
         console.error("🚨 Erro no Motor Groq:", error);
-        res.status(500).json({ success: false, error: 'O motor Groq falhou. Tem a certeza que configurou a GROQ_API_KEY?' });
+        res.status(500).json({ success: false, error: 'Falha de comunicação com a Nuvem da Inteligência Artificial.' });
     }
 });
 
