@@ -2028,4 +2028,20 @@ router.post('/ingles/ia-teste/ensinar', verificarToken, async (req, res) => {
     }
 });
 
+// 3. Rota para o Professor (O Paulo) ensinar CORREÇÕES ORTOGRÁFICAS
+router.post('/ingles/ia-teste/ensinar-correcao', verificarToken, async (req, res) => {
+    try {
+        const { erro, certo } = req.body;
+        if (!erro || !certo) return res.status(400).json({ error: 'Faltam dados para ensinar a correção.' });
+
+        // A IA guarda a regra ortográfica
+        const resultadoAprendizagem = await PttAIEngine.ensinarCorrecao(erro, certo);
+
+        res.json({ success: true, mensagem: resultadoAprendizagem });
+    } catch (error) {
+        console.error("🚨 Erro ao ensinar correção:", error);
+        res.status(500).json({ success: false, error: 'Erro ao treinar o olheiro ortográfico.' });
+    }
+});
+
 module.exports = router;
