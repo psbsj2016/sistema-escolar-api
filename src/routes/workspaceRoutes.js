@@ -2015,11 +2015,11 @@ router.post('/ingles/ia-teste/falar', verificarToken, async (req, res) => {
 // 2. Rota para o Professor (O Paulo) ensinar coisas novas à Ptt AI!
 router.post('/ingles/ia-teste/ensinar', verificarToken, async (req, res) => {
     try {
-        const { frase, categoria } = req.body;
-        if (!frase || !categoria) return res.status(400).json({ error: 'Faltam dados para ensinar a IA.' });
+        const { frase, categoria, resposta } = req.body;
+        if (!frase || !categoria) return res.status(400).json({ error: 'Faltam dados principais para ensinar a IA.' });
 
-        // Injetamos o novo conhecimento no cérebro
-        const resultadoAprendizagem = await PttAIEngine.ensinarNovaFrase(frase, categoria);
+        // Agora a IA recebe a frase, a categoria, e a resposta que deve dar!
+        const resultadoAprendizagem = await PttAIEngine.ensinarNovaFrase(frase, categoria, resposta);
 
         res.json({ success: true, mensagem: resultadoAprendizagem });
     } catch (error) {
