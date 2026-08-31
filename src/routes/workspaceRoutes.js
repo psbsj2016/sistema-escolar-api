@@ -2104,4 +2104,58 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🎮 ROTA GENERICA DE AVALIAÇÃO DOS JOGOS COM IA
+// ============================================================================
+router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
+    try {
+        const { jogo, palavra, fraseAluno, cenario, pergunta, respostaAluno, historico = [] } = req.body;
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+
+        let systemPrompt = "";
+        let userPrompt = "";
+
+        if (jogo === 'wordSpark') {
+            systemPrompt = `You are Ptt AI, a friendly English teacher. The student must use the word "${palavra}".
+            Evaluate the sentence: "${fraseAluno}"
+            Return ONLY valid JSON: {"correto": boolean, "feedback": "feedback curto em PT-BR explicando erro ou elogiando", "correcao": "versão corrigida da frase se houver erro, senão a mesma frase", "coins": 50 if correto else 0}`;
+            userPrompt = fraseAluno;
+        }
+        
+        if (jogo === 'answerQuest') {
+            systemPrompt = `You are Ptt AI. Question: "${pergunta}". Student answer: "${respostaAluno}".
+            Check if answer makes sense and is in English. Correct grammar briefly if needed.
+            Return ONLY JSON: {"correto": boolean (true if understandable), "feedback": "feedback em PT-BR", "correcao": "versão melhorada da resposta", "coins": 50 or 0}`;
+            userPrompt = respostaAluno;
+        }
+
+        if (jogo === 'contextRole') {
+            systemPrompt = `You are an actor in a roleplay. Scenario: Title "${cenario?.title}" - Situation "${cenario?.prompt}" - Tip "${cenario?.tip}".
+            History: ${JSON.stringify(historico.slice(-4))}
+            Student said: "${respostaAluno}"
+            Tasks: 1. If student made English mistake, correct it very briefly in brackets [Correction: ...]. 2. Continue the roleplay as the character, in English, max 2 sentences. 3. Ask a question to keep it going.
+            Return ONLY JSON: {"correcao": "correction or null", "npcResponse": "your next line as character", "feedback": "short PT-BR encouragement", "correto": true}`;
+            userPrompt = respostaAluno;
+        }
+
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+            ],
+            model: 'openai/gpt-oss-20b',
+            temperature: 0.6,
+            response_format: { type: 'json_object' }
+        });
+
+        const resultado = JSON.parse(completion.choices[0].message.content);
+        res.json({ success: true, ...resultado });
+
+    } catch (e) {
+        console.error("Erro jogo IA:", e);
+        res.status(500).json({ success: false, error: 'Falha na IA do jogo' });
+    }
+});
+
 module.exports = router;
