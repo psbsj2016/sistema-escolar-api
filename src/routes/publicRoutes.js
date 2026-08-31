@@ -17,6 +17,16 @@ webpush.setVapidDetails(
 );
 
 // ============================================================================
+// 🖍️ ROTA OFICIAL DA LOUSA DIGITAL
+// ============================================================================
+const path = require('path');
+
+router.get('/lousa', (req, res) => {
+    // Entrega o ficheiro de forma segura, evitando o redirecionamento 404
+    res.sendFile(path.join(__dirname, '../public/lousa.html')); 
+});
+
+// ============================================================================
 // 📄 FUNÇÕES GERADORAS DE PDF (VIA API EXTERNA - API2PDF)
 // ============================================================================
 
