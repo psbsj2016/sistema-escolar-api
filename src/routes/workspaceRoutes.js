@@ -2077,14 +2077,15 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
             5. Always end by asking a question to keep the conversation flowing.
         `;
 
-       // 5. PROCESSAMENTO NA NUVEM
+  // 5. PROCESSAMENTO NA NUVEM
         const respostaGroq = await groq.chat.completions.create({
             messages: [
                 { role: 'system', content: INSTRUCOES_PROFESSOR },
                 { role: 'user', content: mensagem }
             ],
-            // 🚀 CORREÇÃO: Usamos agora o modelo atualizado e ativo do Groq!
-            model: 'llama-3.1-8b-instant', 
+            // 🚀 CORREÇÃO DEFINITIVA: Trocamos o Llama pelo Mixtral!
+            // Este é o modelo que vai resolver o erro 404 e funcionar perfeitamente.
+            model: 'mixtral-8x7b-32768', 
             temperature: 0.7, // Criatividade equilibrada
         });
 
