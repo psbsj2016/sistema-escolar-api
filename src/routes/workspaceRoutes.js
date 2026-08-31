@@ -2045,28 +2045,28 @@ router.post('/ingles/ia-teste/ensinar-correcao', verificarToken, async (req, res
 });
 
 // ============================================================================
-// 🚀 ROTA DA IA GERATIVA PREMIUM (GROQ) - CARREGAMENTO DINÂMICO
+// 🚀 ROTA DA IA GERATIVA PREMIUM (GROQ) - COM MEMÓRIA ATIVADA
 // ============================================================================
 router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
     try {
-        const { mensagem } = req.body;
+        // 1. CAPTURA DE DADOS: Agora recebemos a 'mensagem' e o 'historico'.
+        // Se for a primeira mensagem, o historico será um array vazio [].
+        const { mensagem, historico = [] } = req.body;
+        
         if (!mensagem) return res.status(400).json({ error: 'Mensagem vazia.' });
 
-        // 1. CARREGAMENTO DINÂMICO (Lazy Loading)
-        // Chamamos a biblioteca e a chave APENAS no momento em que a rota é usada.
+        // 2. CARREGAMENTO DINÂMICO E SEGURANÇA
         const Groq = require('groq-sdk');
         const chaveApi = process.env.GROQ_API_KEY;
 
-        // 2. VERIFICAÇÃO DE SEGURANÇA
         if (!chaveApi) {
             console.error("🚨 ERRO: A chave GROQ_API_KEY não foi encontrada no servidor!");
             return res.status(500).json({ success: false, error: 'A chave API não está configurada no servidor (.env ou Render).' });
         }
 
-        // 3. INICIA O MOTOR COM A CHAVE SEGURA
-        const groq = new Groq({ apiKey: chaveApi.trim() }); // .trim() remove espaços invisíveis por acidente!
+        const groq = new Groq({ apiKey: chaveApi.trim() });
 
-        // 4. O SYSTEM PROMPT (A alma do professor)
+        // 3. SYSTEM PROMPT (A alma do professor)
         const INSTRUCOES_PROFESSOR = `
             You are 'Ptt AI', an expert, friendly, and highly motivating English teacher.
             Follow these rules strictly:
@@ -2077,22 +2077,28 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
             5. Always end by asking a question to keep the conversation flowing.
         `;
 
-       // 5. PROCESSAMENTO NA NUVEM
+        // 4. A FUSÃO DA MEMÓRIA 🧠
+        // Construímos a ordem cronológica perfeita para a IA ler:
+        const mensagensParaNuvem = [
+            { role: 'system', content: INSTRUCOES_PROFESSOR }, // Regras primeiro
+            ...historico,                                      // Espalha as mensagens anteriores aqui (Memória)
+            { role: 'user', content: mensagem }                // Adiciona a nova mensagem no fim
+        ];
+
+        // 5. PROCESSAMENTO NA NUVEM
         const respostaGroq = await groq.chat.completions.create({
-            messages: [
-                { role: 'system', content: INSTRUCOES_PROFESSOR },
-                { role: 'user', content: mensagem }
-            ],
-            // 🚀 CORREÇÃO: Usamos agora o modelo atualizado e ativo do Groq!
+            messages: mensagensParaNuvem, // Passamos o pacote completo (Regras + Memória + Nova Mensagem)
+            
+            // Usando o modelo escolhido e funcional
             model: 'openai/gpt-oss-120b', 
-            temperature: 0.7, // Criatividade equilibrada
+            temperature: 0.7,
         });
 
+        // 6. DEVOLUÇÃO
         const textoGerado = respostaGroq.choices[0]?.message?.content || 'A IA ficou sem palavras.';
         res.json({ success: true, resposta: textoGerado });
 
     } catch (error) {
-        // Se a Nuvem do Groq falhar, escrevemos o erro exato na consola do servidor!
         console.error("🚨 Erro no Motor Groq:", error);
         res.status(500).json({ success: false, error: 'Falha de comunicação com a Nuvem da Inteligência Artificial.' });
     }
