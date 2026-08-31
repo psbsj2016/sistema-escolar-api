@@ -2045,57 +2045,55 @@ router.post('/ingles/ia-teste/ensinar-correcao', verificarToken, async (req, res
 });
 
 // ============================================================================
-// 🚀 ROTA DA IA GERATIVA PREMIUM (GROQ) - CARREGAMENTO DINÂMICO
+// 🚀 ROTA DA IA PREMIUM (GROQ) - ATUALIZADA 2026
 // ============================================================================
 router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
     try {
-        const { mensagem } = req.body;
+        const { mensagem, historico } = req.body; // adicionei historico opcional
         if (!mensagem) return res.status(400).json({ error: 'Mensagem vazia.' });
 
-        // 1. CARREGAMENTO DINÂMICO (Lazy Loading)
-        // Chamamos a biblioteca e a chave APENAS no momento em que a rota é usada.
         const Groq = require('groq-sdk');
         const chaveApi = process.env.GROQ_API_KEY;
 
-        // 2. VERIFICAÇÃO DE SEGURANÇA
         if (!chaveApi) {
-            console.error("🚨 ERRO: A chave GROQ_API_KEY não foi encontrada no servidor!");
-            return res.status(500).json({ success: false, error: 'A chave API não está configurada no servidor (.env ou Render).' });
+            console.error("🚨 ERRO: GROQ_API_KEY não encontrada!");
+            return res.status(500).json({ success: false, error: 'Chave API não configurada no Render.' });
         }
 
-        // 3. INICIA O MOTOR COM A CHAVE SEGURA
-        const groq = new Groq({ apiKey: chaveApi.trim() }); // .trim() remove espaços invisíveis por acidente!
+        const groq = new Groq({ apiKey: chaveApi.trim() });
 
-        // 4. O SYSTEM PROMPT (A alma do professor)
         const INSTRUCOES_PROFESSOR = `
-            You are 'Ptt AI', an expert, friendly, and highly motivating English teacher.
+            You are 'Ptt AI', an expert, friendly, and highly motivating English teacher for PTT WorkSpace.
             Follow these rules strictly:
             1. Maintain a positive, didactic, and helpful tone.
-            2. If the student makes a grammatical or spelling mistake, kindly correct them first, explain the rule briefly, and then answer their message.
-            3. Do not answer questions outside the scope of English learning. If asked about other subjects, politely redirect the conversation back to English practice.
-            4. Keep your answers relatively short (max 3-4 sentences) so the student is not overwhelmed.
+            2. If the student makes a grammatical or spelling mistake, kindly correct them first, explain the rule briefly, and then answer.
+            3. Do not answer questions outside the scope of English learning. Politely redirect.
+            4. Keep your answers relatively short (max 3-4 sentences).
             5. Always end by asking a question to keep the conversation flowing.
         `;
 
-  // 5. PROCESSAMENTO NA NUVEM
         const respostaGroq = await groq.chat.completions.create({
             messages: [
                 { role: 'system', content: INSTRUCOES_PROFESSOR },
+               ...(historico || []), // se você mandar histórico do front, ele usa
                 { role: 'user', content: mensagem }
             ],
-            // 🚀 CORREÇÃO DEFINITIVA: Trocamos o Llama pelo Mixtral!
-            // Este é o modelo que vai resolver o erro 404 e funcionar perfeitamente.
-            model: 'mixtral-8x7b-32768', 
-            temperature: 0.7, // Criatividade equilibrada
+            model: 'openai/gpt-oss-20b', // MODELO ATUAL E ATIVO
+            temperature: 0.7,
+            max_tokens: 500,
         });
 
         const textoGerado = respostaGroq.choices[0]?.message?.content || 'A IA ficou sem palavras.';
         res.json({ success: true, resposta: textoGerado });
 
     } catch (error) {
-        // Se a Nuvem do Groq falhar, escrevemos o erro exato na consola do servidor!
-        console.error("🚨 Erro no Motor Groq:", error);
-        res.status(500).json({ success: false, error: 'Falha de comunicação com a Nuvem da Inteligência Artificial.' });
+        console.error("🚨 Erro no Motor Groq:", error.error || error.message);
+        // Retorna o erro real da Groq pra você debugar no front
+        res.status(500).json({
+            success: false,
+            error: error.error?.error?.message || 'Falha de comunicação com a Groq.',
+            code: error.error?.error?.code
+        });
     }
 });
 
