@@ -2173,4 +2173,42 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🖍️ ROTAS DO ESTADO DA LOUSA DIGITAL EM TEMPO REAL
+// ============================================================================
+
+// Professor liga/desliga a Lousa
+router.put('/sala/lousa/status', verificarToken, async (req, res) => {
+    try {
+        const { turmaId, ativa, recursos } = req.body;
+        const database = await connectDB();
+        
+        // Atualiza a turma na base de dados com o novo estado da lousa
+        await database.collection('turmas').updateOne(
+            { id: turmaId },
+            { $set: { lousaAtiva: ativa, lousaRecursos: recursos } }
+        );
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: 'Erro ao sincronizar lousa.' });
+    }
+});
+
+// Aluno "escuta" o estado da Lousa
+router.get('/sala/lousa/status/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const turma = await database.collection('turmas').findOne({ id: req.params.turmaId });
+        
+        // Devolve o estado exato da turma pesquisada
+        res.json({ 
+            success: true, 
+            ativa: turma ? !!turma.lousaAtiva : false, 
+            recursos: turma ? !!turma.lousaRecursos : false 
+        });
+    } catch (e) {
+        res.status(500).json({ success: false });
+    }
+});
+
 module.exports = router;
