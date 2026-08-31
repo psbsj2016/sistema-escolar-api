@@ -2105,13 +2105,17 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🎮 ROTA GENERICA DE AVALIAÇÃO DOS JOGOS COM IA
+// 🎮 ROTA GENÉRICA DE AVALIAÇÃO DOS JOGOS COM IA
 // ============================================================================
 router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
     try {
         const { jogo, palavra, fraseAluno, cenario, pergunta, respostaAluno, historico = [] } = req.body;
         const Groq = require('groq-sdk');
-        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+        const chaveApi = process.env.GROQ_API_KEY;
+        
+        if (!chaveApi) return res.status(500).json({ success: false, error: 'Chave API em falta' });
+        
+        const groq = new Groq({ apiKey: chaveApi.trim() });
 
         let systemPrompt = "";
         let userPrompt = "";
@@ -2119,18 +2123,19 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
         if (jogo === 'wordSpark') {
             systemPrompt = `You are Ptt AI, a friendly English teacher. The student must use the word "${palavra}".
             Evaluate the sentence: "${fraseAluno}"
-            Return ONLY valid JSON: {"correto": boolean, "feedback": "feedback curto em PT-BR explicando erro ou elogiando", "correcao": "versão corrigida da frase se houver erro, senão a mesma frase", "coins": 50 if correto else 0}`;
+            Return ONLY valid JSON: {"correto": boolean, "feedback": "feedback curto em PT-BR explicando erro ou elogiando", "correcao": "versão corrigida da frase se houver erro, senão a mesma frase", "coins": 50}`;
             userPrompt = fraseAluno;
         }
         
         if (jogo === 'answerQuest') {
             systemPrompt = `You are Ptt AI. Question: "${pergunta}". Student answer: "${respostaAluno}".
             Check if answer makes sense and is in English. Correct grammar briefly if needed.
-            Return ONLY JSON: {"correto": boolean (true if understandable), "feedback": "feedback em PT-BR", "correcao": "versão melhorada da resposta", "coins": 50 or 0}`;
+            Return ONLY JSON: {"correto": boolean, "feedback": "feedback em PT-BR", "correcao": "versão melhorada da resposta", "coins": 50}`;
             userPrompt = respostaAluno;
         }
 
         if (jogo === 'contextRole') {
+            // No Roleplay, mandamos a IA ser o NPC e focar-se na imersão!
             systemPrompt = `You are an actor in a roleplay. Scenario: Title "${cenario?.title}" - Situation "${cenario?.prompt}" - Tip "${cenario?.tip}".
             History: ${JSON.stringify(historico.slice(-4))}
             Student said: "${respostaAluno}"
@@ -2144,12 +2149,22 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
             ],
-            model: 'openai/gpt-oss-20b',
+            // Usamos o modelo garantido da Meta, super rápido e não falha.
+            model: 'llama-3.3-70b-versatile',
             temperature: 0.6,
-            response_format: { type: 'json_object' }
+            response_format: { type: 'json_object' } // Força a saída a ser um JSON limpo
         });
 
-        const resultado = JSON.parse(completion.choices[0].message.content);
+        // 🧠 Proteção Extra: Lida com respostas mal formatadas da IA
+        let resultadoTexto = completion.choices[0].message.content;
+        let resultado;
+        try {
+            resultado = JSON.parse(resultadoTexto);
+        } catch(parseErr) {
+            console.error("Erro ao fazer parse do JSON da IA:", resultadoTexto);
+            resultado = { correto: false, feedback: "Houve um desvio mágico.", correcao: "Por favor, tente novamente." };
+        }
+
         res.json({ success: true, ...resultado });
 
     } catch (e) {
