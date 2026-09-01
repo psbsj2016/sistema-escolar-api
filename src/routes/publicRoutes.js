@@ -21,7 +21,7 @@ webpush.setVapidDetails(
 // ============================================================================
 const path = require('path');
 
-router.get('/workspace-lousa', (req, res) => {
+router.get('/workspace-lousa.html', (req, res) => {
     // Entrega o ficheiro de forma segura, evitando o redirecionamento 404
     res.sendFile(path.join(__dirname, '../frontend/workspace-lousa.html')); 
 });
