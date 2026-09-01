@@ -2178,7 +2178,7 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
 // ============================================================================
 
 // Professor liga/desliga a Lousa
-router.put('/sala/lousa/status', verificarToken, async (req, res) => {
+router.put('/sala/workspace.lousa/status', verificarToken, async (req, res) => {
     try {
         const { turmaId, ativa, recursos } = req.body;
         const database = await connectDB();
@@ -2195,7 +2195,7 @@ router.put('/sala/lousa/status', verificarToken, async (req, res) => {
 });
 
 // Aluno "escuta" o estado da Lousa
-router.get('/sala/lousa/status/:turmaId', verificarToken, async (req, res) => {
+router.get('/sala/workspace.lousa/status/:turmaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
         const turma = await database.collection('turmas').findOne({ id: req.params.turmaId });
@@ -2214,7 +2214,7 @@ router.get('/sala/lousa/status/:turmaId', verificarToken, async (req, res) => {
 // ============================================================================
 // 🚀 ALUNO AVISA O PROFESSOR QUE ESTÁ NA SALA DE ESPERA DA LOUSA
 // ============================================================================
-router.post('/sala/lousa/aguardando', verificarToken, async (req, res) => {
+router.post('/sala/workspace.lousa/aguardando', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const aluno = await db.collection('usuarios').findOne({ id: req.body.usuarioId });
