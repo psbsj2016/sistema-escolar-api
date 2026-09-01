@@ -2211,4 +2211,58 @@ router.get('/sala/lousa/status/:turmaId', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🚀 ALUNO AVISA O PROFESSOR QUE ESTÁ NA SALA DE ESPERA DA LOUSA
+// ============================================================================
+router.post('/sala/lousa/aguardando', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const aluno = await db.collection('usuarios').findOne({ id: req.body.usuarioId });
+        if (!aluno) return res.status(404).json({ error: 'Usuário não encontrado' });
+
+        const escolaId = aluno.escolaId || 'DEFAULT';
+        const turmaId = aluno.turma || (aluno.turmas && aluno.turmas[0]) || 'global';
+        const nomeAluno = aluno.nome || aluno.login;
+
+        // Procura todos os Professores e Gestores da mesma escola
+        const professores = await db.collection('usuarios').find({ 
+            escolaId: escolaId, 
+            tipo: { $in: ['Professor', 'Gestor'] } 
+        }).toArray();
+        
+        if (professores.length > 0) {
+            const nomesDestinatarios = professores.map(p => p.nome || p.login).filter(Boolean);
+            
+            // Cria os bilhetes de notificação para cada professor
+            const notificacoesArray = nomesDestinatarios.map(nome => ({
+                id: crypto.randomUUID(),
+                escolaId: escolaId,
+                destinatarioNome: nome,
+                remetenteNome: nomeAluno,
+                mensagem: `está aguardando a abertura da Lousa Digital! 🖍️`,
+                origem: 'lousa_espera', // 🚀 Gatilho Mágico de Teletransporte
+                origemId: turmaId,
+                destinoNome: 'Sala de Aula',
+                lida: false,
+                data: new Date().toISOString()
+            }));
+
+            await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+
+            // Dispara o alerta em tempo real para os ecrãs dos professores
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'NOVA_NOTIFICACAO',
+                    destinatarios: nomesDestinatarios,
+                    escolaId: escolaId
+                });
+            }
+        }
+        res.json({ success: true });
+    } catch (e) {
+        console.error("Erro ao notificar espera da lousa:", e);
+        res.status(500).json({ error: 'Erro ao notificar professor.' });
+    }
+});
+
 module.exports = router;
