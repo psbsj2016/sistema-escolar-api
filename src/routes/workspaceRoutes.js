@@ -2178,7 +2178,8 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
 // 🚀 LOUSA DIGITAL - ROTAS v2 - Corrige bug de turma específica vs nome
 // ============================================================================
 
-// Professor liga/desliga a Lousa
+
+// Ao encerrar, limpa os dados da lousa também
 router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
     try {
         const { turmaId, ativa, recursos, escolaId } = req.body;
@@ -2188,89 +2189,39 @@ router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
         const idLimpo = String(turmaId).trim();
         const escolaFinal = escolaId || req.query.escolaId || req.body.escolaId || req.usuario?.escolaId || 'DEFAULT';
         
-        // Busca a turma para pegar nome também
         let turmaDoc = null;
-        try {
-            turmaDoc = await database.collection('turmas').findOne({ 
-                $or: [{ id: idLimpo }, { nome: idLimpo }, { _id: idLimpo }] 
-            });
-        } catch(e){}
-
+        try { turmaDoc = await database.collection('turmas').findOne({ $or: [{ id: idLimpo }, { nome: idLimpo }] }); } catch(e){}
         const nomeTurma = turmaDoc?.nome || null;
 
-        // Salva status para ID
         await database.collection('workspace_lousa_status').updateOne(
             { id: idLimpo },
-            { 
-                $set: { 
-                    id: idLimpo,
-                    nome: nomeTurma,
-                    ativa: !!ativa,
-                    recursos: !!recursos,
-                    lousaAtiva: !!ativa,
-                    lousaRecursos: !!recursos,
-                    atualizadoEm: new Date().toISOString(),
-                    escolaId: escolaFinal,
-                    professorId: req.usuario?.id || null
-                }
-            },
+            { $set: { id: idLimpo, nome: nomeTurma, ativa: !!ativa, recursos: !!recursos, lousaAtiva: !!ativa, lousaRecursos: !!recursos, atualizadoEm: new Date().toISOString(), escolaId: escolaFinal, professorId: req.usuario?.id || null } },
             { upsert: true }
         );
-
-        // Se tem nome diferente do ID, salva também para o nome (para aluno que usa nome)
         if(nomeTurma && nomeTurma !== idLimpo){
             await database.collection('workspace_lousa_status').updateOne(
                 { id: nomeTurma },
-                { 
-                    $set: { 
-                        id: nomeTurma,
-                        idOriginal: idLimpo,
-                        nome: nomeTurma,
-                        ativa: !!ativa,
-                        recursos: !!recursos,
-                        lousaAtiva: !!ativa,
-                        lousaRecursos: !!recursos,
-                        atualizadoEm: new Date().toISOString(),
-                        escolaId: escolaFinal,
-                        professorId: req.usuario?.id || null
-                    }
-                },
+                { $set: { id: nomeTurma, idOriginal: idLimpo, nome: nomeTurma, ativa: !!ativa, recursos: !!recursos, lousaAtiva: !!ativa, lousaRecursos: !!recursos, atualizadoEm: new Date().toISOString(), escolaId: escolaFinal } },
                 { upsert: true }
             );
         }
 
-        // Compatibilidade turmas
-        try {
-            if (idLimpo === 'global') {
-                await database.collection('turmas').updateMany({}, { $set: { lousaAtiva: !!ativa, lousaRecursos: !!recursos } });
-            } else if(turmaDoc){
-                await database.collection('turmas').updateOne({ id: turmaDoc.id }, { $set: { lousaAtiva: !!ativa, lousaRecursos: !!recursos } });
-            }
-        } catch(e){}
+        // Se desativou, limpa os dados da lousa
+        if(!ativa){
+            try{
+                await database.collection('workspace_lousa_dados').deleteOne({ id: idLimpo });
+                if(nomeTurma && nomeTurma !== idLimpo) await database.collection('workspace_lousa_dados').deleteOne({ id: nomeTurma });
+                console.log(`[LOUSA] Dados limpos para turma ${idLimpo} ao encerrar`);
+            }catch(e){ console.warn('Erro ao limpar dados', e); }
+        }
 
         if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', {
-                type: 'LOUSA_STATUS_CHANGED',
-                turmaId: idLimpo,
-                turmaNome: nomeTurma,
-                ativa: !!ativa,
-                recursos: !!recursos,
-                escolaId: escolaFinal
-            });
-            // Emite também para o nome, para alunos que escutam por nome
+            global.workspaceStream.emit('evento_realtime', { type: 'LOUSA_STATUS_CHANGED', turmaId: idLimpo, turmaNome: nomeTurma, ativa: !!ativa, recursos: !!recursos, escolaId: escolaFinal });
             if(nomeTurma && nomeTurma !== idLimpo){
-                global.workspaceStream.emit('evento_realtime', {
-                    type: 'LOUSA_STATUS_CHANGED',
-                    turmaId: nomeTurma,
-                    turmaNome: nomeTurma,
-                    ativa: !!ativa,
-                    recursos: !!recursos,
-                    escolaId: escolaFinal
-                });
+                global.workspaceStream.emit('evento_realtime', { type: 'LOUSA_STATUS_CHANGED', turmaId: nomeTurma, ativa: !!ativa, recursos: !!recursos, escolaId: escolaFinal });
             }
         }
 
-        console.log(`📡 Lousa broadcast v2: turma=${idLimpo} nome=${nomeTurma} ativa=${ativa} recursos=${recursos}`);
         res.json({ success: true, turmaId: idLimpo, turmaNome: nomeTurma, ativa: !!ativa, recursos: !!recursos });
     } catch (e) {
         console.error('🚨 Erro PUT lousa:', e);
