@@ -2391,4 +2391,78 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
 });
 
 
+// ============================================================================
+// 📦 LOUSA DADOS - Sync via API (fallback quando WSS público falha)
+// ============================================================================
+
+// Salva dados da lousa (Yjs snapshot simplificado como tldraw records)
+router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const turmaId = String(req.params.turmaId).trim();
+        const { records, escolaId } = req.body; // records = array de tldraw records
+        
+        if(!turmaId) return res.status(400).json({ success:false });
+        
+        const escolaFinal = escolaId || req.usuario?.escolaId || 'DEFAULT';
+        
+        await db.collection('workspace_lousa_dados').updateOne(
+            { id: turmaId },
+            {
+                $set: {
+                    id: turmaId,
+                    records: records || [],
+                    atualizadoEm: new Date().toISOString(),
+                    escolaId: escolaFinal,
+                    professorId: req.usuario?.id || null
+                }
+            },
+            { upsert: true }
+        );
+
+        // Emite em tempo real para alunos da mesma turma
+        if(global.workspaceStream){
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'LOUSA_DADOS_CHANGED',
+                turmaId: turmaId,
+                escolaId: escolaFinal
+            });
+        }
+
+        res.json({ success:true, turmaId, count: (records||[]).length });
+    } catch(e){
+        console.error('Erro PUT lousa dados', e);
+        res.status(500).json({ success:false });
+    }
+});
+
+router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const turmaId = String(req.params.turmaId).trim();
+        
+        const doc = await db.collection('workspace_lousa_dados').findOne({ id: turmaId });
+        
+        // Fallback: tenta pelo nome se não achou por ID
+        let docFinal = doc;
+        if(!docFinal){
+            const turma = await db.collection('turmas').findOne({ $or: [{ id: turmaId }, { nome: turmaId }] });
+            if(turma && turma.id !== turmaId){
+                docFinal = await db.collection('workspace_lousa_dados').findOne({ id: turma.id });
+            }
+        }
+
+        res.json({ 
+            success:true, 
+            turmaId, 
+            records: docFinal?.records || [],
+            atualizadoEm: docFinal?.atualizadoEm || null
+        });
+    } catch(e){
+        console.error('Erro GET lousa dados', e);
+        res.status(500).json({ success:false, records:[] });
+    }
+});
+
+
 module.exports = router;
