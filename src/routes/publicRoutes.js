@@ -20,10 +20,18 @@ webpush.setVapidDetails(
 // 🖍️ ROTA OFICIAL DA LOUSA DIGITAL
 // ============================================================================
 const path = require('path');
+const fs = require('fs');
 
-router.get('/workspace-lousa.html', (req, res) => {
-    // Entrega o ficheiro de forma segura, evitando o redirecionamento 404
-    res.sendFile(path.join(__dirname, '../frontend/workspace-lousa.html')); 
+router.get(['/workspace-lousa', '/workspace-lousa.html'], (req, res) => {
+    // 🚀 O servidor procura primeiro na pasta compilada (produção), senão cai para o frontend
+    const pathDist = path.join(__dirname, '../dist/workspace-lousa.html');
+    const pathFront = path.join(__dirname, '../frontend/workspace-lousa.html');
+    
+    if (fs.existsSync(pathDist)) {
+        res.sendFile(pathDist);
+    } else {
+        res.sendFile(pathFront);
+    }
 });
 
 // ============================================================================
