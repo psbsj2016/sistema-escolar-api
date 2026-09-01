@@ -2173,47 +2173,112 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
     }
 });
 
+
 // ============================================================================
-// 🖍️ ROTAS DO ESTADO DA LOUSA DIGITAL EM TEMPO REAL
+// 🚀 LOUSA DIGITAL - ROTAS CORRIGIDAS (substitua as 3 antigas no workspaceRoutes.js)
 // ============================================================================
 
-// Professor liga/desliga a Lousa
+// Professor liga/desliga a Lousa - VERSÃO CORRIGIDA COM UPSERT + REALTIME
 router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
     try {
-        const { turmaId, ativa, recursos } = req.body;
-        const database = await connectDB();
+        const { turmaId, ativa, recursos, escolaId } = req.body;
+        if (!turmaId) return res.status(400).json({ success: false, error: 'turmaId é obrigatório' });
         
-        // Atualiza a turma na base de dados com o novo estado da lousa
-        await database.collection('turmas').updateOne(
-            { id: turmaId },
-            { $set: { lousaAtiva: ativa, lousaRecursos: recursos } }
+        const database = await connectDB();
+        const idLimpo = String(turmaId).trim();
+        const escolaFinal = escolaId || req.query.escolaId || req.body.escolaId || 'DEFAULT';
+        
+        // 1. Coleção dedicada - garante que global funciona (upsert)
+        await database.collection('workspace_lousa_status').updateOne(
+            { id: idLimpo },
+            { 
+                $set: { 
+                    id: idLimpo,
+                    ativa: !!ativa,
+                    recursos: !!recursos,
+                    lousaAtiva: !!ativa, // compat
+                    lousaRecursos: !!recursos,
+                    atualizadoEm: new Date().toISOString(),
+                    escolaId: escolaFinal,
+                    professorId: req.usuario?.id || null
+                }
+            },
+            { upsert: true }
         );
-        res.json({ success: true });
+
+        // 2. Compatibilidade com turmas (se não for global, atualiza só ela; se global, todas)
+        try {
+            if (idLimpo === 'global') {
+                await database.collection('turmas').updateMany(
+                    {},
+                    { $set: { lousaAtiva: !!ativa, lousaRecursos: !!recursos } }
+                );
+            } else {
+                await database.collection('turmas').updateOne(
+                    { id: idLimpo },
+                    { $set: { lousaAtiva: !!ativa, lousaRecursos: !!recursos } }
+                );
+            }
+        } catch(e){ /* turmas pode não existir, ignora */ }
+
+        // 3. EMITE EM TEMPO REAL PARA TODOS DA ESCOLA
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'LOUSA_STATUS_CHANGED',
+                turmaId: idLimpo,
+                ativa: !!ativa,
+                recursos: !!recursos,
+                escolaId: escolaFinal
+            });
+            console.log(`📡 Lousa broadcast: turma=${idLimpo} ativa=${ativa} recursos=${recursos} escola=${escolaFinal}`);
+        }
+
+        res.json({ success: true, turmaId: idLimpo, ativa: !!ativa, recursos: !!recursos });
     } catch (e) {
+        console.error('🚨 Erro PUT lousa:', e);
         res.status(500).json({ success: false, error: 'Erro ao sincronizar lousa.' });
     }
 });
 
-// Aluno "escuta" o estado da Lousa
+// Aluno escuta o estado da Lousa - COM FALLBACK GLOBAL
 router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        const turma = await database.collection('turmas').findOne({ id: req.params.turmaId });
-        
-        // Devolve o estado exato da turma pesquisada
+        const turmaIdReq = String(req.params.turmaId || 'global').trim();
+
+        // 1. Busca status específico da turma
+        let status = await database.collection('workspace_lousa_status').findOne({ id: turmaIdReq });
+
+        // 2. Fallback: se não achou ou está inativa, verifica global
+        if (!status || !status.ativa) {
+            const globalStatus = await database.collection('workspace_lousa_status').findOne({ id: 'global' });
+            if (globalStatus && globalStatus.ativa) {
+                status = globalStatus; // professor ativou para todos
+            }
+        }
+
+        // 3. Fallback legado: coleção turmas
+        if (!status) {
+            const turma = await database.collection('turmas').findOne({ id: turmaIdReq });
+            if (turma) {
+                status = { ativa: !!turma.lousaAtiva, recursos: !!turma.lousaRecursos };
+            }
+        }
+
         res.json({ 
             success: true, 
-            ativa: turma ? !!turma.lousaAtiva : false, 
-            recursos: turma ? !!turma.lousaRecursos : false 
+            ativa: !!(status?.ativa || status?.lousaAtiva), 
+            recursos: !!(status?.recursos || status?.lousaRecursos),
+            turmaId: turmaIdReq,
+            fonte: status ? 'workspace_lousa_status' : 'none'
         });
     } catch (e) {
-        res.status(500).json({ success: false });
+        console.error('🚨 Erro GET lousa:', e);
+        res.status(500).json({ success: false, ativa: false, recursos: false });
     }
 });
 
-// ============================================================================
-// 🚀 ALUNO AVISA O PROFESSOR QUE ESTÁ NA SALA DE ESPERA DA LOUSA
-// ============================================================================
+// Aluno avisa que está aguardando - MANTIDO + MELHORADO
 router.post('/sala/workspace-lousa/aguardando', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -2222,26 +2287,25 @@ router.post('/sala/workspace-lousa/aguardando', verificarToken, async (req, res)
 
         const escolaId = aluno.escolaId || 'DEFAULT';
         const turmaId = aluno.turma || (aluno.turmas && aluno.turmas[0]) || 'global';
+        const turmaIdStr = typeof turmaId === 'object' ? (turmaId.id || 'global') : String(turmaId);
         const nomeAluno = aluno.nome || aluno.login;
 
-        // Procura todos os Professores e Gestores da mesma escola
         const professores = await db.collection('usuarios').find({ 
             escolaId: escolaId, 
-            tipo: { $in: ['Professor', 'Gestor'] } 
+            tipo: { $in: ['Professor', 'Gestor', 'Admin'] } 
         }).toArray();
         
         if (professores.length > 0) {
             const nomesDestinatarios = professores.map(p => p.nome || p.login).filter(Boolean);
             
-            // Cria os bilhetes de notificação para cada professor
             const notificacoesArray = nomesDestinatarios.map(nome => ({
                 id: crypto.randomUUID(),
                 escolaId: escolaId,
                 destinatarioNome: nome,
                 remetenteNome: nomeAluno,
                 mensagem: `está aguardando a abertura da Lousa Digital! 🖍️`,
-                origem: 'lousa_espera', // 🚀 Gatilho Mágico de Teletransporte
-                origemId: turmaId,
+                origem: 'lousa_espera',
+                origemId: turmaIdStr,
                 destinoNome: 'Sala de Aula',
                 lida: false,
                 data: new Date().toISOString()
@@ -2249,7 +2313,6 @@ router.post('/sala/workspace-lousa/aguardando', verificarToken, async (req, res)
 
             await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
 
-            // Dispara o alerta em tempo real para os ecrãs dos professores
             if (global.workspaceStream) {
                 global.workspaceStream.emit('evento_realtime', {
                     type: 'NOVA_NOTIFICACAO',
@@ -2264,5 +2327,6 @@ router.post('/sala/workspace-lousa/aguardando', verificarToken, async (req, res)
         res.status(500).json({ error: 'Erro ao notificar professor.' });
     }
 });
+
 
 module.exports = router;
