@@ -2175,6 +2175,7 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
 
 
 
+
 // ============================================================================
 // 🚀 LOUSA DIGITAL - ROTAS FINAIS v3 - SEM FALLBACK GLOBAL QUE TRAVA EM TRUE
 // ============================================================================
@@ -2364,6 +2365,5 @@ router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
         res.json({ success:true, turmaId, records: doc?.records || [] });
     } catch(e){ res.status(500).json({ success:false, records:[] }); }
 });
-
 
 module.exports = router;
