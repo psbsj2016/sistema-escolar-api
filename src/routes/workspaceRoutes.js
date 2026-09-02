@@ -2174,12 +2174,12 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
 });
 
 
+
 // ============================================================================
-// 🚀 LOUSA DIGITAL - ROTAS v2 - Corrige bug de turma específica vs nome
+// 🚀 LOUSA DIGITAL - ROTAS FINAIS v3 - SEM FALLBACK GLOBAL QUE TRAVA EM TRUE
 // ============================================================================
 
-
-// Ao encerrar, limpa os dados da lousa também
+// PUT - Professor ativa/desativa
 router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
     try {
         const { turmaId, ativa, recursos, escolaId } = req.body;
@@ -2193,33 +2193,70 @@ router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
         try { turmaDoc = await database.collection('turmas').findOne({ $or: [{ id: idLimpo }, { nome: idLimpo }] }); } catch(e){}
         const nomeTurma = turmaDoc?.nome || null;
 
+        // 1. Salva para ID limpo
         await database.collection('workspace_lousa_status').updateOne(
             { id: idLimpo },
-            { $set: { id: idLimpo, nome: nomeTurma, ativa: !!ativa, recursos: !!recursos, lousaAtiva: !!ativa, lousaRecursos: !!recursos, atualizadoEm: new Date().toISOString(), escolaId: escolaFinal, professorId: req.usuario?.id || null } },
+            { $set: { 
+                id: idLimpo, 
+                nome: nomeTurma, 
+                ativa: !!ativa, 
+                recursos: !!recursos, 
+                lousaAtiva: !!ativa, 
+                lousaRecursos: !!recursos, 
+                atualizadoEm: new Date().toISOString(), 
+                escolaId: escolaFinal, 
+                professorId: req.usuario?.id || null 
+            }},
             { upsert: true }
         );
+
+        // 2. Se tem nome diferente, salva para nome também
         if(nomeTurma && nomeTurma !== idLimpo){
             await database.collection('workspace_lousa_status').updateOne(
                 { id: nomeTurma },
-                { $set: { id: nomeTurma, idOriginal: idLimpo, nome: nomeTurma, ativa: !!ativa, recursos: !!recursos, lousaAtiva: !!ativa, lousaRecursos: !!recursos, atualizadoEm: new Date().toISOString(), escolaId: escolaFinal } },
+                { $set: { 
+                    id: nomeTurma, 
+                    idOriginal: idLimpo, 
+                    nome: nomeTurma, 
+                    ativa: !!ativa, 
+                    recursos: !!recursos, 
+                    lousaAtiva: !!ativa, 
+                    lousaRecursos: !!recursos, 
+                    atualizadoEm: new Date().toISOString(), 
+                    escolaId: escolaFinal 
+                }},
                 { upsert: true }
             );
         }
 
-        // Se desativou, limpa os dados da lousa
+        // 3. Se desativou, LIMPA TUDO: status e dados
         if(!ativa){
             try{
+                // Apaga status da turma
+                await database.collection('workspace_lousa_status').deleteOne({ id: idLimpo });
+                if(nomeTurma && nomeTurma !== idLimpo) await database.collection('workspace_lousa_status').deleteOne({ id: nomeTurma });
+                // Apaga dados da lousa
                 await database.collection('workspace_lousa_dados').deleteOne({ id: idLimpo });
                 if(nomeTurma && nomeTurma !== idLimpo) await database.collection('workspace_lousa_dados').deleteOne({ id: nomeTurma });
-                console.log(`[LOUSA] Dados limpos para turma ${idLimpo} ao encerrar`);
-            }catch(e){ console.warn('Erro ao limpar dados', e); }
+                // IMPORTANTE: também apaga global se foi a última turma ativa
+                const restantes = await database.collection('workspace_lousa_status').countDocuments({ ativa: true });
+                if(restantes === 0){
+                    await database.collection('workspace_lousa_status').deleteOne({ id: 'global' });
+                }
+                console.log(`[LOUSA] Encerrada e limpa turma ${idLimpo} nome=${nomeTurma} restantes ativas=${restantes}`);
+            }catch(e){ console.warn('Erro limpar ao desativar', e); }
         }
 
+        // 4. Broadcast
         if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', { type: 'LOUSA_STATUS_CHANGED', turmaId: idLimpo, turmaNome: nomeTurma, ativa: !!ativa, recursos: !!recursos, escolaId: escolaFinal });
-            if(nomeTurma && nomeTurma !== idLimpo){
-                global.workspaceStream.emit('evento_realtime', { type: 'LOUSA_STATUS_CHANGED', turmaId: nomeTurma, ativa: !!ativa, recursos: !!recursos, escolaId: escolaFinal });
-            }
+            global.workspaceStream.emit('evento_realtime', { 
+                type: 'LOUSA_STATUS_CHANGED', 
+                turmaId: idLimpo, 
+                turmaNome: nomeTurma, 
+                ativa: !!ativa, 
+                recursos: !!recursos, 
+                escolaId: escolaFinal 
+            });
         }
 
         res.json({ success: true, turmaId: idLimpo, turmaNome: nomeTurma, ativa: !!ativa, recursos: !!recursos });
@@ -2229,190 +2266,103 @@ router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
     }
 });
 
-// Aluno escuta o estado - COM RESOLUÇÃO ID <-> NOME
+// GET - Aluno verifica status - SEM fallback global travado
 router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
         const turmaIdReq = String(req.params.turmaId || 'global').trim();
-        const escolaId = req.query.escolaId || req.usuario?.escolaId || 'DEFAULT';
 
-        console.log(`[LOUSA GET] Buscando status para turmaId=${turmaIdReq} escola=${escolaId}`);
-
-        // 1. Busca direta por ID
+        // 1. Busca direta
         let status = await database.collection('workspace_lousa_status').findOne({ id: turmaIdReq });
 
-        // 2. Se não achou, tenta buscar turma por ID ou nome para resolver
+        // 2. Se não achou, tenta por nome ou idOriginal
         if(!status){
-            const turmaDoc = await database.collection('turmas').findOne({
-                $or: [
-                    { id: turmaIdReq },
-                    { nome: turmaIdReq },
-                    { _id: turmaIdReq }
-                ]
+            status = await database.collection('workspace_lousa_status').findOne({ 
+                $or: [{ nome: turmaIdReq }, { idOriginal: turmaIdReq }] 
             });
+        }
+
+        // 3. Se ainda não achou e turmaIdReq é um ID, busca turma para resolver nome
+        if(!status){
+            const turmaDoc = await database.collection('turmas').findOne({ $or: [{ id: turmaIdReq }, { nome: turmaIdReq }] });
             if(turmaDoc){
-                console.log(`[LOUSA GET] Turma encontrada: id=${turmaDoc.id} nome=${turmaDoc.nome}`);
-                // Tenta pelo ID da turma
-                status = await database.collection('workspace_lousa_status').findOne({ id: turmaDoc.id });
-                // Se não achou, tenta pelo nome
-                if(!status && turmaDoc.nome){
-                    status = await database.collection('workspace_lousa_status').findOne({ id: turmaDoc.nome });
-                }
-                // Tenta pelo idOriginal
-                if(!status){
-                    status = await database.collection('workspace_lousa_status').findOne({ idOriginal: turmaDoc.id });
-                }
+                status = await database.collection('workspace_lousa_status').findOne({ 
+                    $or: [{ id: turmaDoc.id }, { id: turmaDoc.nome }, { idOriginal: turmaDoc.id }] 
+                });
             }
         }
 
-        // 3. Fallback: busca qualquer lousa ativa da mesma escola (útil para debug)
-        // Se aluno pertence a uma turma que tem lousa ativa, retorna ela
-        if(!status || !status.ativa){
-            // Busca turmas do aluno
-            const usuario = await database.collection('usuarios').findOne({ 
-                $or: [
-                    { id: req.usuario?.id },
-                    { _id: req.usuario?.id }
-                ]
-            });
-            if(usuario){
-                const turmasAluno = [];
-                if(usuario.turma) turmasAluno.push(String(typeof usuario.turma === 'object' ? (usuario.turma.id || usuario.turma.nome || '') : usuario.turma));
-                if(usuario.turmas && Array.isArray(usuario.turmas)){
-                    usuario.turmas.forEach(t => {
-                        if(typeof t === 'object') turmasAluno.push(String(t.id || t.nome || ''));
-                        else turmasAluno.push(String(t));
-                    });
-                }
-                // Busca status ativo para alguma turma do aluno
-                for(const tId of turmasAluno){
-                    if(!tId || tId === 'global') continue;
-                    const s = await database.collection('workspace_lousa_status').findOne({ 
-                        $or: [{ id: tId }, { nome: tId }, { idOriginal: tId }],
-                        ativa: true 
-                    });
-                    if(s){
-                        console.log(`[LOUSA GET] Encontrado status ativo para turma do aluno: ${tId} -> ${s.id}`);
-                        status = s;
-                        break;
-                    }
-                }
-            }
+        // 4. Só usa global se solicitou global
+        if(!status && turmaIdReq === 'global'){
+            status = await database.collection('workspace_lousa_status').findOne({ id: 'global' });
         }
 
-        // 4. Fallback global
-        if (!status || !status.ativa) {
-            const globalStatus = await database.collection('workspace_lousa_status').findOne({ id: 'global' });
-            if (globalStatus && globalStatus.ativa) {
-                console.log(`[LOUSA GET] Usando fallback global`);
-                status = globalStatus;
-            }
-        }
+        // Se não achou nada, está desativada
+        const ativa = !!(status?.ativa || status?.lousaAtiva);
+        const recursos = !!(status?.recursos || status?.lousaRecursos);
 
-        // 5. Fallback legado turmas
-        if (!status) {
-            const turma = await database.collection('turmas').findOne({ 
-                $or: [{ id: turmaIdReq }, { nome: turmaIdReq }]
-            });
-            if (turma) {
-                status = { ativa: !!turma.lousaAtiva, recursos: !!turma.lousaRecursos };
-            }
-        }
+        console.log(`[LOUSA GET v3] turma=${turmaIdReq} found=${status?.id || 'none'} ativa=${ativa}`);
 
-        const response = { 
+        res.json({ 
             success: true, 
-            ativa: !!(status?.ativa || status?.lousaAtiva), 
-            recursos: !!(status?.recursos || status?.lousaRecursos),
+            ativa, 
+            recursos, 
             turmaId: turmaIdReq,
             statusId: status?.id || null,
-            fonte: status ? 'workspace_lousa_status' : 'none',
-            debug: {
-                requested: turmaIdReq,
-                found: status?.id || null,
-                ativa: !!(status?.ativa)
-            }
-        };
-
-        console.log(`[LOUSA GET] Resposta:`, response.debug);
-        res.json(response);
+            debug: { requested: turmaIdReq, found: status?.id || null, ativa }
+        });
     } catch (e) {
-        console.error('🚨 Erro GET lousa:', e);
+        console.error('🚨 Erro GET lousa v3:', e);
         res.status(500).json({ success: false, ativa: false, recursos: false });
     }
 });
 
+// DELETE - Limpa TUDO (use para reset)
+router.delete('/sala/workspace-lousa/status/tudo', verificarToken, async (req, res) => {
+    try{
+        const db = await connectDB();
+        const r1 = await db.collection('workspace_lousa_status').deleteMany({});
+        const r2 = await db.collection('workspace_lousa_dados').deleteMany({});
+        console.log(`[LOUSA] RESET TOTAL: status ${r1.deletedCount} dados ${r2.deletedCount}`);
+        res.json({ success:true, deletedStatus: r1.deletedCount, deletedDados: r2.deletedCount });
+    }catch(e){
+        console.error('Erro DELETE tudo', e);
+        res.status(500).json({ success:false });
+    }
+});
 
-// ============================================================================
-// 📦 LOUSA DADOS - Sync via API (fallback quando WSS público falha)
-// ============================================================================
-
-// Salva dados da lousa (Yjs snapshot simplificado como tldraw records)
+// Dados - mantém igual
 router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const turmaId = String(req.params.turmaId).trim();
-        const { records, escolaId } = req.body; // records = array de tldraw records
-        
+        const { records } = req.body;
         if(!turmaId) return res.status(400).json({ success:false });
         
-        const escolaFinal = escolaId || req.usuario?.escolaId || 'DEFAULT';
-        
-        await db.collection('workspace_lousa_dados').updateOne(
-            { id: turmaId },
-            {
-                $set: {
-                    id: turmaId,
-                    records: records || [],
-                    atualizadoEm: new Date().toISOString(),
-                    escolaId: escolaFinal,
-                    professorId: req.usuario?.id || null
-                }
-            },
-            { upsert: true }
-        );
-
-        // Emite em tempo real para alunos da mesma turma
-        if(global.workspaceStream){
-            global.workspaceStream.emit('evento_realtime', {
-                type: 'LOUSA_DADOS_CHANGED',
-                turmaId: turmaId,
-                escolaId: escolaFinal
-            });
+        // Só salva se status estiver ativo
+        const status = await db.collection('workspace_lousa_status').findOne({ 
+            $or: [{ id: turmaId }, { nome: turmaId }, { idOriginal: turmaId }] 
+        });
+        if(!status?.ativa){
+            return res.json({ success:false, error:'Lousa não está ativa' });
         }
 
-        res.json({ success:true, turmaId, count: (records||[]).length });
-    } catch(e){
-        console.error('Erro PUT lousa dados', e);
-        res.status(500).json({ success:false });
-    }
+        await db.collection('workspace_lousa_dados').updateOne(
+            { id: turmaId },
+            { $set: { id: turmaId, records: (records||[]).filter(r => r.typeName === 'shape' || r.typeName === 'binding' || r.typeName === 'asset'), atualizadoEm: new Date().toISOString() } },
+            { upsert: true }
+        );
+        res.json({ success:true, count: (records||[]).length });
+    } catch(e){ res.status(500).json({ success:false }); }
 });
 
 router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const turmaId = String(req.params.turmaId).trim();
-        
         const doc = await db.collection('workspace_lousa_dados').findOne({ id: turmaId });
-        
-        // Fallback: tenta pelo nome se não achou por ID
-        let docFinal = doc;
-        if(!docFinal){
-            const turma = await db.collection('turmas').findOne({ $or: [{ id: turmaId }, { nome: turmaId }] });
-            if(turma && turma.id !== turmaId){
-                docFinal = await db.collection('workspace_lousa_dados').findOne({ id: turma.id });
-            }
-        }
-
-        res.json({ 
-            success:true, 
-            turmaId, 
-            records: docFinal?.records || [],
-            atualizadoEm: docFinal?.atualizadoEm || null
-        });
-    } catch(e){
-        console.error('Erro GET lousa dados', e);
-        res.status(500).json({ success:false, records:[] });
-    }
+        res.json({ success:true, turmaId, records: doc?.records || [] });
+    } catch(e){ res.status(500).json({ success:false, records:[] }); }
 });
 
 
