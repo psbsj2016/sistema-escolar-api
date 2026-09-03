@@ -1607,4 +1607,96 @@ router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
     } catch(e){ res.status(500).json({ success:false, records:[] }); }
 });
 
+// ============================================================================
+// 🧠 HUB DE ESTUDO: IMERSÃO ESPECÍFICA (Curadoria e Quiz gerados por IA)
+// ============================================================================
+router.post('/posts/imersao', verificarToken, async (req, res) => {
+    try {
+        const { termoBusca, alunoRefId, escolaId } = req.body;
+        const database = await connectDB();
+        
+        // 1. Descobrir a que turmas o aluno tem acesso
+        let filtro = { escolaId: escolaId || 'DEFAULT' };
+        if (alunoRefId && alunoRefId !== 'undefined') {
+            const aluno = await database.collection('alunos').findOne({ id: alunoRefId });
+            if (aluno) {
+                let minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas || aluno.turma];
+                filtro = { 
+                    $and: [
+                        { escolaId: escolaId || 'DEFAULT' },
+                        { $or: [{ destino: 'global' }, { destino: { $in: minhasTurmas } }, { destinoNome: { $in: minhasTurmas } }] }
+                    ]
+                };
+            }
+        }
+
+        // 2. Recolher os últimos 40 posts para a IA ler e analisar
+        const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(40).toArray();
+        
+        // Extrair apenas o texto e o nome dos anexos para não sobrecarregar a memória da IA
+        const conteudoParaIA = postsBrutos.map(p => {
+            let infoAnexos = (p.anexos || []).map(a => a.nome).join(', ');
+            return `[Post de ${p.autorNome}]: ${p.texto || ''} ${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
+        }).join('\n\n');
+
+        if (!conteudoParaIA.trim()) {
+            return res.status(400).json({ error: 'Não há conteúdo suficiente no feed para criar uma imersão.' });
+        }
+
+        // 3. Ligar o Motor da IA (Groq)
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+
+        // 4. O Prompt Mágico de Curadoria Pedagógica
+        const instrucaoFoco = termoBusca 
+            ? `O aluno quer focar-se e pesquisou por: "${termoBusca}". Filtra e foca a tua aula apenas no conteúdo relacionado com este tema.` 
+            : `Cria uma imersão com base nos temas mais frequentes e importantes encontrados nestes posts.`;
+
+        const systemPrompt = `Você é a Inteligência Artificial da área 'Imersão Específica' de uma escola de inglês de alto nível.
+        Abaixo estão as publicações recentes do Feed da escola (professores e alunos).
+        ${instrucaoFoco}
+        
+        A sua missão é atuar como um curador genial:
+        1. Crie um "titulo" cativante para esta sessão de estudo.
+        2. Escreva um "resumo" didático (em português, mas com exemplos em inglês) sintetizando o que de melhor foi partilhado sobre o tema.
+        3. Crie um "quiz" com 3 perguntas de múltipla escolha para testar o conhecimento do aluno sobre este tema.
+        
+        Retorne APENAS um JSON estritamente válido com a seguinte estrutura:
+        {
+            "titulo": "Título da Imersão",
+            "resumo": "Texto formatado em HTML básico (use <br>, <strong>, <em> para ficar bonito no ecrã).",
+            "quiz": [
+                {
+                    "pergunta": "Qual é a tradução de...?",
+                    "opcoes": ["Opção A", "Opção B", "Opção C", "Opção D"],
+                    "respostaCorreta": 1, 
+                    "explicacao": "Explicação pedagógica curta do porquê desta resposta estar certa."
+                }
+            ]
+        }
+        Nota: A "respostaCorreta" deve ser o índice da array (0, 1, 2 ou 3).`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: conteudoParaIA }
+            ],
+            model: 'llama-3.1-8b-instant', // Modelo ultra-rápido para manter a imersão fluida
+            temperature: 0.4, // Baixa criatividade para garantir que foca nos dados reais dos posts
+            response_format: { type: 'json_object' } 
+        });
+
+        const resultadoTexto = completion.choices[0].message.content;
+        const imersaoGerada = JSON.parse(resultadoTexto);
+
+        res.status(200).json({ success: true, imersao: imersaoGerada });
+
+    } catch (error) {
+        console.error("🚨 Erro na Imersão Específica:", error);
+        res.status(500).json({ error: 'O motor de imersão está sobrecarregado. Tente novamente em breves instantes.' });
+    }
+});
+
 module.exports = router;
