@@ -2133,7 +2133,21 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
             userPrompt = respostaAluno;
         }
 
-        // 🎭 Jogo 4: Manto do Metamorfo (Roleplay conversacional)
+        // 🔮 Jogo 4: Espelho do Oráculo (Question Maker)
+        if (jogo === 'questionMaker') {
+            systemPrompt = `Você é um professor de inglês rigoroso, mas justo.
+            A seguinte RESPOSTA foi dada ao aluno: "${pergunta}" (Sim, a variável chama-se pergunta, mas trata-se da resposta base).
+            A PERGUNTA que o aluno formulou foi: "${respostaAluno}"
+            Regras de avaliação:
+            1. Verifique se a PERGUNTA criada pelo aluno é gramaticalmente correta em inglês.
+            2. Verifique se essa pergunta faria sentido lógico para obter a resposta base.
+            3. Aceite diferentes formas de perguntar, desde que a lógica se mantenha.
+            4. Se houver erro, preencha o campo "correcao" com a pergunta ideal.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Avaliação curta em PT-BR", "correcao": "A pergunta ideal", "coins": 50}`;
+            userPrompt = respostaAluno;
+        }
+
+        // 🎭 Jogo 5: Manto do Metamorfo (Roleplay conversacional)
         if (jogo === 'contextRole') {
             systemPrompt = `You are an actor in an English roleplay. 
             Scenario: "${cenario?.title}" - "${cenario?.prompt}". 
