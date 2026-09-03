@@ -2105,7 +2105,7 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🎮 ROTA GENÉRICA DE AVALIAÇÃO DOS JOGOS COM IA
+// 🎮 ROTA GENÉRICA DE AVALIAÇÃO DOS JOGOS COM IA (Otimizada e Mais Justa)
 // ============================================================================
 router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
     try {
@@ -2120,27 +2120,41 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
         let systemPrompt = "";
         let userPrompt = "";
 
+        // 🪄 Jogo 1: Feitiço das Palavras (Formar Frase)
         if (jogo === 'wordSpark') {
-            systemPrompt = `You are Ptt AI, a friendly English teacher. The student must use the word "${palavra}".
-            Evaluate the sentence: "${fraseAluno}"
-            Return ONLY valid JSON: {"correto": boolean, "feedback": "feedback curto em PT-BR explicando erro ou elogiando", "correcao": "versão corrigida da frase se houver erro, senão a mesma frase", "coins": 50}`;
+            systemPrompt = `Você é um professor de inglês avaliando a frase de um aluno iniciante. A tarefa era usar a palavra "${palavra}" (ou uma variação/conjugação dela).
+            Regras de avaliação rigorosas:
+            1. Se a frase usar a palavra e fizer sentido em inglês, "correto" DEVE ser true.
+            2. Seja tolerante a pequenos erros gramaticais. Se a frase for compreensível, "correto" é true (apenas forneça a versão ideal no campo "correcao").
+            3. Apenas retorne "correto": false se a frase não fizer sentido nenhum ou for escrita totalmente em português.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Feedback super curto em PT-BR elogiando ou explicando o erro", "correcao": "A frase perfeita em inglês", "coins": 50}`;
             userPrompt = fraseAluno;
         }
         
+        // 📜 Jogo 2: Pergaminho do Herói (Perguntas e Respostas)
         if (jogo === 'answerQuest') {
-            systemPrompt = `You are Ptt AI. Question: "${pergunta}". Student answer: "${respostaAluno}".
-            Check if answer makes sense and is in English. Correct grammar briefly if needed.
-            Return ONLY JSON: {"correto": boolean, "feedback": "feedback em PT-BR", "correcao": "versão melhorada da resposta", "coins": 50}`;
+            systemPrompt = `Você é um professor de inglês. 
+            Pergunta original: "${pergunta}" 
+            Resposta do aluno: "${respostaAluno}"
+            Regras:
+            1. Se a resposta tiver relação com a pergunta e estiver maioritariamente em inglês, "correto" DEVE ser true.
+            2. Aceite respostas simples e curtas. Corrija a gramática no campo "correcao".
+            3. Apenas retorne false se não tiver nada a ver com a pergunta.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Elogio ou explicação em PT-BR", "correcao": "Versão melhorada da resposta", "coins": 50}`;
             userPrompt = respostaAluno;
         }
 
+        // 🎭 Jogo 3: Manto do Metamorfo (Roleplay)
         if (jogo === 'contextRole') {
-            // No Roleplay, mandamos a IA ser o NPC e focar-se na imersão!
-            systemPrompt = `You are an actor in a roleplay. Scenario: Title "${cenario?.title}" - Situation "${cenario?.prompt}" - Tip "${cenario?.tip}".
+            systemPrompt = `You are an actor in an English roleplay. 
+            Scenario: "${cenario?.title}" - "${cenario?.prompt}". 
             History: ${JSON.stringify(historico.slice(-4))}
             Student said: "${respostaAluno}"
-            Tasks: 1. If student made English mistake, correct it very briefly in brackets [Correction: ...]. 2. Continue the roleplay as the character, in English, max 2 sentences. 3. Ask a question to keep it going.
-            Return ONLY JSON: {"correcao": "correction or null", "npcResponse": "your next line as character", "feedback": "short PT-BR encouragement", "correto": true}`;
+            Rules:
+            1. "correto" is ALWAYS true unless they speak pure gibberish.
+            2. Act naturally in character for your next line ("npcResponse"). Keep it to 1 sentence and end with a question to keep conversation flowing.
+            3. If the student made a grammar mistake, provide the correction in "correcao". Otherwise, "correcao" is null.
+            Return ONLY JSON: {"correto": true, "feedback": "Short encouragement in PT-BR", "correcao": "correction or null", "npcResponse": "Your next character line in English"}`;
             userPrompt = respostaAluno;
         }
 
@@ -2149,20 +2163,19 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
             ],
-            // Usamos o modelo garantido da Meta, super rápido e não falha.
             model: 'llama-3.3-70b-versatile',
-            temperature: 0.6,
-            response_format: { type: 'json_object' } // Força a saída a ser um JSON limpo
+            temperature: 0.3, // 🚀 Baixamos a temperatura para a IA ser mais consistente e justa
+            response_format: { type: 'json_object' } 
         });
 
-        // 🧠 Proteção Extra: Lida com respostas mal formatadas da IA
+        // 🧠 Proteção Extra para garantir que o Servidor não crasha se a IA falhar o formato
         let resultadoTexto = completion.choices[0].message.content;
         let resultado;
         try {
             resultado = JSON.parse(resultadoTexto);
         } catch(parseErr) {
             console.error("Erro ao fazer parse do JSON da IA:", resultadoTexto);
-            resultado = { correto: false, feedback: "Houve um desvio mágico.", correcao: "Por favor, tente novamente." };
+            resultado = { correto: false, feedback: "Houve um desvio mágico na avaliação.", correcao: "Por favor, tente formular novamente." };
         }
 
         res.json({ success: true, ...resultado });
@@ -2172,7 +2185,6 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
         res.status(500).json({ success: false, error: 'Falha na IA do jogo' });
     }
 });
-
 
 
 
