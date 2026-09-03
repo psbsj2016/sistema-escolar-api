@@ -2332,7 +2332,7 @@ router.delete('/sala/workspace-lousa/status/tudo', verificarToken, async (req, r
     }
 });
 
-// Dados - mantém igual
+// Dados - O Filtro Destrutivo foi removido!
 router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -2348,9 +2348,10 @@ router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
             return res.json({ success:false, error:'Lousa não está ativa' });
         }
 
+        // 🚀 O FILTRO FOI REMOVIDO: Salvamos a "records" integral para proteger a estrutura do Tldraw
         await db.collection('workspace_lousa_dados').updateOne(
             { id: turmaId },
-            { $set: { id: turmaId, records: (records||[]).filter(r => r.typeName === 'shape' || r.typeName === 'binding' || r.typeName === 'asset'), atualizadoEm: new Date().toISOString() } },
+            { $set: { id: turmaId, records: records || [], atualizadoEm: new Date().toISOString() } },
             { upsert: true }
         );
         res.json({ success:true, count: (records||[]).length });
