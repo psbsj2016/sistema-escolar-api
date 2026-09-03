@@ -2105,7 +2105,7 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🎮 ROTA GENÉRICA DE AVALIAÇÃO DOS JOGOS COM IA (Otimizada e Mais Justa)
+// 🎮 ROTA GENÉRICA DE AVALIAÇÃO DOS JOGOS COM IA (Atualizada para o modelo ativo)
 // ============================================================================
 router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
     try {
@@ -2163,12 +2163,13 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
             ],
-            model: 'llama-3.3-70b-versatile',
-            temperature: 0.3, // 🚀 Baixamos a temperatura para a IA ser mais consistente e justa
+            // 🚀 CORREÇÃO: Alterado para o modelo ativo no servidor
+            model: 'openai/gpt-oss-120b',
+            temperature: 0.3,
             response_format: { type: 'json_object' } 
         });
 
-        // 🧠 Proteção Extra para garantir que o Servidor não crasha se a IA falhar o formato
+        // 🧠 Proteção Extra para conversão segura do JSON da IA
         let resultadoTexto = completion.choices[0].message.content;
         let resultado;
         try {
