@@ -1231,81 +1231,180 @@ router.post('/ingles/ia-teste/ensinar-correcao', verificarToken, async (req, res
     } catch (error) { res.status(500).json({ success: false, error: 'Erro ao treinar o olheiro ortográfico.' }); }
 });
 
-// 🚀 ROTA DA IA GERATIVA PREMIUM (GROQ) E AVALIAÇÃO DE JOGOS
+// ============================================================================
+// 🚀 ROTA DA IA GERATIVA PREMIUM (GROQ) - COM MEMÓRIA ATIVADA
+// ============================================================================
 router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
     try {
         const { mensagem, historico = [] } = req.body;
+        
         if (!mensagem) return res.status(400).json({ error: 'Mensagem vazia.' });
 
         const Groq = require('groq-sdk');
         const chaveApi = process.env.GROQ_API_KEY;
-        if (!chaveApi) return res.status(500).json({ success: false, error: 'Chave API não configurada.' });
+
+        if (!chaveApi) {
+            console.error("🚨 ERRO: A chave GROQ_API_KEY não foi encontrada no servidor!");
+            return res.status(500).json({ success: false, error: 'A chave API não está configurada no servidor (.env ou Render).' });
+        }
 
         const groq = new Groq({ apiKey: chaveApi.trim() });
-        const INSTRUCOES_PROFESSOR = `You are 'Ptt AI', an expert, friendly, and highly motivating English teacher. Follow these rules strictly: 1. Maintain a positive, didactic, and helpful tone. 2. If the student makes a grammatical or spelling mistake, kindly correct them first, explain the rule briefly, and then answer their message. 3. Do not answer questions outside the scope of English learning. 4. Keep your answers relatively short. 5. Always end by asking a question.`;
+
+        // 🚀 PROMPT RESTAURADO COM QUEBRAS DE LINHA ORIGINAIS
+        const INSTRUCOES_PROFESSOR = `
+            You are 'Ptt AI', an expert, friendly, and highly motivating English teacher.
+            Follow these rules strictly:
+            1. Maintain a positive, didactic, and helpful tone.
+            2. If the student makes a grammatical or spelling mistake, kindly correct them first, explain the rule briefly, and then answer their message.
+            3. Do not answer questions outside the scope of English learning. If asked about other subjects, politely redirect the conversation back to English practice.
+            4. Keep your answers relatively short (max 3-4 sentences) so the student is not overwhelmed.
+            5. Always end by asking a question to keep the conversation flowing.
+        `;
+
+        const mensagensParaNuvem = [
+            { role: 'system', content: INSTRUCOES_PROFESSOR },
+            ...historico,                                     
+            { role: 'user', content: mensagem }              
+        ];
 
         const respostaGroq = await groq.chat.completions.create({
-            messages: [{ role: 'system', content: INSTRUCOES_PROFESSOR }, ...historico, { role: 'user', content: mensagem }],
-            model: 'llama-3.1-8b-instant', // 🚀 MODELO CORRIGIDO E UNIFICADO AQUI
+            messages: mensagensParaNuvem, 
+            model: 'openai/gpt-oss-120b', // 🚀 MODELO ORIGINAL RESTAURADO!
             temperature: 0.7,
         });
 
-        res.json({ success: true, resposta: respostaGroq.choices[0]?.message?.content || 'A IA ficou sem palavras.' });
-    } catch (error) { res.status(500).json({ success: false, error: 'Falha de comunicação com a Nuvem.' }); }
+        const textoGerado = respostaGroq.choices[0]?.message?.content || 'A IA ficou sem palavras.';
+        res.json({ success: true, resposta: textoGerado });
+
+    } catch (error) {
+        console.error("🚨 Erro no Motor Groq:", error);
+        res.status(500).json({ success: false, error: 'Falha de comunicação com a Nuvem da Inteligência Artificial.' });
+    }
 });
 
+// ============================================================================
+// 🎮 ROTA GENÉRICA DE AVALIAÇÃO DOS JOGOS COM IA (Restaurada)
+// ============================================================================
 router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
     try {
         const { jogo, palavra, fraseAluno, cenario, pergunta, tarefaEspecifica, respostaAluno, historico = [] } = req.body;
         const Groq = require('groq-sdk');
         const chaveApi = process.env.GROQ_API_KEY;
+        
         if (!chaveApi) return res.status(500).json({ success: false, error: 'Chave API em falta' });
         
         const groq = new Groq({ apiKey: chaveApi.trim() });
-        let systemPrompt = "", userPrompt = "";
 
+        let systemPrompt = "";
+        let userPrompt = "";
+
+        // 🚀 PROMPTS ESTRUTURADOS RESTAURADOS (Garante que a IA devolve JSON válido)
         if (jogo === 'wordSpark') {
-            systemPrompt = `Você é um professor de inglês amigável avaliando a frase de um aluno. A palavra obrigatória era "${palavra}". Regras: 1. Verifique se o aluno usou a palavra (ou variação correta) e se a frase faz sentido. 2. Seja flexível com pequenos erros ortográficos. Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Curto elogio ou explicação em PT-BR", "correcao": "Frase ideal em inglês", "coins": 50}`;
+            systemPrompt = `Você é um professor de inglês amigável avaliando a frase de um aluno. A palavra obrigatória era "${palavra}".
+            Regras:
+            1. Verifique se o aluno usou a palavra (ou variação correta) e se a frase faz sentido.
+            2. Seja flexível com pequenos erros ortográficos secundários.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Curto elogio ou explicação em PT-BR", "correcao": "Frase ideal em inglês", "coins": 50}`;
             userPrompt = fraseAluno;
         }
+        
         if (jogo === 'answerQuest') {
-            systemPrompt = `Você é um professor de inglês. Pergunta proposta: "${pergunta}" Resposta do aluno: "${respostaAluno}" Regras: 1. Verifique se a resposta tem sentido e responde à pergunta em inglês. Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Feedback em PT-BR", "correcao": "Versão mais natural da resposta", "coins": 50}`;
+            systemPrompt = `Você é um professor de inglês. 
+            Pergunta proposta: "${pergunta}" 
+            Resposta do aluno: "${respostaAluno}"
+            Regras:
+            1. Verifique se a resposta tem sentido e responde à pergunta em inglês.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Feedback em PT-BR", "correcao": "Versão mais natural da resposta", "coins": 50}`;
             userPrompt = respostaAluno;
         }
+
         if (jogo === 'sentenceShuffle') {
-            systemPrompt = `Você é um professor de inglês avaliando transformação de frases. Frase original: "${pergunta}" Instrução aplicada: "${tarefaEspecifica}" Resposta enviada pelo aluno: "${respostaAluno}" Regras: 1. Verifique se o aluno aplicou corretamente a instrução ("${tarefaEspecifica}") sobre a frase original. 2. Se a estrutura gramatical estiver correta, "correto" é true. Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Explicação curta em PT-BR", "correcao": "A frase transformada perfeitamente", "coins": 50}`;
+            systemPrompt = `Você é um professor de inglês avaliando transformação de frases.
+            Frase original: "${pergunta}"
+            Instrução aplicada: "${tarefaEspecifica}"
+            Resposta enviada pelo aluno: "${respostaAluno}"
+            Regras:
+            1. Verifique se o aluno aplicou corretamente a instrução ("${tarefaEspecifica}") sobre a frase original.
+            2. Se a estrutura gramatical estiver correta, "correto" é true.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Explicação curta em PT-BR", "correcao": "A frase transformada perfeitamente", "coins": 50}`;
             userPrompt = respostaAluno;
         }
+
         if (jogo === 'questionMaker') {
-            systemPrompt = `Você é um professor de inglês rigoroso, mas justo. A seguinte RESPOSTA foi dada ao aluno: "${pergunta}" (trata-se da resposta base). A PERGUNTA que o aluno formulou foi: "${respostaAluno}" Regras: 1. Verifique se a PERGUNTA criada pelo aluno é gramaticalmente correta em inglês. 2. Verifique se faria sentido lógico para obter a resposta base. 3. Aceite diferentes formas lógicas. 4. Se houver erro, preencha "correcao". Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Avaliação curta em PT-BR", "correcao": "A pergunta ideal", "coins": 50}`;
+            systemPrompt = `Você é um professor de inglês rigoroso, mas justo.
+            A seguinte RESPOSTA foi dada ao aluno: "${pergunta}" (Sim, a variável chama-se pergunta, mas trata-se da resposta base).
+            A PERGUNTA que o aluno formulou foi: "${respostaAluno}"
+            Regras de avaliação:
+            1. Verifique se a PERGUNTA criada pelo aluno é gramaticalmente correta em inglês.
+            2. Verifique se essa pergunta faria sentido lógico para obter a resposta base.
+            3. Aceite diferentes formas de perguntar, desde que a lógica se mantenha.
+            4. Se houver erro, preencha o campo "correcao" com a pergunta ideal.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Avaliação curta em PT-BR", "correcao": "A pergunta ideal", "coins": 50}`;
             userPrompt = respostaAluno;
         }
+
         if (jogo === 'contextRole') {
-            systemPrompt = `You are an actor in an English roleplay. Scenario: "${cenario?.title}" - "${cenario?.prompt}". History: ${JSON.stringify(historico.slice(-4))} Student said: "${respostaAluno}" Rules: 1. "correto" is ALWAYS true unless pure nonsense. 2. Continue roleplay naturally in character ("npcResponse"). Keep to 1 sentence and end with a question. 3. If grammar error, short fix in "correcao", else null. Return ONLY JSON: {"correto": true, "feedback": "Short PT-BR encouragement", "correcao": "correction or null", "npcResponse": "Your next character line in English"}`;
+            systemPrompt = `You are an actor in an English roleplay. 
+            Scenario: "${cenario?.title}" - "${cenario?.prompt}". 
+            History: ${JSON.stringify(historico.slice(-4))}
+            Student said: "${respostaAluno}"
+            Rules:
+            1. "correto" is ALWAYS true unless they speak pure nonsense.
+            2. Continue the roleplay naturally in character ("npcResponse"). Keep it to 1 sentence and end with a question.
+            3. If there is a grammar error, put a short fix in "correcao", else null.
+            Return ONLY JSON: {"correto": true, "feedback": "Short PT-BR encouragement", "correcao": "correction or null", "npcResponse": "Your next character line in English"}`;
             userPrompt = respostaAluno;
         }
+
         if (jogo === 'picturePop') {
-            systemPrompt = `Você é um professor de inglês avaliando a criatividade do aluno. A imagem mostrada representa: "${palavra}". A frase criada: "${respostaAluno}" Regras: 1. Verifique se a frase tem relação lógica com a palavra e está em inglês. 2. Se for uma frase completa, elogie! 3. Se for apenas a palavra solta (ex: "apple"), "correto" é true, mas incentive a formar frases. 4. Corrija gramática em "correcao". Retorne APENAS JSON válido: {"correto": true/false, "feedback": "Avaliação em PT-BR", "correcao": "Frase ideal", "coins": 75}`;
+            systemPrompt = `Você é um professor de inglês avaliando a criatividade do aluno.
+            A imagem mostrada ao aluno representa a palavra/conceito: "${palavra}".
+            A frase criada pelo aluno foi: "${respostaAluno}"
+            Regras de avaliação:
+            1. Verifique se a frase tem relação lógica com a palavra/imagem e se está escrita em inglês.
+            2. Se o aluno escreveu uma frase completa (ex: "This is an apple"), elogie muito!
+            3. Se o aluno escreveu apenas a palavra solta (ex: "apple"), "correto" é true, mas no feedback incentive-o fortemente a formar frases completas da próxima vez.
+            4. Se houver erro gramatical, corrija no campo "correcao".
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Avaliação em PT-BR", "correcao": "Frase ideal", "coins": 75}`;
             userPrompt = respostaAluno;
         }
+
         if (jogo === 'readAloud' || jogo === 'picturePopSpeech') {
-            systemPrompt = `Você é um professor de inglês especialista em fonética. A ${jogo === 'readAloud' ? 'frase' : 'palavra'} que o aluno tinha de ler era: "${pergunta}". O microfone captou: "${respostaAluno}". Regras: 1. O reconhecimento de voz erra muito em palavras homófonas. Se o captado soa parecido com a palavra original, APROVE ("correto": true). 2. Se a transcrição tiver pequenas omissões, mas o sentido global estiver lá, "correto" é true. 3. Se não tiver nada a ver sonoramente, "correto" é false. Retorne APENAS JSON válido: {"correto": true/false, "feedback": "Explicação pedagógica em PT-BR", "correcao": "Dica de pronúncia ou elogio", "coins": 50}`;
+            systemPrompt = `Você é um professor de inglês especialista em fonética.
+            A ${jogo === 'readAloud' ? 'frase' : 'palavra'} que o aluno tinha de ler era: "${pergunta}".
+            O microfone captou (transcrição do áudio): "${respostaAluno}".
+            Regras de avaliação:
+            1. O reconhecimento de voz erra muito em palavras homófonas (ex: "two", "to", "too" / "pear", "pair"). Se o que o microfone ouviu soa muito parecido com a palavra original, APROVE ("correto": true), pois significa que o aluno pronunciou o som certo!
+            2. Se a transcrição tiver pequenas omissões causadas pelo microfone, mas o sentido global estiver lá, "correto" é true.
+            3. Se o aluno disse palavras que não têm nada a ver sonoramente com o texto original, "correto" é false.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Explicação pedagógica em PT-BR avaliando a pronúncia", "correcao": "Dica de como fazer o som certo (se errou) ou elogio (se acertou)", "coins": 50}`;
             userPrompt = respostaAluno;
         }
 
         const completion = await groq.chat.completions.create({
-            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-            model: 'llama-3.1-8b-instant', // 🚀 MODELO CORRIGIDO E UNIFICADO AQUI
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+            ],
+            model: 'llama-3.1-8b-instant', // O modelo leve de alta velocidade da Groq
             temperature: 0.3,
             response_format: { type: 'json_object' } 
         });
 
+        let resultadoTexto = completion.choices[0].message.content;
         let resultado;
-        try { resultado = JSON.parse(completion.choices[0].message.content); } 
-        catch(parseErr) { resultado = { correto: false, feedback: "Houve um pequeno desvio na avaliação.", correcao: "Tente enviar novamente." }; }
+        try {
+            resultado = JSON.parse(resultadoTexto);
+        } catch(parseErr) {
+            resultado = { correto: false, feedback: "Houve um pequeno desvio na avaliação.", correcao: "Tente enviar novamente." };
+        }
 
         res.json({ success: true, ...resultado });
-    } catch (e) { res.status(500).json({ success: false, error: 'Falha na IA do jogo' }); }
+
+    } catch (e) {
+        console.error("Erro jogo IA:", e);
+        res.status(500).json({ success: false, error: 'Falha na IA do jogo' });
+    }
 });
 
 // ============================================================================
