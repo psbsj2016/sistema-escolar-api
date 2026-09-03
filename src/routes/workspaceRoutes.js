@@ -2147,12 +2147,13 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
             userPrompt = respostaAluno;
         }
 
-        const completion = await groq.chat.completions.create({
+       const completion = await groq.chat.completions.create({
             messages: [
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
             ],
-            model: 'openai/gpt-oss-120b',
+            // 🚀 CORREÇÃO: Identificador correto do modelo na Groq
+            model: 'openai/gpt-oss-20b',
             temperature: 0.3,
             response_format: { type: 'json_object' } 
         });
