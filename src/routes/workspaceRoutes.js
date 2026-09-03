@@ -72,27 +72,6 @@ const verificarToken = async (req, res, next) => {
 
 
 // ============================================================================
-// 🚀 TÚNEL DE CONEXÃO EM TEMPO REAL (SERVER-SENT EVENTS)
-// ============================================================================
-router.get('/stream', verificarToken, (req, res) => { // <-- Cadeado adicionado aqui!
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders(); 
-
-    const escolaId = req.query.escolaId;
-
-    const enviarEvento = (data) => {
-        if (data.escolaId === escolaId || data.escolaId === 'DEFAULT') {
-            res.write(`data: ${JSON.stringify(data)}\n\n`);
-        }
-    };
-
-    workspaceStream.on('evento_realtime', enviarEvento);
-    req.on('close', () => workspaceStream.off('evento_realtime', enviarEvento));
-});
-
-// ============================================================================
 // 🚀 PLANO B (VIA VERDE): ROTA PARA SOLICITAR BILHETE VIP DE UPLOAD DIRETO
 // ============================================================================
 router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
@@ -2105,11 +2084,11 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🎮 ROTA GENÉRICA DE AVALIAÇÃO DOS JOGOS COM IA (Atualizada para o modelo ativo)
+// 🎮 ROTA GENÉRICA DE AVALIAÇÃO DOS JOGOS COM IA (Atualizada e Robusta)
 // ============================================================================
 router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
     try {
-        const { jogo, palavra, fraseAluno, cenario, pergunta, respostaAluno, historico = [] } = req.body;
+        const { jogo, palavra, fraseAluno, cenario, pergunta, tarefaEspecifica, respostaAluno, historico = [] } = req.body;
         const Groq = require('groq-sdk');
         const chaveApi = process.env.GROQ_API_KEY;
         
@@ -2120,41 +2099,51 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
         let systemPrompt = "";
         let userPrompt = "";
 
-        // 🪄 Jogo 1: Feitiço das Palavras (Formar Frase)
+        // 🪄 Jogo 1: Feitiço das Palavras (Formar Frase com palavra)
         if (jogo === 'wordSpark') {
-            systemPrompt = `Você é um professor de inglês avaliando a frase de um aluno iniciante. A tarefa era usar a palavra "${palavra}" (ou uma variação/conjugação dela).
-            Regras de avaliação rigorosas:
-            1. Se a frase usar a palavra e fizer sentido em inglês, "correto" DEVE ser true.
-            2. Seja tolerante a pequenos erros gramaticais. Se a frase for compreensível, "correto" é true (apenas forneça a versão ideal no campo "correcao").
-            3. Apenas retorne "correto": false se a frase não fizer sentido nenhum ou for escrita totalmente em português.
-            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Feedback super curto em PT-BR elogiando ou explicando o erro", "correcao": "A frase perfeita em inglês", "coins": 50}`;
+            systemPrompt = `Você é um professor de inglês amigável avaliando a frase de um aluno. A palavra obrigatória era "${palavra}".
+            Regras:
+            1. Verifique se o aluno usou a palavra (ou variação correta) e se a frase faz sentido.
+            2. Seja flexível com pequenos erros ortográficos secundários.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Curto elogio ou explicação em PT-BR", "correcao": "Frase ideal em inglês", "coins": 50}`;
             userPrompt = fraseAluno;
         }
         
-        // 📜 Jogo 2: Pergaminho do Herói (Perguntas e Respostas)
+        // 📜 Jogo 2: Pergaminho do Herói (Perguntas e Respostas abertas)
         if (jogo === 'answerQuest') {
             systemPrompt = `Você é um professor de inglês. 
-            Pergunta original: "${pergunta}" 
+            Pergunta proposta: "${pergunta}" 
             Resposta do aluno: "${respostaAluno}"
             Regras:
-            1. Se a resposta tiver relação com a pergunta e estiver maioritariamente em inglês, "correto" DEVE ser true.
-            2. Aceite respostas simples e curtas. Corrija a gramática no campo "correcao".
-            3. Apenas retorne false se não tiver nada a ver com a pergunta.
-            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Elogio ou explicação em PT-BR", "correcao": "Versão melhorada da resposta", "coins": 50}`;
+            1. Verifique se a resposta tem sentido e responde à pergunta em inglês.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Feedback em PT-BR", "correcao": "Versão mais natural da resposta", "coins": 50}`;
             userPrompt = respostaAluno;
         }
 
-        // 🎭 Jogo 3: Manto do Metamorfo (Roleplay)
+        // 🌀 Jogo 3: Labirinto Ilusório (Transformação de Frases / Sentence Shuffle)
+        if (jogo === 'sentenceShuffle') {
+            systemPrompt = `Você é um professor de inglês avaliando transformação de frases.
+            Frase original: "${pergunta}"
+            Instrução aplicada: "${tarefaEspecifica}"
+            Resposta enviada pelo aluno: "${respostaAluno}"
+            Regras:
+            1. Verifique se o aluno aplicou corretamente a instrução ("${tarefaEspecifica}") sobre a frase original.
+            2. Se a estrutura gramatical estiver correta, "correto" é true.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Explicação curta em PT-BR", "correcao": "A frase transformada perfeitamente", "coins": 50}`;
+            userPrompt = respostaAluno;
+        }
+
+        // 🎭 Jogo 4: Manto do Metamorfo (Roleplay conversacional)
         if (jogo === 'contextRole') {
             systemPrompt = `You are an actor in an English roleplay. 
             Scenario: "${cenario?.title}" - "${cenario?.prompt}". 
             History: ${JSON.stringify(historico.slice(-4))}
             Student said: "${respostaAluno}"
             Rules:
-            1. "correto" is ALWAYS true unless they speak pure gibberish.
-            2. Act naturally in character for your next line ("npcResponse"). Keep it to 1 sentence and end with a question to keep conversation flowing.
-            3. If the student made a grammar mistake, provide the correction in "correcao". Otherwise, "correcao" is null.
-            Return ONLY JSON: {"correto": true, "feedback": "Short encouragement in PT-BR", "correcao": "correction or null", "npcResponse": "Your next character line in English"}`;
+            1. "correto" is ALWAYS true unless they speak pure nonsense.
+            2. Continue the roleplay naturally in character ("npcResponse"). Keep it to 1 sentence and end with a question.
+            3. If there is a grammar error, put a short fix in "correcao", else null.
+            Return ONLY JSON: {"correto": true, "feedback": "Short PT-BR encouragement", "correcao": "correction or null", "npcResponse": "Your next character line in English"}`;
             userPrompt = respostaAluno;
         }
 
@@ -2163,20 +2152,17 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
             ],
-            // 🚀 CORREÇÃO: Alterado para o modelo ativo no servidor
             model: 'openai/gpt-oss-120b',
             temperature: 0.3,
             response_format: { type: 'json_object' } 
         });
 
-        // 🧠 Proteção Extra para conversão segura do JSON da IA
         let resultadoTexto = completion.choices[0].message.content;
         let resultado;
         try {
             resultado = JSON.parse(resultadoTexto);
         } catch(parseErr) {
-            console.error("Erro ao fazer parse do JSON da IA:", resultadoTexto);
-            resultado = { correto: false, feedback: "Houve um desvio mágico na avaliação.", correcao: "Por favor, tente formular novamente." };
+            resultado = { correto: false, feedback: "Houve um pequeno desvio na avaliação.", correcao: "Tente enviar novamente." };
         }
 
         res.json({ success: true, ...resultado });
@@ -2186,7 +2172,6 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
         res.status(500).json({ success: false, error: 'Falha na IA do jogo' });
     }
 });
-
 
 
 // ============================================================================
