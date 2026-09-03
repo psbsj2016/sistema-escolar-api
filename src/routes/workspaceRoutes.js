@@ -2152,8 +2152,8 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
             ],
-            // 🚀 CORREÇÃO: Identificador correto do modelo na Groq
-            model: 'openai/gpt-oss-20b',
+            // 🚀 CORREÇÃO: Utilizando o modelo universal de alta velocidade e total compatibilidade na Groq
+            model: 'llama-3.1-8b-instant',
             temperature: 0.3,
             response_format: { type: 'json_object' } 
         });
