@@ -2161,6 +2161,33 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
             userPrompt = respostaAluno;
         }
 
+        // 👁️‍🗨️ Jogo 6: Visão do Alquimista (Picture Pop)
+        if (jogo === 'picturePop') {
+            systemPrompt = `Você é um professor de inglês avaliando a criatividade do aluno.
+            A imagem mostrada ao aluno representa a palavra/conceito: "${palavra}".
+            A frase criada pelo aluno foi: "${respostaAluno}"
+            Regras de avaliação:
+            1. Verifique se a frase tem relação lógica com a palavra/imagem e se está escrita em inglês.
+            2. Se o aluno escreveu uma frase completa (ex: "This is an apple"), elogie muito!
+            3. Se o aluno escreveu apenas a palavra solta (ex: "apple"), "correto" é true, mas no feedback incentive-o fortemente a formar frases completas da próxima vez.
+            4. Se houver erro gramatical, corrija no campo "correcao".
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Avaliação em PT-BR", "correcao": "Frase ideal", "coins": 75}`;
+            userPrompt = respostaAluno;
+        }
+
+        // 🐉 Jogo 7: Sopro do Dragão (Pronúncia de Frases) e Visão do Alquimista por Voz
+        if (jogo === 'readAloud' || jogo === 'picturePopSpeech') {
+            systemPrompt = `Você é um professor de inglês especialista em fonética.
+            A ${jogo === 'readAloud' ? 'frase' : 'palavra'} que o aluno tinha de ler era: "${pergunta}".
+            O microfone captou (transcrição do áudio): "${respostaAluno}".
+            Regras de avaliação:
+            1. O reconhecimento de voz erra muito em palavras homófonas (ex: "two", "to", "too" / "pear", "pair"). Se o que o microfone ouviu soa muito parecido com a palavra original, APROVE ("correto": true), pois significa que o aluno pronunciou o som certo!
+            2. Se a transcrição tiver pequenas omissões causadas pelo microfone, mas o sentido global estiver lá, "correto" é true.
+            3. Se o aluno disse palavras que não têm nada a ver sonoramente com o texto original, "correto" é false.
+            Retorne APENAS um JSON válido: {"correto": true/false, "feedback": "Explicação pedagógica em PT-BR avaliando a pronúncia", "correcao": "Dica de como fazer o som certo (se errou) ou elogio (se acertou)", "coins": 50}`;
+            userPrompt = respostaAluno;
+        }
+
         const completion = await groq.chat.completions.create({
             messages: [
                 { role: 'system', content: systemPrompt },
