@@ -1817,14 +1817,14 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
         if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
-        // 🚀 PROMPT MUSICAL EVOLUÍDO: 14 Dias e nova chave de array genérica
+        // 🚀 PROMPT MUSICAL: Instrução para criar o Minijogo "Fill in the Blanks"
         const systemPrompt = `Você é um professor de INGLÊS especialista em fluência através da música.
         Abaixo estão publicações da turma que contêm vídeos musicais e letras.
         
         REGRAS ABSOLUTAS:
         1. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
         2. ESTRUTURA: Escolha APENAS UMA música das enviadas. Extraia EXATAMENTE 14 frases poderosas (phrasal verbs, gírias ou estruturas gramaticais vitais) dessa música.
-        3. MÉTODO: Crie um plano de estudos prático de 14 dias, designando uma frase para cada dia.
+        3. MINIJOGO (NOVO): Para CADA frase, escolha UMA palavra vital (verbo, substantivo ou gíria) e esconda-a na "fraseOculta" substituindo a palavra exata por "____". Coloque a palavra correta na variável "palavraEscondida".
         
         Retorne APENAS JSON válido com a estrutura exata:
         {
@@ -1833,9 +1833,11 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
             "planoEstudos": [
                 {
                     "dia": 1,
-                    "fraseOriginal": "Frase exata da música em Inglês",
+                    "fraseOriginal": "Frase exata e completa da música",
+                    "fraseOculta": "Frase com a palavra substituída por ____",
+                    "palavraEscondida": "A palavra exata que foi escondida",
                     "traducao": "Tradução contextualizada para Português",
-                    "explicacao": "Explicação curta do vocabulário ou gramática (use HTML <strong> ou <em> se precisar)",
+                    "explicacao": "Explicação curta do foco (use HTML <strong> se precisar)",
                     "desafio": "Um desafio pedindo ao aluno para criar uma frase própria usando a expressão"
                 }
             ]
