@@ -1608,7 +1608,7 @@ router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
 });
 
 // ============================================================================
-// 🧠 HUB DE ESTUDO: IMERSÃO ESPECÍFICA (Curadoria e Quiz gerados por IA)
+// 🧠 HUB DE ESTUDO: IMERSÃO ESPECÍFICA (Curadoria Aguçada, Quiz e Recursos)
 // ============================================================================
 router.post('/posts/imersao', verificarToken, async (req, res) => {
     try {
@@ -1629,16 +1629,24 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             }
         }
 
+        // 1. Radar Duplo: Busca os Posts do Feed E os Materiais da Biblioteca
         const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(40).toArray();
+        const materiaisBrutos = await database.collection('workspace_materiais').find(filtro).sort({ dataCriacao: -1 }).limit(30).toArray();
         
-        // 🚀 MÁGICA 1: Ocultamos o ID do post no texto para a IA poder rastrear a origem!
-        const conteudoParaIA = postsBrutos.map(p => {
-            let infoAnexos = (p.anexos || []).map(a => a.nome).join(', ');
-            return `[ID_DO_POST: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''} ${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
+        // 2. Formatamos tudo com as "Etiquetas de Identificação" para a IA
+        const conteudoPosts = postsBrutos.map(p => {
+            let infoAnexos = (p.anexos || []).map(a => a.nome + ' (' + a.tipo + ')').join(', ');
+            return `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''} ${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
         }).join('\n\n');
 
-        if (!conteudoParaIA.trim()) {
-            return res.status(400).json({ error: 'Não há conteúdo suficiente no feed para criar uma imersão.' });
+        const conteudoMateriais = materiaisBrutos.map(m => {
+            return `[MATERIAL_ID: ${m.id} | Autor: ${m.autorNome} | Título: ${m.titulo || ''}]: Descrição: ${m.descricao || ''}. Ficheiro: ${m.nomeOriginal || m.url}`;
+        }).join('\n\n');
+
+        const conteudoParaIA = `--- PUBLICAÇÕES DO FEED ---\n${conteudoPosts}\n\n--- MATERIAIS DA ESCOLA ---\n${conteudoMateriais}`;
+
+        if (!conteudoPosts.trim() && !conteudoMateriais.trim()) {
+            return res.status(400).json({ error: 'Não há conteúdo suficiente na plataforma para criar uma imersão.' });
         }
 
         const Groq = require('groq-sdk');
@@ -1647,33 +1655,28 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
         const instrucaoFoco = termoBusca 
-            ? `O aluno quer focar-se e pesquisou por: "${termoBusca}". Filtra e foca a tua aula apenas no conteúdo relacionado com este tema.` 
-            : `Cria uma imersão com base nos temas mais frequentes e importantes encontrados nestes posts.`;
+            ? `O aluno quer focar-se em: "${termoBusca}". Filtra e foca a tua análise estritamente neste tema.` 
+            : `Cria uma imersão com base nos temas mais importantes encontrados nestes conteúdos.`;
 
-        // 🚀 MÁGICA 2: Ensinamos a IA a devolver a array "postsRelacionados"
-        const systemPrompt = `Você é a Inteligência Artificial da área 'Imersão Específica' de uma escola de inglês.
-        Abaixo estão as publicações recentes do Feed da escola.
+        // 🚀 PROMPT DE ALTA EXIGÊNCIA: A IA agora é uma curadora rigorosa!
+        const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica'.
+        Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
         ${instrucaoFoco}
         
-        A sua missão é atuar como um curador genial:
+        A sua missão é atuar como um curador genial e rigoroso:
         1. Crie um "titulo" cativante.
-        2. Escreva um "resumo" didático (em português, com exemplos em inglês) formatado em HTML básico.
-        3. Identifique até 6 posts que contêm os melhores recursos multimídia ou dicas sobre o tema e guarde os IDs exatos deles na array "postsRelacionados".
-        4. Crie um "quiz" com 3 perguntas de múltipla escolha.
+        2. Escreva um "resumo" didático em português (com exemplos em inglês) formatado em HTML (<br>, <strong>, <em>).
+        3. AVALIAÇÃO PROFUNDA: Procure vídeos, PDFs, imagens e textos que tratem deste assunto de forma ACENTUADA. O tema deve ser o foco principal do recurso ou ter uma aplicação prática profunda. Ignore menções superficiais.
+        4. Guarde os IDs das publicações do feed escolhidas na array "postsRelacionados" e os IDs dos materiais do professor escolhidos na array "materiaisRelacionados". Máximo de 6 recursos no total.
+        5. Crie um "quiz" com 3 perguntas de múltipla escolha.
         
-        Retorne APENAS JSON válido com a seguinte estrutura:
+        Retorne APENAS JSON válido com a estrutura exata:
         {
-            "titulo": "Título da Imersão",
-            "resumo": "Texto formatado...",
-            "postsRelacionados": ["ID_A", "ID_B"],
-            "quiz": [
-                {
-                    "pergunta": "...",
-                    "opcoes": ["A", "B", "C", "D"],
-                    "respostaCorreta": 1, 
-                    "explicacao": "..."
-                }
-            ]
+            "titulo": "Título",
+            "resumo": "Texto resumo...",
+            "postsRelacionados": ["POST_ID_1"],
+            "materiaisRelacionados": ["MATERIAL_ID_1"],
+            "quiz": [{"pergunta": "...","opcoes": ["A", "B", "C", "D"],"respostaCorreta": 1, "explicacao": "..."}]
         }`;
 
         const completion = await groq.chat.completions.create({
@@ -1681,17 +1684,24 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: conteudoParaIA }
             ],
-            model: 'openai/gpt-oss-120b', // O seu modelo testado e seguro!
-            temperature: 0.4, 
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.2, // Reduzimos a temperatura para ela ser hiper-focada e lógica!
             response_format: { type: 'json_object' } 
         });
 
         const imersaoGerada = JSON.parse(completion.choices[0].message.content);
-        res.status(200).json({ success: true, imersao: imersaoGerada });
+        
+        // 3. O Servidor resolve os Materiais escolhidos pela IA e manda prontos para o Frontend
+        let materiaisDetalhados = [];
+        if (imersaoGerada.materiaisRelacionados && imersaoGerada.materiaisRelacionados.length > 0) {
+            materiaisDetalhados = materiaisBrutos.filter(m => imersaoGerada.materiaisRelacionados.includes(m.id));
+        }
+
+        res.status(200).json({ success: true, imersao: imersaoGerada, materiaisExtras: materiaisDetalhados });
 
     } catch (error) {
         console.error("🚨 Erro na Imersão Específica:", error);
-        res.status(500).json({ error: 'O motor de imersão está sobrecarregado. Tente novamente em breves instantes.' });
+        res.status(500).json({ error: 'O motor de imersão falhou. Tente pesquisar novamente.' });
     }
 });
 
