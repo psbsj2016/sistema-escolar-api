@@ -1658,17 +1658,22 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             ? `O aluno quer focar-se em: "${termoBusca}". Filtra e foca a tua análise estritamente neste tema.` 
             : `Cria uma imersão com base nos temas mais importantes encontrados nestes conteúdos.`;
 
-       // 🚀 PROMPT DE ALTA EXIGÊNCIA: Sem limites de texto e criador automático de Anotações!
-        const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica'.
+      // 🚀 PROMPT DE ALTA EXIGÊNCIA E PROFESSOR RESTRITO
+        const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
         Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
         ${instrucaoFoco}
         
-        A sua missão é atuar como um curador genial e rigoroso:
+        REGRAS ABSOLUTAS E INQUEBRÁVEIS:
+        1. IDIOMA: Você ensina EXCLUSIVAMENTE Inglês (explicando em Português). Se o aluno digitar um termo de outro idioma (ex: 'nous' do francês), assuma que foi um erro de digitação (ele queria dizer 'nouns' em inglês) e foque a aula em Inglês. NUNCA ensine outros idiomas.
+        2. FORMATAÇÃO: Use APENAS HTML puro (<br>, <strong>, <em>, <u>, <ul>, <li>, <table>, <tr>, <th>, <td>). NUNCA use atributos nas tags (ex: NUNCA use style="...", border="1", class, etc). NUNCA use a tag <span>.
+        3. VOLUME: Se o aluno pedir uma quantidade (ex: 20 palavras), forneça EXATAMENTE a quantidade. Nunca abrevie, nunca corte o texto e nunca diga "...(continua)". Entregue a resposta completa, por mais longa que fique.
+        
+        A sua missão:
         1. Crie um "titulo" cativante.
-        2. Escreva um "resumo" didático, PROFUNDO e COMPLETO em português (com exemplos em inglês) formatado em HTML (<br>, <strong>, <em>, <u>, <ul>, <li>). ATENÇÃO ABSOLUTA: Se o aluno pedir uma quantidade específica (ex: 20 palavras), DEVE fornecer exatamente a quantidade solicitada. NUNCA abrevie, nunca corte o texto e nunca use expressões como "...(continua)...". Entregue de forma integral e detalhada, não importando quão longo fique.
-        3. Procure vídeos, PDFs e imagens relevantes sobre este assunto e guarde os IDs exatos deles na array "postsRelacionados" ou "materiaisRelacionados".
+        2. Escreva o "resumo" didático, PROFUNDO e COMPLETO obedecendo as regras acima.
+        3. Procure vídeos/PDFs relevantes e guarde os IDs em "postsRelacionados" ou "materiaisRelacionados" (Máximo 6).
         4. Crie um "quiz" com 3 perguntas de múltipla escolha.
-        5. NOVO: Crie um material de revisão de alto valor (como a lista de palavras/frases ou regras principais). Coloque um título curto em "tituloNota" e o conteúdo muito bem formatado em HTML (com títulos e listas) em "conteudoParaNota". Isto será oferecido ao aluno para guardar no Baú das Memórias.
+        5. Crie um material de revisão focado no pedido. Coloque um título em "tituloNota" e o conteúdo formatado em "conteudoParaNota" (para o Baú das Memórias).
         
         Retorne APENAS JSON válido com a estrutura exata:
         {
@@ -1719,9 +1724,13 @@ router.post('/posts/imersao/mais-quiz', verificarToken, async (req, res) => {
         if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
-        const systemPrompt = `Você é a Inteligência Artificial curadora da 'Imersão Específica'.
+       const systemPrompt = `Você é a Inteligência Artificial curadora da 'Imersão Específica' de uma escola de INGLÊS.
         O aluno está a testar os seus conhecimentos sobre o tema: "${titulo}".
         O resumo estudado foi: "${resumo}".
+        
+        REGRAS ABSOLUTAS:
+        1. IDIOMA: O foco é EXCLUSIVAMENTE INGLÊS. Se o tema parecer de outro idioma (ex: francês), assuma que foi um erro de digitação e crie perguntas focadas no Inglês.
+        2. FORMATAÇÃO: Use APENAS HTML puro (<strong>, <em>, <u>). NUNCA use atributos como style ou class.
         
         A sua missão é criar 3 NOVAS perguntas de múltipla escolha para testar o aluno com base nesse tema. As perguntas não devem repetir o que já foi perguntado e devem puxar pelo pensamento crítico.
         
