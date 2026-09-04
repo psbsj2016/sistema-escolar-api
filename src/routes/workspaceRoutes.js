@@ -1770,4 +1770,100 @@ router.post('/posts/imersao/mais-quiz', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🎶 HUB DE ESTUDO: IMERSÃO MUSICAL (7 Dias de Fluência)
+// ============================================================================
+router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
+    try {
+        const { alunoRefId, escolaId } = req.body;
+        const database = await connectDB();
+        
+        let filtro = { escolaId: escolaId || 'DEFAULT' };
+        if (alunoRefId && alunoRefId !== 'undefined') {
+            const aluno = await database.collection('alunos').findOne({ id: alunoRefId });
+            if (aluno) {
+                let minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas || aluno.turma];
+                filtro = { 
+                    $and: [
+                        { escolaId: escolaId || 'DEFAULT' },
+                        { $or: [{ destino: 'global' }, { destino: { $in: minhasTurmas } }, { destinoNome: { $in: minhasTurmas } }] }
+                    ]
+                };
+            }
+        }
+
+        // 1. Busca os últimos 50 posts para filtrar os musicais
+        const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(50).toArray();
+        
+        // 2. Filtra estritamente posts que contenham vídeo/áudio E palavras-chave musicais
+        const palavrasMusica = ['letra', 'lyrics', 'música', 'musica', 'song', 'sing', 'cantor', 'banda', 'clipe'];
+        const postsMusicais = postsBrutos.filter(p => {
+            const texto = (p.texto || '').toLowerCase();
+            const temPalavraChave = palavrasMusica.some(palavra => texto.includes(palavra));
+            
+            const temMidiaAnexa = p.anexos && p.anexos.some(a => a.tipo.includes('video') || a.tipo.includes('audio'));
+            const temMidiaLink = texto.includes('youtube.com') || texto.includes('youtu.be') || texto.includes('spotify.com');
+            
+            return temPalavraChave && (temMidiaAnexa || temMidiaLink);
+        });
+
+        if (postsMusicais.length === 0) {
+            return res.status(400).json({ error: 'Nenhuma música partilhada recentemente no Feed da sua turma. Partilhe um vídeo musical com a letra para ativar este modo!' });
+        }
+
+        // Prepara os dados limitados para a IA analisar
+        const conteudoParaIA = postsMusicais.slice(0, 5).map(p => `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''}`).join('\n\n');
+
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+
+        // 🚀 PROMPT MUSICAL: Foco em 7 dias de repetição espaçada
+        const systemPrompt = `Você é um professor de INGLÊS especialista em fluência através da música.
+        Abaixo estão publicações recentes da turma que contêm vídeos musicais e letras.
+        
+        REGRAS ABSOLUTAS:
+        1. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
+        2. ESTRUTURA: Escolha APENAS UMA música das enviadas. Extraia EXATAMENTE 7 frases poderosas (phrasal verbs, gírias ou estruturas gramaticais vitais) dessa música.
+        3. MÉTODO: Crie um plano de estudos prático de 7 dias, designando uma frase para cada dia.
+        
+        Retorne APENAS JSON válido com a estrutura exata:
+        {
+            "tituloMusica": "Nome da Música e Artista",
+            "idPostEscolhido": "ID_DO_POST",
+            "plano7Dias": [
+                {
+                    "dia": 1,
+                    "fraseOriginal": "Frase exata da música em Inglês",
+                    "traducao": "Tradução contextualizada para Português",
+                    "explicacao": "Explicação curta do vocabulário ou gramática (use HTML <strong> ou <em> se precisar)",
+                    "desafio": "Um desafio pedindo ao aluno para criar uma frase própria usando a expressão"
+                }
+            ]
+        }`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: conteudoParaIA }
+            ],
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.3, 
+            response_format: { type: 'json_object' } 
+        });
+
+        const imersaoGerada = JSON.parse(completion.choices[0].message.content);
+        
+        // Pega os dados completos do post escolhido pela IA para o Frontend desenhar o vídeo
+        const postOriginal = postsMusicais.find(p => String(p.id) === String(imersaoGerada.idPostEscolhido));
+
+        res.status(200).json({ success: true, plano: imersaoGerada, postOriginal: postOriginal });
+
+    } catch (error) {
+        console.error("🚨 Erro na Imersão Musical:", error);
+        res.status(500).json({ error: 'O motor musical falhou. Certifique-se de que partilhou um vídeo com a letra da música recentemente.' });
+    }
+});
+
 module.exports = router;
