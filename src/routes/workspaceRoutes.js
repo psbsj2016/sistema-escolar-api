@@ -1134,8 +1134,14 @@ router.put('/materiais/:id', verificarToken, async (req, res) => {
         await db.collection('workspace_materiais').updateOne(
             { id: materialId }, 
             { $set: {
-                titulo: materialAtualizado.titulo, descricao: materialAtualizado.descricao, destino: materialAtualizado.destino,
-                destinoNome: materialAtualizado.destinoNome, url: materialAtualizado.url, tipoFicheiro: materialAtualizado.tipoFicheiro, nomeOriginal: materialAtualizado.nomeOriginal
+                titulo: materialAtualizado.titulo, 
+                descricao: materialAtualizado.descricao, 
+                tags: materialAtualizado.tags, // 🚀 NOVO: Guarda as palavras-chave na BD
+                destino: materialAtualizado.destino,
+                destinoNome: materialAtualizado.destinoNome, 
+                url: materialAtualizado.url, 
+                tipoFicheiro: materialAtualizado.tipoFicheiro, 
+                nomeOriginal: materialAtualizado.nomeOriginal
             }}
         );
 
@@ -1639,8 +1645,10 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             return `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''} ${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
         }).join('\n\n');
 
+       // 🚀 MÁGICA DE METADADOS: Passa as palavras-chave diretamente para a Inteligência Artificial ler!
         const conteudoMateriais = materiaisBrutos.map(m => {
-            return `[MATERIAL_ID: ${m.id} | Autor: ${m.autorNome} | Título: ${m.titulo || ''}]: Descrição: ${m.descricao || ''}. Ficheiro: ${m.nomeOriginal || m.url}`;
+        const tagsInfo = m.tags ? ` | Palavras-Chave (Prioridade Máxima): ${m.tags}` : '';
+        return `[MATERIAL_ID: ${m.id} | Autor: ${m.autorNome} | Título: ${m.titulo || ''}${tagsInfo}]: Descrição: ${m.descricao || ''}. Ficheiro: ${m.nomeOriginal || m.url}`;
         }).join('\n\n');
 
         const conteudoParaIA = `--- PUBLICAÇÕES DO FEED ---\n${conteudoPosts}\n\n--- MATERIAIS DA ESCOLA ---\n${conteudoMateriais}`;
@@ -1658,22 +1666,22 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             ? `O aluno quer focar-se em: "${termoBusca}". Filtra e foca a tua análise estritamente neste tema.` 
             : `Cria uma imersão com base nos temas mais importantes encontrados nestes conteúdos.`;
 
-      // 🚀 PROMPT DE ALTA EXIGÊNCIA E PROFESSOR RESTRITO
+      // 🚀 PROMPT EXTREMO: Dá ordem estrita para a IA rastrear as Palavras-Chave
         const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
         Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
         ${instrucaoFoco}
         
         REGRAS ABSOLUTAS E INQUEBRÁVEIS:
-        1. IDIOMA: Você ensina EXCLUSIVAMENTE Inglês (explicando em Português). Se o aluno digitar um termo de outro idioma (ex: 'nous' do francês), assuma que foi um erro de digitação (ele queria dizer 'nouns' em inglês) e foque a aula em Inglês. NUNCA ensine outros idiomas.
-        2. FORMATAÇÃO: Use APENAS HTML puro (<br>, <strong>, <em>, <u>, <ul>, <li>, <table>, <tr>, <th>, <td>). NUNCA use atributos nas tags (ex: NUNCA use style="...", border="1", class, etc). NUNCA use a tag <span>.
-        3. VOLUME: Se o aluno pedir uma quantidade (ex: 20 palavras), forneça EXATAMENTE a quantidade. Nunca abrevie, nunca corte o texto e nunca diga "...(continua)". Entregue a resposta completa, por mais longa que fique.
+        1. IDIOMA: Você ensina EXCLUSIVAMENTE Inglês (explicando em Português).
+        2. FORMATAÇÃO: Use APENAS HTML puro (<strong>, <em>, <u>, <ul>, <li>, <table>, <tr>, <th>, <td>). NUNCA use atributos nas tags (ex: style, border).
+        3. VOLUME: Entregue a resposta completa, exatamente como solicitada pelo aluno, por mais longa que fique.
         
         A sua missão:
         1. Crie um "titulo" cativante.
-        2. Escreva o "resumo" didático, PROFUNDO e COMPLETO obedecendo as regras acima.
-        3. Procure vídeos/PDFs relevantes e guarde os IDs em "postsRelacionados" ou "materiaisRelacionados" (Máximo 6).
-        4. Crie um "quiz" com 3 perguntas de múltipla escolha.
-        5. Crie um material de revisão focado no pedido. Coloque um título em "tituloNota" e o conteúdo formatado em "conteudoParaNota" (para o Baú das Memórias).
+        2. Escreva o "resumo" didático longo.
+        3. AVALIAÇÃO DE EXATIDÃO: Procure vídeos/PDFs relevantes. ATENÇÃO: DÊ PRIORIDADE MÁXIMA ABSOLUTA aos recursos cujas "Palavras-Chave (Prioridade Máxima)" correspondam diretamente ao pedido do aluno. Guarde os IDs em "postsRelacionados" ou "materiaisRelacionados" (Máximo 6).
+        4. Crie um "quiz" com 3 perguntas.
+        5. Crie um material de revisão focado ("tituloNota" e "conteudoParaNota").
         
         Retorne APENAS JSON válido com a estrutura exata:
         {
