@@ -1771,60 +1771,52 @@ router.post('/posts/imersao/mais-quiz', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🎶 HUB DE ESTUDO: IMERSÃO MUSICAL (14 Dias de Fluência)
+// 🎶 HUB DE ESTUDO: IMERSÃO MUSICAL (Minijogo e 14 Dias de Fluência)
 // ============================================================================
 router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
     try {
-        const { alunoRefId, escolaId } = req.body;
+        const { escolaId } = req.body;
         const database = await connectDB();
         
-        let filtro = { escolaId: escolaId || 'DEFAULT' };
-        if (alunoRefId && alunoRefId !== 'undefined') {
-            const aluno = await database.collection('alunos').findOne({ id: alunoRefId });
-            if (aluno) {
-                let minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas || aluno.turma];
-                filtro = { 
-                    $and: [
-                        { escolaId: escolaId || 'DEFAULT' },
-                        { $or: [{ destino: 'global' }, { destino: { $in: minhasTurmas } }, { destinoNome: { $in: minhasTurmas } }] }
-                    ]
-                };
-            }
-        }
+        // 🚀 MUDANÇA 1: Liberdade Total!
+        // Removemos a restrição de "destino" (turma vs global). 
+        // A IA agora varre todas as publicações da escola para encontrar músicas.
+        const filtro = { escolaId: escolaId || 'DEFAULT' };
 
-        // 🚀 O LIMITE FOI REMOVIDO: A IA agora vasculha o histórico completo da turma!
-        const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).toArray();
+        // Puxamos os últimos 100 posts para ter uma base de dados rica
+        const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(100).toArray();
         
-        const palavrasMusica = ['letra', 'lyrics', 'música', 'musica', 'song', 'sing', 'cantor', 'banda', 'clipe'];
+        // 🚀 MUDANÇA 2: Filtro Super Flexível
+        // Agora, BASTA ter um link (YouTube, Spotify, etc.) ou um anexo de vídeo/áudio para a IA o analisar.
         const postsMusicais = postsBrutos.filter(p => {
             const texto = (p.texto || '').toLowerCase();
-            const temPalavraChave = palavrasMusica.some(palavra => texto.includes(palavra));
-            
             const temMidiaAnexa = p.anexos && p.anexos.some(a => a.tipo.includes('video') || a.tipo.includes('audio'));
             const temMidiaLink = texto.includes('youtube.com') || texto.includes('youtu.be') || texto.includes('tiktok.com') || texto.includes('spotify.com');
             
-            return temPalavraChave && (temMidiaAnexa || temMidiaLink);
+            return temMidiaAnexa || temMidiaLink;
         });
 
         if (postsMusicais.length === 0) {
-            return res.status(400).json({ error: 'Nenhuma música partilhada no Feed da sua turma. Partilhe um vídeo musical com a letra para ativar este modo!' });
+            return res.status(400).json({ error: 'Não encontrei vídeos ou áudios no Feed. Partilhe um link do YouTube ou Spotify para ativarmos o modo musical!' });
         }
 
-        const conteudoParaIA = postsMusicais.slice(0, 10).map(p => `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''}`).join('\n\n');
+        // Enviamos os 15 vídeos mais recentes para a IA escolher o melhor
+        const conteudoParaIA = postsMusicais.slice(0, 15).map(p => `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''}`).join('\n\n');
 
         const Groq = require('groq-sdk');
         const chaveApi = process.env.GROQ_API_KEY;
         if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
-        // 🚀 PROMPT MUSICAL: Instrução para criar o Minijogo "Fill in the Blanks"
+        // 🚀 PROMPT MUSICAL: Instrução para selecionar a música e criar o Minijogo
         const systemPrompt = `Você é um professor de INGLÊS especialista em fluência através da música.
-        Abaixo estão publicações da turma que contêm vídeos musicais e letras.
+        Abaixo estão publicações do Feed da plataforma contendo vídeos e links.
         
         REGRAS ABSOLUTAS:
-        1. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
-        2. ESTRUTURA: Escolha APENAS UMA música das enviadas. Extraia EXATAMENTE 14 frases poderosas (phrasal verbs, gírias ou estruturas gramaticais vitais) dessa música.
-        3. MINIJOGO (NOVO): Para CADA frase, escolha UMA palavra vital (verbo, substantivo ou gíria) e esconda-a na "fraseOculta" substituindo a palavra exata por "____". Coloque a palavra correta na variável "palavraEscondida".
+        1. SELEÇÃO: Analise os posts abaixo e ESCOLHA APENAS UM que seja claramente uma MÚSICA.
+        2. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
+        3. ESTRUTURA: Extraia EXATAMENTE 14 frases vitais (phrasal verbs, gírias ou gramática) dessa música para um plano de 14 dias.
+        4. MINIJOGO: Para CADA frase, escolha UMA palavra vital e esconda-a na "fraseOculta" substituindo-a por "____". Coloque a palavra correta em "palavraEscondida".
         
         Retorne APENAS JSON válido com a estrutura exata:
         {
@@ -1860,7 +1852,9 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
 
     } catch (error) {
         console.error("🚨 Erro na Imersão Musical:", error);
-        res.status(500).json({ error: 'O motor musical falhou. Certifique-se de que partilhou um vídeo com a letra da música recentemente.' });
+        res.status(500).json({ error: 'O motor musical falhou. Certifique-se de que há vídeos musicais no Feed.' });
     }
 });
+
+
 module.exports = router;
