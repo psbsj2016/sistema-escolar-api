@@ -1683,8 +1683,9 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: conteudoParaIA }
             ],
-            model: 'llama-3.1-8b-instant', // Modelo ultra-rápido para manter a imersão fluida
-            temperature: 0.4, // Baixa criatividade para garantir que foca nos dados reais dos posts
+            // 🚀 CORREÇÃO AQUI: Restaurado o modelo funcional que a sua conta permite!
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.4, 
             response_format: { type: 'json_object' } 
         });
 
