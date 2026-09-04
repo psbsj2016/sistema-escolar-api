@@ -1658,25 +1658,27 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             ? `O aluno quer focar-se em: "${termoBusca}". Filtra e foca a tua análise estritamente neste tema.` 
             : `Cria uma imersão com base nos temas mais importantes encontrados nestes conteúdos.`;
 
-        // 🚀 PROMPT DE ALTA EXIGÊNCIA: A IA agora é uma curadora rigorosa!
+       // 🚀 PROMPT DE ALTA EXIGÊNCIA: Sem limites de texto e criador automático de Anotações!
         const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica'.
         Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
         ${instrucaoFoco}
         
         A sua missão é atuar como um curador genial e rigoroso:
         1. Crie um "titulo" cativante.
-        2. Escreva um "resumo" didático em português (com exemplos em inglês) formatado em HTML (<br>, <strong>, <em>).
-        3. AVALIAÇÃO PROFUNDA: Procure vídeos, PDFs, imagens e textos que tratem deste assunto de forma ACENTUADA. O tema deve ser o foco principal do recurso ou ter uma aplicação prática profunda. Ignore menções superficiais.
-        4. Guarde os IDs das publicações do feed escolhidas na array "postsRelacionados" e os IDs dos materiais do professor escolhidos na array "materiaisRelacionados". Máximo de 6 recursos no total.
-        5. Crie um "quiz" com 3 perguntas de múltipla escolha.
+        2. Escreva um "resumo" didático, PROFUNDO e COMPLETO em português (com exemplos em inglês) formatado em HTML (<br>, <strong>, <em>, <u>, <ul>, <li>). ATENÇÃO ABSOLUTA: Se o aluno pedir uma quantidade específica (ex: 20 palavras), DEVE fornecer exatamente a quantidade solicitada. NUNCA abrevie, nunca corte o texto e nunca use expressões como "...(continua)...". Entregue de forma integral e detalhada, não importando quão longo fique.
+        3. Procure vídeos, PDFs e imagens relevantes sobre este assunto e guarde os IDs exatos deles na array "postsRelacionados" ou "materiaisRelacionados".
+        4. Crie um "quiz" com 3 perguntas de múltipla escolha.
+        5. NOVO: Crie um material de revisão de alto valor (como a lista de palavras/frases ou regras principais). Coloque um título curto em "tituloNota" e o conteúdo muito bem formatado em HTML (com títulos e listas) em "conteudoParaNota". Isto será oferecido ao aluno para guardar no Baú das Memórias.
         
         Retorne APENAS JSON válido com a estrutura exata:
         {
             "titulo": "Título",
-            "resumo": "Texto resumo...",
+            "resumo": "Texto resumo longo e integral...",
             "postsRelacionados": ["POST_ID_1"],
             "materiaisRelacionados": ["MATERIAL_ID_1"],
-            "quiz": [{"pergunta": "...","opcoes": ["A", "B", "C", "D"],"respostaCorreta": 1, "explicacao": "..."}]
+            "quiz": [{"pergunta": "...","opcoes": ["A", "B", "C", "D"],"respostaCorreta": 1, "explicacao": "..."}],
+            "tituloNota": "Anotações: Tema",
+            "conteudoParaNota": "Conteúdo bem formatado em HTML..."
         }`;
 
         const completion = await groq.chat.completions.create({
