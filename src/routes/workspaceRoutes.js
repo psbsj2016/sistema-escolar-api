@@ -1608,7 +1608,7 @@ router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
 });
 
 // ============================================================================
-// 🧠 HUB DE ESTUDO: IMERSÃO ESPECÍFICA (Curadoria, Quiz e Recursos)
+// 🧠 HUB DE ESTUDO: IMERSÃO ESPECÍFICA (Curadoria e Quiz gerados por IA)
 // ============================================================================
 router.post('/posts/imersao', verificarToken, async (req, res) => {
     try {
@@ -1629,12 +1629,12 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             }
         }
 
-        const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(50).toArray();
+        const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(40).toArray();
         
-        // 🚀 MÁGICA 1: Injetamos o ID do post oculto no texto para a IA poder rastrear!
+        // 🚀 MÁGICA 1: Ocultamos o ID do post no texto para a IA poder rastrear a origem!
         const conteudoParaIA = postsBrutos.map(p => {
             let infoAnexos = (p.anexos || []).map(a => a.nome).join(', ');
-            return `[ID_DO_POST: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''} ${infoAnexos ? '(Anexos disponíveis: ' + infoAnexos + ')' : ''}`;
+            return `[ID_DO_POST: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''} ${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
         }).join('\n\n');
 
         if (!conteudoParaIA.trim()) {
@@ -1647,25 +1647,25 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
         const instrucaoFoco = termoBusca 
-            ? `O aluno quer focar-se em: "${termoBusca}". Filtra e foca a tua análise estritamente neste tema.` 
-            : `Cria uma imersão com base nos temas mais importantes encontrados nestes posts.`;
+            ? `O aluno quer focar-se e pesquisou por: "${termoBusca}". Filtra e foca a tua aula apenas no conteúdo relacionado com este tema.` 
+            : `Cria uma imersão com base nos temas mais frequentes e importantes encontrados nestes posts.`;
 
-        // 🚀 MÁGICA 2: Ensinamos a IA a extrair os IDs e devolver na variável "postsRelacionados"
-        const systemPrompt = `Você é a Inteligência Artificial da área 'Imersão Específica'.
-        Abaixo estão as publicações recentes da escola.
+        // 🚀 MÁGICA 2: Ensinamos a IA a devolver a array "postsRelacionados"
+        const systemPrompt = `Você é a Inteligência Artificial da área 'Imersão Específica' de uma escola de inglês.
+        Abaixo estão as publicações recentes do Feed da escola.
         ${instrucaoFoco}
         
-        A sua missão é:
+        A sua missão é atuar como um curador genial:
         1. Crie um "titulo" cativante.
-        2. Escreva um "resumo" didático em português (com exemplos em inglês) usando formatação HTML básica (<br>, <strong>, <em>).
-        3. Identifique até 6 posts que contêm os melhores recursos (documentos, powerpoints, vídeos ou dicas vitais) sobre este tema, e guarde o ID exato deles na array "postsRelacionados".
+        2. Escreva um "resumo" didático (em português, com exemplos em inglês) formatado em HTML básico.
+        3. Identifique até 6 posts que contêm os melhores recursos multimídia ou dicas sobre o tema e guarde os IDs exatos deles na array "postsRelacionados".
         4. Crie um "quiz" com 3 perguntas de múltipla escolha.
         
-        Retorne APENAS JSON válido com a estrutura exata:
+        Retorne APENAS JSON válido com a seguinte estrutura:
         {
-            "titulo": "Título",
-            "resumo": "Texto resumo...",
-            "postsRelacionados": ["ID_DO_POST_A", "ID_DO_POST_B"],
+            "titulo": "Título da Imersão",
+            "resumo": "Texto formatado...",
+            "postsRelacionados": ["ID_A", "ID_B"],
             "quiz": [
                 {
                     "pergunta": "...",
@@ -1681,8 +1681,8 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: conteudoParaIA }
             ],
-            model: 'openai/gpt-oss-120b', // 🚀 Mantemos o modelo seguro e testado!
-            temperature: 0.3, 
+            model: 'openai/gpt-oss-120b', // O seu modelo testado e seguro!
+            temperature: 0.4, 
             response_format: { type: 'json_object' } 
         });
 
@@ -1691,7 +1691,7 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
 
     } catch (error) {
         console.error("🚨 Erro na Imersão Específica:", error);
-        res.status(500).json({ error: 'O motor de imersão falhou. Tente pesquisar novamente.' });
+        res.status(500).json({ error: 'O motor de imersão está sobrecarregado. Tente novamente em breves instantes.' });
     }
 });
 
