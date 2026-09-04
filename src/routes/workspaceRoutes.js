@@ -1719,31 +1719,28 @@ router.post('/posts/imersao/mais-quiz', verificarToken, async (req, res) => {
         if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
-      // 🚀 PROMPT DE ALTA EXIGÊNCIA E ZERO PREGUIÇA: A IA agora é uma curadora rigorosa que escreve TUDO!
-        const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica'.
-        Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
-        ${instrucaoFoco}
+        const systemPrompt = `Você é a Inteligência Artificial curadora da 'Imersão Específica'.
+        O aluno está a testar os seus conhecimentos sobre o tema: "${titulo}".
+        O resumo estudado foi: "${resumo}".
         
-        A sua missão é atuar como um curador genial e rigoroso:
-        1. Crie um "titulo" cativante.
-        2. Escreva um "resumo" didático, PROFUNDO e COMPLETO em português (com exemplos em inglês) formatado em HTML (<br>, <strong>, <em>, <u>, <ul>, <li>). ATENÇÃO: NUNCA abrevie, nunca corte o texto e nunca use expressões como "...(continua)...". Entregue exatamente o que o aluno pediu, de forma integral, detalhada e rica, não importando quão longo o texto final fique.
-        3. AVALIAÇÃO PROFUNDA: Procure vídeos, PDFs, imagens e textos que tratem deste assunto de forma ACENTUADA. O tema deve ser o foco principal do recurso ou ter uma aplicação prática profunda. Ignore menções superficiais.
-        4. Guarde os IDs das publicações do feed escolhidas na array "postsRelacionados" e os IDs dos materiais do professor escolhidos na array "materiaisRelacionados". Máximo de 6 recursos no total.
-        5. Crie um "quiz" com 3 perguntas de múltipla escolha.
+        A sua missão é criar 3 NOVAS perguntas de múltipla escolha para testar o aluno com base nesse tema. As perguntas não devem repetir o que já foi perguntado e devem puxar pelo pensamento crítico.
         
         Retorne APENAS JSON válido com a estrutura exata:
         {
-            "titulo": "Título",
-            "resumo": "Texto resumo longo e integral...",
-            "postsRelacionados": ["POST_ID_1"],
-            "materiaisRelacionados": ["MATERIAL_ID_1"],
-            "quiz": [{"pergunta": "...","opcoes": ["A", "B", "C", "D"],"respostaCorreta": 1, "explicacao": "..."}]
+            "quiz": [
+                {
+                    "pergunta": "...",
+                    "opcoes": ["A", "B", "C", "D"],
+                    "respostaCorreta": 1, 
+                    "explicacao": "..."
+                }
+            ]
         }`;
 
         const completion = await groq.chat.completions.create({
             messages: [{ role: 'system', content: systemPrompt }],
-            model: 'openai/gpt-oss-120b', // O nosso modelo rápido e fiável
-            temperature: 0.5, // Um pouco mais de criatividade para diversificar as perguntas
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.5, 
             response_format: { type: 'json_object' } 
         });
 
