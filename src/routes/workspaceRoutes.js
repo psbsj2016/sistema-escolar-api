@@ -1705,4 +1705,50 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🧠 HUB DE ESTUDO: GERAR MAIS QUIZ (Imersão Específica)
+// ============================================================================
+router.post('/posts/imersao/mais-quiz', verificarToken, async (req, res) => {
+    try {
+        const { titulo, resumo } = req.body;
+        
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+
+        const systemPrompt = `Você é a Inteligência Artificial curadora da 'Imersão Específica'.
+        O aluno está a testar os seus conhecimentos sobre o tema: "${titulo}".
+        O resumo estudado foi: "${resumo}".
+        
+        A sua missão é criar 3 NOVAS perguntas de múltipla escolha para testar o aluno com base nesse tema. As perguntas não devem repetir o que já foi perguntado e devem puxar pelo pensamento crítico.
+        
+        Retorne APENAS JSON válido com a estrutura exata:
+        {
+            "quiz": [
+                {
+                    "pergunta": "...",
+                    "opcoes": ["A", "B", "C", "D"],
+                    "respostaCorreta": 1, 
+                    "explicacao": "..."
+                }
+            ]
+        }`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'system', content: systemPrompt }],
+            model: 'openai/gpt-oss-120b', // O nosso modelo rápido e fiável
+            temperature: 0.5, // Um pouco mais de criatividade para diversificar as perguntas
+            response_format: { type: 'json_object' } 
+        });
+
+        const novasPerguntas = JSON.parse(completion.choices[0].message.content);
+        res.status(200).json({ success: true, novasPerguntas: novasPerguntas.quiz });
+
+    } catch (error) {
+        console.error("🚨 Erro ao gerar mais quiz:", error);
+        res.status(500).json({ error: 'A IA falhou ao gerar as perguntas. Tente de novo.' });
+    }
+});
+
 module.exports = router;
