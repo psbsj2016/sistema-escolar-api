@@ -303,13 +303,14 @@ router.post('/chat/:turmaId/digitando', verificarToken, (req, res) => {
 // ============================================================================
 router.post('/posts', verificarToken, async (req, res) => {
     try {
-        const { texto, autorNome, autorTipo, escolaId, anexos, destino, destinoNome } = req.body;
+        const { texto, autorNome, autorTipo, escolaId, anexos, destino, destinoNome, categoria } = req.body;
         if (!texto && (!anexos || anexos.length === 0)) return res.status(400).json({ error: 'Vazio.' });
 
         const database = await connectDB();
         const novoPost = {
             id: crypto.randomUUID(), escolaId: escolaId || 'DEFAULT', autorNome: autorNome || 'Desconhecido',
             autorTipo: autorTipo || 'Professor', destino: destino || 'global', destinoNome: destinoNome || 'Público Geral',
+            categoria: categoria || 'normal', // 🚀 NOVO: Guarda a categoria do post (Música ou Normal)
             texto: texto, anexos: anexos || [], dataCriacao: new Date().toISOString(), comentarios: [], likes: [], dislikes: []
         };
 
@@ -1784,17 +1785,21 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
         const filtro = { escolaId: escolaId || 'DEFAULT' };
 
         // Puxamos os últimos 100 posts para ter uma base de dados rica
-        const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(100).toArray();
+       const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(100).toArray();
         
-        // 🚀 MUDANÇA 2: Filtro Super Flexível
-        // Agora, BASTA ter um link (YouTube, Spotify, etc.) ou um anexo de vídeo/áudio para a IA o analisar.
+        // 🚀 FILTRO INTELIGENTE: Puxa primeiro os posts marcados oficialmente como "musica"
         const postsMusicais = postsBrutos.filter(p => {
+            if (p.categoria === 'musica') return true; // É uma música oficial!
+            
+            // Plano B: Tenta adivinhar se é música caso o professor se tenha esquecido da tag
             const texto = (p.texto || '').toLowerCase();
             const temMidiaAnexa = p.anexos && p.anexos.some(a => a.tipo.includes('video') || a.tipo.includes('audio'));
             const temMidiaLink = texto.includes('youtube.com') || texto.includes('youtu.be') || texto.includes('tiktok.com') || texto.includes('spotify.com');
-            
             return temMidiaAnexa || temMidiaLink;
         });
+
+        // Coloca os posts oficiais de música no topo da lista para a IA ver primeiro
+        postsMusicais.sort((a, b) => (a.categoria === 'musica' ? -1 : 1));
 
         if (postsMusicais.length === 0) {
             return res.status(400).json({ error: 'Não encontrei vídeos ou áudios no Feed. Partilhe um link do YouTube ou Spotify para ativarmos o modo musical!' });
