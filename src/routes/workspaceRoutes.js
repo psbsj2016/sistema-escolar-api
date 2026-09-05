@@ -1875,5 +1875,76 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🎶 HUB DE ESTUDO: GERAR MAIS DIAS (Imersão Musical contínua até 30)
+// ============================================================================
+router.post('/posts/imersao-musical/mais-dias', verificarToken, async (req, res) => {
+    try {
+        const { escolaId, postId, ultimoDia } = req.body;
+        if (!postId) return res.status(400).json({ error: 'Post base não encontrado.' });
+
+        const database = await connectDB();
+        const post = await database.collection('workspace_posts').findOne({ id: postId });
+        if (!post) return res.status(404).json({ error: 'A publicação com a música original já não existe.' });
+
+        // 🚀 O LIMITADOR DE 30 DIAS: Gera blocos de até 7 dias, mas trava no teto de 30
+        const maxDiasGeracao = Math.min(7, 30 - ultimoDia); 
+        if (maxDiasGeracao <= 0) {
+            return res.status(400).json({ error: 'Já atingiu o limite máximo de 30 dias para esta música!' });
+        }
+
+        const conteudoParaIA = `[LETRA DA MÚSICA]: ${post.texto || ''}`;
+
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+
+        // 🚀 PROMPT INTELIGENTE: Pede frases novas e obriga a contar a partir do último dia gerado
+        const systemPrompt = `Você é um professor de INGLÊS especialista em fluência através da música.
+        O aluno já completou os primeiros ${ultimoDia} dias de estudo desta música.
+        
+        Sua missão: Extraia ${maxDiasGeracao} NOVAS frases ou expressões da letra (que não sejam as óbvias do início) para continuar o plano de estudos.
+        O plano deve iniciar OBRIGATORIAMENTE no dia ${ultimoDia + 1} e ir até o dia ${ultimoDia + maxDiasGeracao}.
+
+        REGRAS ABSOLUTAS:
+        1. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
+        2. MINIJOGO: Para CADA frase, escolha UMA palavra vital e esconda-a na "fraseOculta" usando "____". Coloque a palavra correta em "palavraEscondida".
+        3. CONCISÃO: Seja muito direto e breve nas explicações para poupar memória.
+
+        Retorne APENAS JSON válido com a estrutura exata:
+        {
+            "planoEstudos": [
+                {
+                    "dia": ${ultimoDia + 1},
+                    "fraseOriginal": "Nova frase exata e completa da música",
+                    "fraseOculta": "Frase com a palavra substituída por ____",
+                    "palavraEscondida": "A palavra exata",
+                    "traducao": "Tradução curta",
+                    "explicacao": "Explicação muito breve (use HTML <strong> se precisar)",
+                    "desafio": "Desafio muito curto"
+                }
+            ]
+        }`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: conteudoParaIA }
+            ],
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.5, // Subimos a temperatura para evitar que repita as frases anteriores
+            max_tokens: 4500,
+            response_format: { type: 'json_object' } 
+        });
+
+        const planoGerado = JSON.parse(completion.choices[0].message.content);
+        res.status(200).json({ success: true, plano: planoGerado.planoEstudos });
+
+    } catch (error) {
+        console.error("🚨 Erro ao gerar mais dias na Imersão Musical:", error);
+        res.status(500).json({ error: 'A IA falhou ao gerar as novas frases. Tente novamente.' });
+    }
+});
 
 module.exports = router;
