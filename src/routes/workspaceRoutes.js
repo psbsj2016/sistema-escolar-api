@@ -1676,32 +1676,33 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             ? `O aluno quer focar-se em: "${termoBusca}". Filtra e foca a tua análise estritamente neste tema.` 
             : `Cria uma imersão com base nos temas mais importantes encontrados nestes conteúdos.`;
 
-      // 🚀 PROMPT EXTREMO: Dá ordem estrita para a IA rastrear as Palavras-Chave
+     // 🚀 PROMPT EXTREMO: Gatilhos de Exaustão e Profundidade Universitária
         const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
         Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
         ${instrucaoFoco}
         
         REGRAS ABSOLUTAS E INQUEBRÁVEIS:
-        1. IDIOMA: Você ensina EXCLUSIVAMENTE Inglês (explicando em Português).
-        2. FORMATAÇÃO: Use APENAS HTML puro (<strong>, <em>, <u>, <ul>, <li>, <table>, <tr>, <th>, <td>). NUNCA use atributos nas tags (ex: style, border).
-        3. VOLUME: Entregue a resposta completa, exatamente como solicitada pelo aluno, por mais longa que fique.
+        1. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
+        2. PROFUNDIDADE (GATILHO DE EXAUSTÃO): O seu "resumo" deve ser massivo, aprofundado e digno de uma aula universitária. Não economize palavras. Dê múltiplos exemplos práticos em frases bilingues, crie cenários de uso, explique exceções à regra gramatical e mergulhe em detalhes minuciosos.
+        3. FORMATAÇÃO RICA: Use HTML puro (<strong>, <em>, <ul>, <li>, <table>). Crie tabelas de vocabulário ou comparações estruturadas sempre que fizer sentido para enriquecer o visual da aula.
+        4. RECURSOS (PRIORIDADE MÁXIMA): Use as "Palavras-Chave" dos materiais fornecidos para encontrar os PDFs/Vídeos exatos que o aluno precisa.
         
         A sua missão:
         1. Crie um "titulo" cativante.
-        2. Escreva o "resumo" didático longo.
-        3. AVALIAÇÃO DE EXATIDÃO: Procure vídeos/PDFs relevantes. ATENÇÃO: DÊ PRIORIDADE MÁXIMA ABSOLUTA aos recursos cujas "Palavras-Chave (Prioridade Máxima)" correspondam diretamente ao pedido do aluno. Guarde os IDs em "postsRelacionados" ou "materiaisRelacionados" (Máximo 6).
-        4. Crie um "quiz" com 3 perguntas.
-        5. Crie um material de revisão focado ("tituloNota" e "conteudoParaNota").
+        2. Escreva o "resumo" ENORME e ricamente detalhado.
+        3. Guarde os IDs de conteúdos sugeridos em "postsRelacionados" ou "materiaisRelacionados" (Máximo 6).
+        4. Crie um "quiz" com 3 perguntas difíceis. (NOTA IMPORTANTE: No quiz, use o número 1, 2, 3 ou 4 para a chave "respostaCorreta").
+        5. Crie um material de revisão focado e aprofundado ("tituloNota" e "conteudoParaNota").
         
         Retorne APENAS JSON válido com a estrutura exata:
         {
             "titulo": "Título",
-            "resumo": "Texto resumo longo e integral...",
+            "resumo": "Texto gigantesco, exaustivo, com exemplos e tabelas HTML...",
             "postsRelacionados": ["POST_ID_1"],
             "materiaisRelacionados": ["MATERIAL_ID_1"],
-            "quiz": [{"pergunta": "...","opcoes": ["A", "B", "C", "D"],"respostaCorreta": 1, "explicacao": "..."}],
+            "quiz": [{"pergunta": "...","opcoes": ["A", "B", "C", "D"],"respostaCorreta": 1, "explicacao": "Explicação detalhada..."}],
             "tituloNota": "Anotações: Tema",
-            "conteudoParaNota": "Conteúdo bem formatado em HTML..."
+            "conteudoParaNota": "Conteúdo longo e bem formatado em HTML..."
         }`;
 
         const completion = await groq.chat.completions.create({
@@ -1710,7 +1711,8 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
                 { role: 'user', content: conteudoParaIA }
             ],
             model: 'openai/gpt-oss-120b', 
-            temperature: 0.2, // Reduzimos a temperatura para ela ser hiper-focada e lógica!
+            temperature: 0.4, // Subimos levemente a temperatura para estimular a criatividade na escrita longa
+            max_tokens: 6000, // 🚀 EXPANSÃO DE MEMÓRIA: Fôlego para textos gigantes!
             response_format: { type: 'json_object' } 
         });
 
