@@ -1808,15 +1808,16 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
         if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
-        // 🚀 PROMPT MUSICAL: Instrução para selecionar a música e criar o Minijogo
+        // 🚀 PROMPT MUSICAL BLINDADO: Obriga a ir até ao 14 e pede concisão
         const systemPrompt = `Você é um professor de INGLÊS especialista em fluência através da música.
         Abaixo estão publicações do Feed da plataforma contendo vídeos e links.
         
         REGRAS ABSOLUTAS:
         1. SELEÇÃO: Analise os posts abaixo e ESCOLHA APENAS UM que seja claramente uma MÚSICA.
         2. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
-        3. ESTRUTURA: Extraia EXATAMENTE 14 frases vitais (phrasal verbs, gírias ou gramática) dessa música para um plano de 14 dias.
+        3. ESTRUTURA MÁXIMA: Extraia EXATAMENTE 14 frases vitais dessa música. É OBRIGATÓRIO GERAR O PLANO DO DIA 1 ATÉ AO DIA 14. NÃO PARE A MEIO.
         4. MINIJOGO: Para CADA frase, escolha UMA palavra vital e esconda-a na "fraseOculta" substituindo-a por "____". Coloque a palavra correta em "palavraEscondida".
+        5. CONCISÃO: Seja muito direto e breve nas explicações ("explicacao") e desafios ("desafio") para poupar memória.
         
         Retorne APENAS JSON válido com a estrutura exata:
         {
@@ -1827,13 +1828,25 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
                     "dia": 1,
                     "fraseOriginal": "Frase exata e completa da música",
                     "fraseOculta": "Frase com a palavra substituída por ____",
-                    "palavraEscondida": "A palavra exata que foi escondida",
-                    "traducao": "Tradução contextualizada para Português",
-                    "explicacao": "Explicação curta do foco (use HTML <strong> se precisar)",
-                    "desafio": "Um desafio pedindo ao aluno para criar uma frase própria usando a expressão"
+                    "palavraEscondida": "A palavra exata",
+                    "traducao": "Tradução curta",
+                    "explicacao": "Explicação muito breve (use HTML <strong> se precisar)",
+                    "desafio": "Desafio muito curto"
                 }
             ]
         }`;
+
+        // 🚀 EXPANSÃO DE MEMÓRIA: Adicionado o max_tokens para a IA não cortar o texto!
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: conteudoParaIA }
+            ],
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.3,
+            max_tokens: 4500, // Dá fôlego extra de texto para ela conseguir chegar ao dia 14
+            response_format: { type: 'json_object' } 
+        });
 
         const completion = await groq.chat.completions.create({
             messages: [
