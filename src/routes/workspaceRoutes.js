@@ -478,9 +478,18 @@ router.delete('/posts/:id', verificarToken, async (req, res) => {
 router.put('/posts/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        await database.collection('workspace_posts').updateOne({ id: req.params.id }, { $set: { texto: req.body.texto } });
+        // 🚀 NOVO: Grava o texto E a categoria na base de dados
+        await database.collection('workspace_posts').updateOne(
+            { id: req.params.id }, 
+            { $set: { 
+                texto: req.body.texto,
+                categoria: req.body.categoria || 'normal'
+            } }
+        );
         res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro.' }); 
+    }
 });
 
 router.delete('/posts/:postId/comentarios/:comentarioId', verificarToken, async (req, res) => {
