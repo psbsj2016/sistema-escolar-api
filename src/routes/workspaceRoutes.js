@@ -1848,16 +1848,6 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
             response_format: { type: 'json_object' } 
         });
 
-        const completion = await groq.chat.completions.create({
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: conteudoParaIA }
-            ],
-            model: 'openai/gpt-oss-120b', 
-            temperature: 0.3, 
-            response_format: { type: 'json_object' } 
-        });
-
         const imersaoGerada = JSON.parse(completion.choices[0].message.content);
         const postOriginal = postsMusicais.find(p => String(p.id) === String(imersaoGerada.idPostEscolhido));
 
