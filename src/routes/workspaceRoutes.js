@@ -612,7 +612,8 @@ router.get('/perfil/info/:nome', verificarToken, async (req, res) => {
             res.status(200).json({ 
                 success: true, 
                 bio: user.bio || "A evoluir e a participar ativamente na nossa comunidade de aprendizagem.",
-                tipo: user.tipo || "Aluno" // Diferencia se é Professor, Gestor ou Aluno
+                tipo: user.tipo || "Aluno",
+                avatar: user.avatar || null // 🚀 NOVO: Puxa a foto atualizada em tempo real!
             });
         } else {
             res.status(404).json({ error: 'Usuário não encontrado.' });
