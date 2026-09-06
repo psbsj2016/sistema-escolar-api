@@ -595,71 +595,44 @@ router.put('/perfil/avatar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao guardar a foto de perfil.' }); }
 });
 
-router.put('/perfil/nome', verificarToken, async (req, res) => {
+// ============================================================================
+// 🙍 PERFIL: BUSCAR INFO PÚBLICA E ATUALIZAR BIO
+// ============================================================================
+router.get('/perfil/info/:nome', verificarToken, async (req, res) => {
     try {
-        const { id, novoNome } = req.body;
-        if (!novoNome || novoNome.trim() === '') return res.status(400).json({ error: 'O nome não pode estar vazio.' });
-
-        const nomeLimpo = String(novoNome).trim();
         const database = await connectDB();
-
-        const user = await database.collection('usuarios').findOne({ id: id });
-        if (!user) return res.status(404).json({ error: 'Conta de acesso não encontrada.' });
+        const nomeBusca = req.params.nome;
         
-        let nomesParaAtualizar = [user.nome, user.login].filter(Boolean);
-        if (user.alunoRefId) {
-            const alunoOficial = await database.collection('alunos').findOne({ id: user.alunoRefId });
-            if (alunoOficial && alunoOficial.nome) nomesParaAtualizar.push(alunoOficial.nome);
-        }
-        if (user.tipo === 'Gestor' || user.login === 'gestor' || nomesParaAtualizar.includes('Gestor Principal')) {
-            nomesParaAtualizar.push('Gestor Principal');
-        }
-
-        nomesParaAtualizar = [...new Set(nomesParaAtualizar)];
-        await database.collection('usuarios').updateOne({ id: id }, { $set: { nome: nomeLimpo } });
-
-        const filtroBusca = { autorNome: { $in: nomesParaAtualizar } };
-
-        await database.collection('workspace_posts').updateMany(filtroBusca, { $set: { autorNome: nomeLimpo } });
-        await database.collection('workspace_chats').updateMany(filtroBusca, { $set: { autorNome: nomeLimpo } });
-
-        const postsComComentarios = await database.collection('workspace_posts').find({ "comentarios.autorNome": { $in: nomesParaAtualizar } }).toArray();
-        for (let post of postsComComentarios) {
-            const novosComentarios = post.comentarios.map(c => {
-                if (nomesParaAtualizar.includes(c.autorNome)) c.autorNome = nomeLimpo;
-                return c;
+        // Procura o utilizador pelo nome exato
+        const user = await database.collection('usuarios').findOne({
+            $or: [{ nome: nomeBusca }, { login: nomeBusca }]
+        });
+        
+        if (user) {
+            res.status(200).json({ 
+                success: true, 
+                bio: user.bio || "A evoluir e a participar ativamente na nossa comunidade de aprendizagem.",
+                tipo: user.tipo || "Aluno" // Diferencia se é Professor, Gestor ou Aluno
             });
-            await database.collection('workspace_posts').updateOne({ id: post.id }, { $set: { comentarios: novosComentarios } });
+        } else {
+            res.status(404).json({ error: 'Usuário não encontrado.' });
         }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao buscar perfil.' }); 
+    }
+});
 
-        const idsDoAluno = [String(id)];
-        if (user.alunoRefId) idsDoAluno.push(String(user.alunoRefId));
-
-        await database.collection('workspace_entregas').updateMany(
-            { alunoId: { $in: idsDoAluno } },
-            { $set: { alunoNome: nomeLimpo } }
-        );
-        await database.collection('workspace_entregas_provas').updateMany(
-            { alunoId: { $in: idsDoAluno } },
-            { $set: { alunoNome: nomeLimpo } }
-        );
-
-        await database.collection('workspace_notificacoes').updateMany({ remetenteNome: { $in: nomesParaAtualizar } }, { $set: { remetenteNome: nomeLimpo } });
-        await database.collection('workspace_notificacoes').updateMany({ destinatarioNome: { $in: nomesParaAtualizar } }, { $set: { destinatarioNome: nomeLimpo } });
-
-        if (user.tipo !== 'Aluno') {
-            const entregasComFeedbacks = await database.collection('workspace_entregas').find({ "feedbacks.autorNome": { $in: nomesParaAtualizar } }).toArray();
-            for (let ent of entregasComFeedbacks) {
-                const novosFeedbacks = ent.feedbacks.map(f => {
-                    if (nomesParaAtualizar.includes(f.autorNome)) f.autorNome = nomeLimpo;
-                    return f;
-                });
-                await database.collection('workspace_entregas').updateOne({ id: ent.id }, { $set: { feedbacks: novosFeedbacks } });
-            }
-        }
-
-        res.status(200).json({ success: true, nome: nomeLimpo, nomeAntigo: nomesParaAtualizar[0] });
-    } catch (error) { res.status(500).json({ error: 'Erro interno ao tentar atualizar o nome.' }); }
+router.put('/perfil/bio', verificarToken, async (req, res) => {
+    try {
+        const { id, bio } = req.body;
+        const database = await connectDB();
+        const bioSegura = String(bio).substring(0, 150); // Limita a 150 caracteres para manter o design limpo
+        
+        await database.collection('usuarios').updateOne({ id: id }, { $set: { bio: bioSegura } });
+        res.status(200).json({ success: true, bio: bioSegura });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao atualizar a frase de perfil.' }); 
+    }
 });
 
 // ============================================================================
