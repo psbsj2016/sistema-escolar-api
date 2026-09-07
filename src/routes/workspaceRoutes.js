@@ -1265,8 +1265,34 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
 router.get('/ingles/ranking', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const ranking = await db.collection('workspace_ingles_stats').find({ escolaId: req.query.escolaId || 'DEFAULT', "coins.bronze": { $gt: 0 } }).sort({ "coins.bronze": -1 }).limit(50).toArray();
-        const comLiga = ranking.map((r, i) => ({ userId: r.userId, nome: r.nome, coins: r.coins || {bronze: 0, prata: 0, ouro: 0}, streak: r.streak || 1, posicao: i + 1, liga: i < 3 ? 'ouro' : i < 10 ? 'prata' : i < 20 ? 'bronze' : 'aprendiz' }));
+        const escolaId = req.query.escolaId || 'DEFAULT';
+        
+        // 1. Busca os dados matemáticos do ranking
+        const ranking = await db.collection('workspace_ingles_stats')
+            .find({ escolaId: escolaId, "coins.bronze": { $gt: 0 } })
+            .sort({ "coins.bronze": -1 })
+            .limit(50)
+            .toArray();
+        
+        // 2. Busca as fotos de perfil (Avatares) de todos os alunos dessa escola
+        const alunos = await db.collection('alunos').find({ escolaId: escolaId, avatar: { $exists: true, $ne: null } }).toArray();
+        const usuarios = await db.collection('usuarios').find({ escolaId: escolaId, avatar: { $exists: true, $ne: null } }).toArray();
+        
+        const mapaAvatars = {};
+        alunos.forEach(a => { if(a.nome) mapaAvatars[a.nome] = a.avatar; });
+        usuarios.forEach(u => { const n = u.nome || u.login; if(n) mapaAvatars[n] = u.avatar; });
+
+        // 3. Junta as fotos ao ranking e calcula as Ligas
+        const comLiga = ranking.map((r, i) => ({ 
+            userId: r.userId, 
+            nome: r.nome, 
+            avatar: mapaAvatars[r.nome] || null, // 🚀 A foto agora vai na mochila!
+            coins: r.coins || {bronze: 0, prata: 0, ouro: 0}, 
+            streak: r.streak || 1, 
+            posicao: i + 1, 
+            liga: i < 3 ? 'ouro' : i < 10 ? 'prata' : i < 20 ? 'bronze' : 'aprendiz' 
+        }));
+        
         res.json({ success: true, ranking: comLiga });
     } catch (e) { res.status(500).json({ error: 'Erro ranking' }); }
 });
