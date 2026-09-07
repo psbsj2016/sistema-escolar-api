@@ -1274,19 +1274,27 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
             .limit(50)
             .toArray();
         
-        // 2. Busca as fotos de perfil (Avatares) de todos os alunos dessa escola
-        const alunos = await db.collection('alunos').find({ escolaId: escolaId, avatar: { $exists: true, $ne: null } }).toArray();
-        const usuarios = await db.collection('usuarios').find({ escolaId: escolaId, avatar: { $exists: true, $ne: null } }).toArray();
+        // 2. Busca as fotos de perfil ignorando filtros rígidos para evitar perdas
+        const alunos = await db.collection('alunos').find({ avatar: { $exists: true, $ne: null } }).toArray();
+        const usuarios = await db.collection('usuarios').find({ avatar: { $exists: true, $ne: null } }).toArray();
         
         const mapaAvatars = {};
-        alunos.forEach(a => { if(a.nome) mapaAvatars[a.nome] = a.avatar; });
-        usuarios.forEach(u => { const n = u.nome || u.login; if(n) mapaAvatars[n] = u.avatar; });
+        // 🚀 Mapeia tanto pelo ID oficial quanto pelo nome para garantir precisão absoluta
+        alunos.forEach(a => { 
+            if(a.id) mapaAvatars[a.id] = a.avatar; 
+            if(a.nome) mapaAvatars[a.nome] = a.avatar; 
+        });
+        usuarios.forEach(u => { 
+            if(u.id) mapaAvatars[u.id] = u.avatar; 
+            if(u.nome) mapaAvatars[u.nome] = u.avatar; 
+            if(u.login) mapaAvatars[u.login] = u.avatar; 
+        });
 
         // 3. Junta as fotos ao ranking e calcula as Ligas
         const comLiga = ranking.map((r, i) => ({ 
             userId: r.userId, 
             nome: r.nome, 
-            avatar: mapaAvatars[r.nome] || null, // 🚀 A foto agora vai na mochila!
+            avatar: mapaAvatars[r.userId] || mapaAvatars[r.nome] || null, // 🚀 A foto real entra aqui
             coins: r.coins || {bronze: 0, prata: 0, ouro: 0}, 
             streak: r.streak || 1, 
             posicao: i + 1, 
