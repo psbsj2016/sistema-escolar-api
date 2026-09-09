@@ -295,8 +295,9 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
             const idTurmaLower = String(turmaId).toLowerCase().trim();
             const nomeTurmaLower = String(nomeTurmaOficial).toLowerCase().trim();
 
-            const todosAlunos = await database.collection('alunos').toArray();
-            const usuarios = await database.collection('usuarios').toArray();
+            // 🚀 CORREÇÃO: Adicionado o .find() para extrair os documentos corretamente
+            const todosAlunos = await database.collection('alunos').find().toArray();
+            const usuarios = await database.collection('usuarios').find().toArray();
             const destinatarios = new Set();
 
             todosAlunos.forEach(a => {
