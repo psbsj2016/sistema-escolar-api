@@ -260,12 +260,13 @@ router.get('/chat/:turmaId', verificarToken, async (req, res) => {
 
 router.post('/chat/:turmaId', verificarToken, async (req, res) => {
     try {
-        const { texto, autorNome, anexoUrl, anexoTipo, anexoNome } = req.body;
+        const { texto, autorNome, anexoUrl, anexoTipo, anexoNome, escolaId } = req.body;
         const database = await connectDB();
+        const turmaId = req.params.turmaId;
         
         const novaMensagem = { 
             id: crypto.randomUUID(), 
-            turmaId: req.params.turmaId, 
+            turmaId: turmaId, 
             autorNome: autorNome || 'Desconhecido', 
             texto: texto || '', 
             anexoUrl: anexoUrl || null,
@@ -274,14 +275,73 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
             data: new Date().toISOString() 
         };
         
+        // 1. Guarda a mensagem na Base de Dados
         await database.collection('workspace_chats').insertOne(novaMensagem);
         
+        // 2. Dispara o Evento ao Vivo para quem está Online (Ativa o Balão Saltitante)
         workspaceStream.emit('evento_realtime', { 
             type: 'NOVA_MENSAGEM', 
-            turmaId: req.params.turmaId,
+            turmaId: turmaId,
             mensagem: novaMensagem,
-            escolaId: 'DEFAULT'
+            escolaId: escolaId || 'DEFAULT'
         });
+
+        // ====================================================================
+        // 🚀 NOVO: PERSISTÊNCIA DE NOTIFICAÇÕES PARA USUÁRIOS OFFLINE
+        // ====================================================================
+        try {
+            // A. Procurar o nome da turma para ficar bonito no aviso
+            const turmaDoc = await database.collection('turmas').findOne({ id: turmaId });
+            const nomeTurma = turmaDoc ? turmaDoc.nome : 'Fórum da Turma';
+
+            // B. Encontrar o público-alvo (Alunos da turma + Corpo Docente)
+            const todosAlunos = await database.collection('alunos').toArray();
+            const usuarios = await database.collection('usuarios').toArray();
+            const destinatarios = new Set();
+
+            todosAlunos.forEach(a => {
+                const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
+                if (minhasTurmas.some(t => String(t) === String(turmaId) || String(t) === String(nomeTurma))) {
+                    const nome = a.nome || a.login;
+                    if (nome && nome !== novaMensagem.autorNome) destinatarios.add(nome); // Evita notificar o próprio remetente
+                }
+            });
+
+            usuarios.forEach(u => {
+                if (u.tipo === 'Professor' || u.tipo === 'Gestor') {
+                    const nome = u.nome || u.login;
+                    if (nome && nome !== novaMensagem.autorNome) destinatarios.add(nome);
+                }
+            });
+
+            // C. Prepara o resumo da mensagem (mesmo que seja só um anexo)
+            let textoResumo = texto || (anexoNome ? `Enviou um arquivo: ${anexoNome}` : 'Partilhou um anexo');
+            textoResumo = textoResumo.length > 30 ? textoResumo.substring(0, 30) + '...' : textoResumo;
+
+            // D. Constrói o pacote de notificações
+            const notificacoesArray = Array.from(destinatarios).map(destinatario => ({
+                id: crypto.randomUUID(),
+                escolaId: escolaId || 'DEFAULT',
+                destinatarioNome: destinatario,
+                remetenteNome: novaMensagem.autorNome,
+                mensagem: `enviou uma mensagem lá no chat: "${textoResumo}"`,
+                origem: 'chat',
+                origemId: turmaId,
+                destinoNome: nomeTurma,
+                lida: false,
+                data: new Date().toISOString()
+            }));
+
+            // E. Salva permanentemente no Baú de Notificações!
+            if (notificacoesArray.length > 0) {
+                await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                // NOTA MÁGICA: Não emitimos o evento 'NOVA_NOTIFICACAO' de propósito, 
+                // para não aparecer duas vezes no ecrã de quem já está online!
+            }
+        } catch (erroNotificacao) {
+            console.error("Falha silenciosa ao gerar notificação de chat:", erroNotificacao);
+        }
+        // ====================================================================
 
         res.status(201).json({ success: true, mensagem: novaMensagem });
     } catch (error) { 
