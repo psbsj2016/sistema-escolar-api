@@ -277,11 +277,10 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
         
         await database.collection('workspace_chats').insertOne(novaMensagem);
         
-        // Dispara o Evento ao Vivo para quem está Online
         workspaceStream.emit('evento_realtime', { 
             type: 'NOVA_MENSAGEM', 
             turmaId: turmaId,
-            turmaNome: turmaNome || 'Fórum da Turma', // 🚀 Emite o nome para o balão saltitante
+            turmaNome: turmaNome || 'Fórum da Turma',
             mensagem: novaMensagem,
             escolaId: escolaId || 'DEFAULT'
         });
@@ -291,22 +290,27 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
         // ====================================================================
         try {
             const nomeTurmaOficial = turmaNome || 'Fórum da Turma';
-            // Uniformiza os textos para letras minúsculas (Mata o bug do Case-Sensitive)
             const idTurmaLower = String(turmaId).toLowerCase().trim();
             const nomeTurmaLower = String(nomeTurmaOficial).toLowerCase().trim();
+            
+            // 🚀 CORREÇÃO 1: Se for o chat "Global", o aviso tem de ir para toda a escola!
+            const isGlobal = idTurmaLower === 'global' || idTurmaLower === 'geral';
 
-            // 🚀 CORREÇÃO: Adicionado o .find() para extrair os documentos corretamente
-            const todosAlunos = await database.collection('alunos').find().toArray();
-            const usuarios = await database.collection('usuarios').find().toArray();
+            // 🚀 CORREÇÃO 2: Filtra por Escola para otimizar a memória
+            const queryEscola = escolaId && escolaId !== 'DEFAULT' ? { escolaId: escolaId } : {};
+            const todosAlunos = await database.collection('alunos').find(queryEscola).toArray();
+            const usuarios = await database.collection('usuarios').find(queryEscola).toArray();
+            
             const destinatarios = new Set();
 
             todosAlunos.forEach(a => {
                 const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
                 
-                // 🚀 MATCH À PROVA DE BALAS
-                const pertence = minhasTurmas.some(t => {
+                // O aluno recebe se o chat for Global OU se pertencer à turma específica
+                const pertence = isGlobal || minhasTurmas.some(t => {
+                    if (!t) return false;
                     const tLower = String(t).toLowerCase().trim();
-                    return tLower === idTurmaLower || tLower === nomeTurmaLower || tLower === 'global';
+                    return tLower === idTurmaLower || tLower === nomeTurmaLower;
                 });
 
                 if (pertence) {
@@ -323,12 +327,12 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
             });
 
             let textoResumo = texto || (anexoNome ? `Enviou um arquivo: ${anexoNome}` : 'Partilhou um anexo');
-            textoResumo = textoResumo.length > 30 ? textoResumo.substring(0, 30) + '...' : textoResumo;
+            textoResumo = textoResumo.length > 35 ? textoResumo.substring(0, 35) + '...' : textoResumo;
 
-            const notificacoesArray = Array.from(destinatarios).map(destinatario => ({
-                id: crypto.randomUUID(),
+            const notificacoesArray = Array.from(destinatarios).map(dest => ({
+                id: 'notif_chat_' + Date.now() + '_' + Math.random().toString(36).substring(7),
                 escolaId: escolaId || 'DEFAULT',
-                destinatarioNome: destinatario,
+                destinatarioNome: dest,
                 remetenteNome: novaMensagem.autorNome,
                 mensagem: `enviou uma mensagem lá no chat: "${textoResumo}"`,
                 origem: 'chat',
