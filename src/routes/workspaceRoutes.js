@@ -260,7 +260,7 @@ router.get('/chat/:turmaId', verificarToken, async (req, res) => {
 
 router.post('/chat/:turmaId', verificarToken, async (req, res) => {
     try {
-        const { texto, autorNome, anexoUrl, anexoTipo, anexoNome, escolaId } = req.body;
+        const { texto, autorNome, anexoUrl, anexoTipo, anexoNome, escolaId, turmaNome } = req.body;
         const database = await connectDB();
         const turmaId = req.params.turmaId;
         
@@ -275,35 +275,42 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
             data: new Date().toISOString() 
         };
         
-        // 1. Guarda a mensagem na Base de Dados
         await database.collection('workspace_chats').insertOne(novaMensagem);
         
-        // 2. Dispara o Evento ao Vivo para quem está Online (Ativa o Balão Saltitante)
+        // Dispara o Evento ao Vivo para quem está Online
         workspaceStream.emit('evento_realtime', { 
             type: 'NOVA_MENSAGEM', 
             turmaId: turmaId,
+            turmaNome: turmaNome || 'Fórum da Turma', // 🚀 Emite o nome para o balão saltitante
             mensagem: novaMensagem,
             escolaId: escolaId || 'DEFAULT'
         });
 
         // ====================================================================
-        // 🚀 NOVO: PERSISTÊNCIA DE NOTIFICAÇÕES PARA USUÁRIOS OFFLINE
+        // 🚀 PERSISTÊNCIA BLINDADA DE NOTIFICAÇÕES PARA USUÁRIOS OFFLINE
         // ====================================================================
         try {
-            // A. Procurar o nome da turma para ficar bonito no aviso
-            const turmaDoc = await database.collection('turmas').findOne({ id: turmaId });
-            const nomeTurma = turmaDoc ? turmaDoc.nome : 'Fórum da Turma';
+            const nomeTurmaOficial = turmaNome || 'Fórum da Turma';
+            // Uniformiza os textos para letras minúsculas (Mata o bug do Case-Sensitive)
+            const idTurmaLower = String(turmaId).toLowerCase().trim();
+            const nomeTurmaLower = String(nomeTurmaOficial).toLowerCase().trim();
 
-            // B. Encontrar o público-alvo (Alunos da turma + Corpo Docente)
             const todosAlunos = await database.collection('alunos').toArray();
             const usuarios = await database.collection('usuarios').toArray();
             const destinatarios = new Set();
 
             todosAlunos.forEach(a => {
                 const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
-                if (minhasTurmas.some(t => String(t) === String(turmaId) || String(t) === String(nomeTurma))) {
+                
+                // 🚀 MATCH À PROVA DE BALAS
+                const pertence = minhasTurmas.some(t => {
+                    const tLower = String(t).toLowerCase().trim();
+                    return tLower === idTurmaLower || tLower === nomeTurmaLower || tLower === 'global';
+                });
+
+                if (pertence) {
                     const nome = a.nome || a.login;
-                    if (nome && nome !== novaMensagem.autorNome) destinatarios.add(nome); // Evita notificar o próprio remetente
+                    if (nome && nome !== novaMensagem.autorNome) destinatarios.add(nome);
                 }
             });
 
@@ -314,11 +321,9 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
                 }
             });
 
-            // C. Prepara o resumo da mensagem (mesmo que seja só um anexo)
             let textoResumo = texto || (anexoNome ? `Enviou um arquivo: ${anexoNome}` : 'Partilhou um anexo');
             textoResumo = textoResumo.length > 30 ? textoResumo.substring(0, 30) + '...' : textoResumo;
 
-            // D. Constrói o pacote de notificações
             const notificacoesArray = Array.from(destinatarios).map(destinatario => ({
                 id: crypto.randomUUID(),
                 escolaId: escolaId || 'DEFAULT',
@@ -327,25 +332,21 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
                 mensagem: `enviou uma mensagem lá no chat: "${textoResumo}"`,
                 origem: 'chat',
                 origemId: turmaId,
-                destinoNome: nomeTurma,
+                destinoNome: nomeTurmaOficial,
                 lida: false,
                 data: new Date().toISOString()
             }));
 
-            // E. Salva permanentemente no Baú de Notificações!
             if (notificacoesArray.length > 0) {
                 await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
-                // NOTA MÁGICA: Não emitimos o evento 'NOVA_NOTIFICACAO' de propósito, 
-                // para não aparecer duas vezes no ecrã de quem já está online!
             }
         } catch (erroNotificacao) {
-            console.error("Falha silenciosa ao gerar notificação de chat:", erroNotificacao);
+            console.error("Falha ao gerar notificação de chat:", erroNotificacao);
         }
         // ====================================================================
 
         res.status(201).json({ success: true, mensagem: novaMensagem });
     } catch (error) { 
-        console.error("Erro ao processar mensagem do chat:", error);
         res.status(500).json({ error: 'Erro ao enviar mensagem.' }); 
     }
 });
