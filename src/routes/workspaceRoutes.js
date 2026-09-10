@@ -286,27 +286,26 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
         });
 
         // ====================================================================
-        // 🚀 PERSISTÊNCIA BLINDADA DE NOTIFICAÇÕES PARA USUÁRIOS OFFLINE
+        // 🚀 PERSISTÊNCIA INFALÍVEL DE NOTIFICAÇÕES PARA USUÁRIOS OFFLINE
         // ====================================================================
         try {
             const nomeTurmaOficial = turmaNome || 'Fórum da Turma';
             const idTurmaLower = String(turmaId).toLowerCase().trim();
             const nomeTurmaLower = String(nomeTurmaOficial).toLowerCase().trim();
             
-            // 🚀 CORREÇÃO 1: Se for o chat "Global", o aviso tem de ir para toda a escola!
             const isGlobal = idTurmaLower === 'global' || idTurmaLower === 'geral';
 
-            // 🚀 CORREÇÃO 2: Filtra por Escola para otimizar a memória
-            const queryEscola = escolaId && escolaId !== 'DEFAULT' ? { escolaId: escolaId } : {};
-            const todosAlunos = await database.collection('alunos').find(queryEscola).toArray();
-            const usuarios = await database.collection('usuarios').find(queryEscola).toArray();
+            // 🚀 SEGREDO REVELADO: Busca TODOS sem filtro de escolaId, 
+            // pois alunos antigos na BD podem não ter esse campo!
+            const todosAlunos = await database.collection('alunos').find({}).toArray();
+            const usuarios = await database.collection('usuarios').find({}).toArray();
             
             const destinatarios = new Set();
+            const remetenteLimpo = String(novaMensagem.autorNome).trim();
 
             todosAlunos.forEach(a => {
                 const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
                 
-                // O aluno recebe se o chat for Global OU se pertencer à turma específica
                 const pertence = isGlobal || minhasTurmas.some(t => {
                     if (!t) return false;
                     const tLower = String(t).toLowerCase().trim();
@@ -314,15 +313,19 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
                 });
 
                 if (pertence) {
-                    const nome = a.nome || a.login;
-                    if (nome && nome !== novaMensagem.autorNome) destinatarios.add(nome);
+                    const nomeAluno = (a.nome || a.login || '').trim();
+                    if (nomeAluno && nomeAluno !== remetenteLimpo) {
+                        destinatarios.add(nomeAluno);
+                    }
                 }
             });
 
             usuarios.forEach(u => {
                 if (u.tipo === 'Professor' || u.tipo === 'Gestor') {
-                    const nome = u.nome || u.login;
-                    if (nome && nome !== novaMensagem.autorNome) destinatarios.add(nome);
+                    const nomeMembro = (u.nome || u.login || '').trim();
+                    if (nomeMembro && nomeMembro !== remetenteLimpo) {
+                        destinatarios.add(nomeMembro);
+                    }
                 }
             });
 
