@@ -277,54 +277,69 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
         
         await database.collection('workspace_chats').insertOne(novaMensagem);
         
+        // Dispara o Evento ao Vivo para quem está Online
         workspaceStream.emit('evento_realtime', { 
             type: 'NOVA_MENSAGEM', 
             turmaId: turmaId,
-            turmaNome: turmaNome || 'Fórum da Turma',
+            turmaNome: turmaNome || 'Fórum da Turma', 
             mensagem: novaMensagem,
             escolaId: escolaId || 'DEFAULT'
         });
 
         // ====================================================================
-        // 🚀 PERSISTÊNCIA INFALÍVEL DE NOTIFICAÇÕES PARA USUÁRIOS OFFLINE
+        // 🚀 VARREDURA COMPLETA: Geração de Notificações Offline
         // ====================================================================
         try {
             const nomeTurmaOficial = turmaNome || 'Fórum da Turma';
             const idTurmaLower = String(turmaId).toLowerCase().trim();
             const nomeTurmaLower = String(nomeTurmaOficial).toLowerCase().trim();
-            
             const isGlobal = idTurmaLower === 'global' || idTurmaLower === 'geral';
 
-            // 🚀 SEGREDO REVELADO: Busca TODOS sem filtro de escolaId, 
-            // pois alunos antigos na BD podem não ter esse campo!
-            const todosAlunos = await database.collection('alunos').find({}).toArray();
+            // Puxa Utilizadores e Alunos para cruzar os dados
             const usuarios = await database.collection('usuarios').find({}).toArray();
+            const alunos = await database.collection('alunos').find({}).toArray();
             
             const destinatarios = new Set();
             const remetenteLimpo = String(novaMensagem.autorNome).trim();
 
-            todosAlunos.forEach(a => {
-                const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
-                
-                const pertence = isGlobal || minhasTurmas.some(t => {
-                    if (!t) return false;
-                    const tLower = String(t).toLowerCase().trim();
-                    return tLower === idTurmaLower || tLower === nomeTurmaLower;
-                });
+            usuarios.forEach(user => {
+                const nomeDeLogin = (user.nome || user.login || '').trim();
+                if (!nomeDeLogin || nomeDeLogin === remetenteLimpo) return;
 
-                if (pertence) {
-                    const nomeAluno = (a.nome || a.login || '').trim();
-                    if (nomeAluno && nomeAluno !== remetenteLimpo) {
-                        destinatarios.add(nomeAluno);
+                if (user.tipo === 'Professor' || user.tipo === 'Gestor') {
+                    destinatarios.add(nomeDeLogin);
+                } else if (user.tipo === 'Aluno') {
+                    let turmasDoAluno = [];
+                    
+                    // 1. Busca turmas diretamente no documento do Utilizador
+                    if (user.turma) turmasDoAluno.push(user.turma);
+                    if (user.turmas) {
+                        if (Array.isArray(user.turmas)) turmasDoAluno.push(...user.turmas);
+                        else turmasDoAluno.push(user.turmas);
                     }
-                }
-            });
+                    
+                    // 2. Busca turmas no documento oficial do Aluno (alunoRefId)
+                    if (user.alunoRefId) {
+                        const perfilAluno = alunos.find(a => String(a.id) === String(user.alunoRefId));
+                        if (perfilAluno) {
+                            if (perfilAluno.turma) turmasDoAluno.push(perfilAluno.turma);
+                            if (perfilAluno.turmaId) turmasDoAluno.push(perfilAluno.turmaId);
+                            if (perfilAluno.turmas) {
+                                if (Array.isArray(perfilAluno.turmas)) turmasDoAluno.push(...perfilAluno.turmas);
+                                else turmasDoAluno.push(perfilAluno.turmas);
+                            }
+                        }
+                    }
 
-            usuarios.forEach(u => {
-                if (u.tipo === 'Professor' || u.tipo === 'Gestor') {
-                    const nomeMembro = (u.nome || u.login || '').trim();
-                    if (nomeMembro && nomeMembro !== remetenteLimpo) {
-                        destinatarios.add(nomeMembro);
+                    // Verifica se o aluno pertence à turma do bate-papo
+                    const pertence = isGlobal || turmasDoAluno.some(t => {
+                        if (!t) return false;
+                        const tLower = String(t).toLowerCase().trim();
+                        return tLower === idTurmaLower || tLower === nomeTurmaLower;
+                    });
+
+                    if (pertence) {
+                        destinatarios.add(nomeDeLogin);
                     }
                 }
             });
