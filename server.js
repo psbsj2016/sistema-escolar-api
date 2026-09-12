@@ -22,6 +22,7 @@ const workspaceRoutes = require('./src/routes/workspaceRoutes');
 const avaliacoesRoutes = require('./src/routes/avaliacoesRoutes');
 // 🚀 1. REGISTO DA NOVA ROTA DA BIBLIOTECA
 const bibliotecaRoutes = require('./src/routes/bibliotecaRoutes');
+const arenaRoutes = require('./src/routes/arenaRoutes');
 const pushRoutes = require('./src/routes/pushRoutes');
 const auditoriaRoutes = require('./src/routes/auditoriaRoutes');
 const iniciarAutomacao = require('./src/services/automacao');
@@ -119,6 +120,9 @@ const apiRouter = express.Router();
 apiRouter.use('/workspace/avaliacoes', avaliacoesRoutes);
 apiRouter.use('/workspace/biblioteca', bibliotecaRoutes);
 apiRouter.use('/workspace', workspaceRoutes);
+
+// 🚀 Injeta a Arena de Fluência
+apiRouter.use('/arena', arenaRoutes);
 
 apiRouter.use('/escola', escolaRoutes);
 apiRouter.use('/usuarios', usuariosRoutes);
