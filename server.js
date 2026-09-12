@@ -111,6 +111,7 @@ app.use('/auditoria', auditoriaRoutes);
 // 🚀 A rota de avaliações TEM de vir antes da rota geral do workspace!
 app.use('/workspace/avaliacoes', avaliacoesRoutes);
 app.use('/workspace/biblioteca', bibliotecaRoutes);
+app.use('/workspace/arena', arenaRoutes);
 app.use('/workspace', workspaceRoutes); 
 
 // 🔥 O ESPELHO MÁGICO PARA PRODUÇÃO (Resolve os erros 403 da App e Notificações)
@@ -119,10 +120,8 @@ const apiRouter = express.Router();
 // 🚀 Injeta a rota de avaliações no espelho antes do workspace geral
 apiRouter.use('/workspace/avaliacoes', avaliacoesRoutes);
 apiRouter.use('/workspace/biblioteca', bibliotecaRoutes);
+apiRouter.use('/workspace/arena', arenaRoutes);
 apiRouter.use('/workspace', workspaceRoutes);
-
-// 🚀 Injeta a Arena de Fluência
-apiRouter.use('/arena', arenaRoutes);
 
 apiRouter.use('/escola', escolaRoutes);
 apiRouter.use('/usuarios', usuariosRoutes);
