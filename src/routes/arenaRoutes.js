@@ -143,17 +143,74 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao aceitar convite.' }); }
 });
 
-// 3. Rota para Receber a Voz 
+// ============================================================================
+// 🚀 O CÉREBRO DO MESTRE DA GUILDA (IA em Tempo Real)
+// ============================================================================
+async function gerarDicaDoMestre(sala, escolaId) {
+    try {
+        let dialogo = '';
+        // Pega apenas nas últimas 10 mensagens para dar contexto focado à IA
+        const ultimasMensagens = sala.historico.slice(-10);
+        ultimasMensagens.forEach(fala => {
+            dialogo += `[${fala.autorNome}]: ${fala.texto}\n`;
+        });
+
+        const promptIA = `
+        Aja como o "Mestre da Guilda", um sábio professor nativo de inglês observando dois alunos a praticarem num Roleplay.
+        Cenário atual deles: "${sala.cenario || 'Conversa livre'}".
+        
+        Aqui estão as últimas 10 mensagens do diálogo:
+        ${dialogo}
+        
+        Sua missão: Escreva UMA DICA RÁPIDA E AMIGÁVEL (máximo de 2 frases) para eles.
+        Pode ser a correção de um erro gramatical comum que notou no diálogo, a sugestão de um vocabulário mais nativo, ou um elogio à fluência deles.
+        Responda de forma direta e inspiradora. Seja o mentor.
+        IMPORTANTE: Responda APENAS com a frase da dica, sem aspas, sem introduções e sem JSON. Misture português com inglês.
+        `;
+
+        const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'llama3-70b-8192', messages: [{ role: 'user', content: promptIA }], temperature: 0.5 })
+        });
+
+        const groqData = await groqRes.json();
+        const dica = groqData.choices[0].message.content.trim();
+
+        // Transmite a Dica Mágica para os alunos pelo túnel SSE em Tempo Real
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_DICA_MESTRE',
+                salaId: sala.id,
+                dica: dica,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+    } catch (error) {
+        console.error("Erro na Intervenção Divina do Mestre:", error);
+    }
+}
+
+// 3. Rota para Receber a Voz e Disparar a IA
 router.post('/:salaId/falar', verificarToken, async (req, res) => {
     try {
-        const { texto, autorId, autorNome, escolaId, combo } = req.body; // 🚀 Recebe a informação do Combo
+        const { texto, autorId, autorNome, escolaId, combo } = req.body;
         const salaId = req.params.salaId;
         const db = await connectDB();
         
-        // Guarda a informação de combo no histórico
         const novaFala = { id: crypto.randomUUID(), autorId, autorNome, texto, combo, data: new Date().toISOString() };
         
+        // Grava a mensagem na base de dados
         await db.collection('workspace_arenas').updateOne({ id: salaId }, { $push: { historico: novaFala } });
+        
+        // 🚀 INTERVENÇÃO DIVINA: Verifica se chegamos a um múltiplo de 10 mensagens!
+        const salaAtualizada = await db.collection('workspace_arenas').findOne({ id: salaId });
+        if (salaAtualizada && salaAtualizada.historico && salaAtualizada.historico.length % 10 === 0) {
+            // Dispara a IA em segundo plano (não trava o chat dos alunos!)
+            gerarDicaDoMestre(salaAtualizada, escolaId);
+        }
+
+        // Avisa imediatamente o colega que há uma nova mensagem
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', { type: 'ARENA_NOVA_FALA', salaId: salaId, fala: novaFala, escolaId: escolaId || 'DEFAULT' });
         }
