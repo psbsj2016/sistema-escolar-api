@@ -202,14 +202,15 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
         // 🚀 EVOLUÇÃO DO ALUNO: Atualiza o Cristal no Perfil de cada participante no Banco de Dados
         if (resultadoAvaliacao.jogadores && resultadoAvaliacao.jogadores.length > 0) {
             for (const jogador of resultadoAvaliacao.jogadores) {
-                // Soma +1 duelo concluído e atualiza a joia
-                await db.collection('workspace_usuarios').updateOne(
-                    { nome: jogador.nome }, // Procura o aluno pelo nome
-                    { 
-                        $inc: { 'arenaStats.duelosConcluidos': 1 },
-                        $set: { 'arenaStats.cristalAtual': jogador.cristal, 'arenaStats.tituloAtual': jogador.titulo }
-                    }
-                );
+                // A Query de atualização da Joia
+                const updateQuery = { 
+                    $inc: { 'arenaStats.duelosConcluidos': 1 },
+                    $set: { 'arenaStats.cristalAtual': jogador.cristal, 'arenaStats.tituloAtual': jogador.titulo }
+                };
+                
+                // 🚀 CORREÇÃO: Salva nas coleções oficiais de utilizadores do sistema!
+                await db.collection('usuarios').updateOne({ nome: jogador.nome }, updateQuery);
+                await db.collection('alunos').updateOne({ nome: jogador.nome }, updateQuery);
             }
         }
 

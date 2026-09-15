@@ -698,7 +698,7 @@ router.get('/perfil/info/:nome', verificarToken, async (req, res) => {
                 bio: user.bio || "A evoluir e a participar ativamente na nossa comunidade de aprendizagem.",
                 tipo: user.tipo || "Aluno",
                 avatar: user.avatar || null,
-                arenaStats: user.arenaStats || null // 🚀 O ELO PERDIDO: Envia o Cristal e o Histórico para o Frontend!
+                arenaStats: user.arenaStats || null // 🚀 O ELO PERDIDO: Agora a Joia viaja para o Frontend!
             });
         } else {
             res.status(404).json({ error: 'Usuário não encontrado.' });
