@@ -687,18 +687,24 @@ router.get('/perfil/info/:nome', verificarToken, async (req, res) => {
         const database = await connectDB();
         const nomeBusca = req.params.nome;
         
-        // Procura o utilizador pelo nome exato
-        const user = await database.collection('usuarios').findOne({
-            $or: [{ nome: nomeBusca }, { login: nomeBusca }]
-        });
+        // 🚀 O DETETIVE DUPLO: Procura simultaneamente na gaveta de Usuários e Alunos
+        const user = await database.collection('usuarios').findOne({ $or: [{ nome: nomeBusca }, { login: nomeBusca }] });
+        const aluno = await database.collection('alunos').findOne({ $or: [{ nome: nomeBusca }, { login: nomeBusca }] });
         
-        if (user) {
+        let perfilFinal = user || aluno;
+        
+        if (perfilFinal) {
+            // Se as estatísticas de batalha acabaram na coleção 'alunos', nós puxamo-las à força!
+            let stats = perfilFinal.arenaStats;
+            if (!stats && user && user.arenaStats) stats = user.arenaStats;
+            if (!stats && aluno && aluno.arenaStats) stats = aluno.arenaStats;
+
             res.status(200).json({ 
                 success: true, 
-                bio: user.bio || "A evoluir e a participar ativamente na nossa comunidade de aprendizagem.",
-                tipo: user.tipo || "Aluno",
-                avatar: user.avatar || null,
-                arenaStats: user.arenaStats || null // 🚀 O ELO PERDIDO: Agora a Joia viaja para o Frontend!
+                bio: perfilFinal.bio || "A evoluir e a participar ativamente na nossa comunidade de aprendizagem.",
+                tipo: perfilFinal.tipo || "Aluno",
+                avatar: perfilFinal.avatar || null,
+                arenaStats: stats || null // 🚀 AGORA NUNCA MAIS SE PERDE!
             });
         } else {
             res.status(404).json({ error: 'Usuário não encontrado.' });

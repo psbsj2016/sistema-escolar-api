@@ -199,18 +199,28 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             { id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } }
         );
 
-        // 🚀 EVOLUÇÃO DO ALUNO: Atualiza o Cristal no Perfil de cada participante no Banco de Dados
+       // 🚀 EVOLUÇÃO DO ALUNO: Atualiza o Cristal no Perfil de cada participante no Banco de Dados
         if (resultadoAvaliacao.jogadores && resultadoAvaliacao.jogadores.length > 0) {
             for (const jogador of resultadoAvaliacao.jogadores) {
-                // A Query de atualização da Joia
                 const updateQuery = { 
                     $inc: { 'arenaStats.duelosConcluidos': 1 },
                     $set: { 'arenaStats.cristalAtual': jogador.cristal, 'arenaStats.tituloAtual': jogador.titulo }
                 };
                 
-                // 🚀 CORREÇÃO: Salva nas coleções oficiais de utilizadores do sistema!
-                await db.collection('usuarios').updateOne({ nome: jogador.nome }, updateQuery);
-                await db.collection('alunos').updateOne({ nome: jogador.nome }, updateQuery);
+                // 🚀 O SEGREDO: Cruza o nome que a IA devolveu com os nomes REAIS de quem estava na sala!
+                const nomeIA = String(jogador.nome).trim().toLowerCase();
+                const j1Nome = String(sala.jogador1?.nome || '').trim().toLowerCase();
+                const j2Nome = String(sala.jogador2?.nome || '').trim().toLowerCase();
+                
+                let nomeParaBuscaBD = jogador.nome; // Fallback
+                if (j1Nome && (nomeIA.includes(j1Nome) || j1Nome.includes(nomeIA))) nomeParaBuscaBD = sala.jogador1.nome;
+                else if (j2Nome && (nomeIA.includes(j2Nome) || j2Nome.includes(nomeIA))) nomeParaBuscaBD = sala.jogador2.nome;
+
+                // Procura tanto pelo 'nome' como pelo 'login' para não haver falhas!
+                const filtroBD = { $or: [{ nome: nomeParaBuscaBD }, { login: nomeParaBuscaBD }] };
+                
+                await db.collection('usuarios').updateOne(filtroBD, updateQuery);
+                await db.collection('alunos').updateOne(filtroBD, updateQuery);
             }
         }
 
