@@ -2,19 +2,30 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const connectDB = require('../config/db'); // Ajuste o caminho se a sua pasta config estiver noutro local
+const connectDB = require('../config/db'); 
 
-// Middleware de Autenticação (Reaproveitado do seu sistema)
 const verificarToken = async (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Acesso negado.' });
     next();
 };
 
+// 🚀 LISTA DE CENÁRIOS ÉPICOS DE ROLEPLAY
+const CENARIOS_ARENA = [
+    "You are at a restaurant and the food is cold. One is the unhappy customer, the other is the waiter.",
+    "You are at the airport and lost your luggage. One is the frustrated traveler, the other is the ground staff.",
+    "You are roommates arguing about who should clean the apartment today.",
+    "Job Interview: One is the strict boss, the other is the nervous candidate.",
+    "Planning a trip: Two friends disagree on whether to go to the beach or the mountains."
+];
+
+// Função utilitária para sortear um cenário
+const sortearCenario = () => CENARIOS_ARENA[Math.floor(Math.random() * CENARIOS_ARENA.length)];
+
 // 1. Rota para Procurar Duelo Aleatório
 router.post('/procurar', verificarToken, async (req, res) => {
     try {
-        const { alunoId, alunoNome, escolaId, limiteMinutos } = req.body; // 🚀 Recebe o tempo
+        const { alunoId, alunoNome, escolaId, limiteMinutos } = req.body;
         const db = await connectDB();
         
         const salaEspera = await db.collection('workspace_arenas').findOne({
@@ -22,13 +33,15 @@ router.post('/procurar', verificarToken, async (req, res) => {
         });
 
         if (salaEspera) {
+            const cenarioSorteado = sortearCenario(); // 🚀 Sorteia a missão!
+
             await db.collection('workspace_arenas').updateOne(
                 { id: salaEspera.id },
                 { $set: { 
                     status: 'em_curso', 
                     jogador2: { id: alunoId, nome: alunoNome },
-                    iniciadoEm: new Date().toISOString()
-                    // Mantém o limite de minutos de quem criou a sala
+                    iniciadoEm: new Date().toISOString(),
+                    cenario: cenarioSorteado
                 }}
             );
 
@@ -38,7 +51,8 @@ router.post('/procurar', verificarToken, async (req, res) => {
                     salaId: salaEspera.id,
                     destinatarios: [salaEspera.jogador1.nome, alunoNome],
                     escolaId: escolaId,
-                    limiteMinutos: salaEspera.limiteMinutos // 🚀 Envia o tempo para o relógio
+                    limiteMinutos: salaEspera.limiteMinutos,
+                    cenario: cenarioSorteado // 🚀 Envia a missão para a tela
                 });
             }
             return res.status(200).json({ success: true, salaId: salaEspera.id, mensagem: 'Oponente encontrado!' });
@@ -50,7 +64,7 @@ router.post('/procurar', verificarToken, async (req, res) => {
                 status: 'aguardando',
                 jogador1: { id: alunoId, nome: alunoNome },
                 jogador2: null,
-                limiteMinutos: parseInt(limiteMinutos) || 50, // 🚀 Guarda o tempo escolhido
+                limiteMinutos: parseInt(limiteMinutos) || 50,
                 criadoEm: new Date().toISOString()
             };
             await db.collection('workspace_arenas').insertOne(novaSala);
@@ -72,7 +86,7 @@ router.post('/convidar', verificarToken, async (req, res) => {
             status: 'aguardando',
             jogador1: { id: alunoId, nome: alunoNome },
             jogador2: { id: null, nome: colegaNome },
-            limiteMinutos: parseInt(limiteMinutos) || 50, // 🚀 Guarda o tempo
+            limiteMinutos: parseInt(limiteMinutos) || 50,
             criadoEm: new Date().toISOString()
         };
 
@@ -85,14 +99,14 @@ router.post('/convidar', verificarToken, async (req, res) => {
                 remetenteNome: alunoNome,
                 destinatarios: [colegaNome],
                 escolaId: escolaId,
-                limiteMinutos: novaSala.limiteMinutos // 🚀 Informa ao convidado a duração
+                limiteMinutos: novaSala.limiteMinutos
             });
         }
         res.status(201).json({ success: true, salaId: novaSala.id, mensagem: 'Convite enviado!' });
     } catch (error) { res.status(500).json({ error: 'Erro ao enviar convite.' }); }
 });
 
-// 🚀 NOVA ROTA: Quando o convidado aceita, puxa ambos para a Arena imediatamente
+// Quando o convidado aceita
 router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
     try {
         const { alunoId, alunoNome, escolaId } = req.body;
@@ -102,9 +116,17 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
         const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
         if (!sala) return res.status(404).json({ error: 'Sala não encontrada.' });
 
+        const cenarioSorteado = sortearCenario(); // 🚀 Sorteia a missão também nos convites!
+
         await db.collection('workspace_arenas').updateOne(
             { id: salaId },
-            { $set: { status: 'em_curso', 'jogador2.id': alunoId, 'jogador2.nome': alunoNome, iniciadoEm: new Date().toISOString() } }
+            { $set: { 
+                status: 'em_curso', 
+                'jogador2.id': alunoId, 
+                'jogador2.nome': alunoNome, 
+                iniciadoEm: new Date().toISOString(),
+                cenario: cenarioSorteado
+            } }
         );
 
         if (global.workspaceStream) {
@@ -113,20 +135,24 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
                 salaId: salaId,
                 destinatarios: [sala.jogador1.nome, alunoNome],
                 escolaId: escolaId,
-                limiteMinutos: sala.limiteMinutos
+                limiteMinutos: sala.limiteMinutos,
+                cenario: cenarioSorteado
             });
         }
         res.status(200).json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro ao aceitar convite.' }); }
 });
 
-// 3. Rota para Receber a Voz (Mantém igual ao que já tínhamos)
+// 3. Rota para Receber a Voz 
 router.post('/:salaId/falar', verificarToken, async (req, res) => {
     try {
-        const { texto, autorId, autorNome, escolaId } = req.body;
+        const { texto, autorId, autorNome, escolaId, combo } = req.body; // 🚀 Recebe a informação do Combo
         const salaId = req.params.salaId;
         const db = await connectDB();
-        const novaFala = { id: crypto.randomUUID(), autorId, autorNome, texto, data: new Date().toISOString() };
+        
+        // Guarda a informação de combo no histórico
+        const novaFala = { id: crypto.randomUUID(), autorId, autorNome, texto, combo, data: new Date().toISOString() };
+        
         await db.collection('workspace_arenas').updateOne({ id: salaId }, { $push: { historico: novaFala } });
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', { type: 'ARENA_NOVA_FALA', salaId: salaId, fala: novaFala, escolaId: escolaId || 'DEFAULT' });
@@ -135,7 +161,7 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao processar a fala.' }); }
 });
 
-// 4. Rota para Avaliar a Partida e Forjar Cristais (Fase 3 - GROQ IA)
+// 4. Rota para Avaliar a Partida e Forjar Cristais
 router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
     try {
         const salaId = req.params.salaId;
@@ -147,15 +173,21 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
 
         let dialogo = '';
         if (sala.historico && sala.historico.length > 0) {
-            sala.historico.forEach(fala => { dialogo += `[${fala.autorNome}]: ${fala.texto}\n`; });
+            sala.historico.forEach(fala => { 
+                // 🚀 Inclui a métrica do Combo para a IA ler!
+                let comboStr = (fala.combo && fala.combo > 0) ? ` (Speed Combo 🔥x${fala.combo})` : '';
+                dialogo += `[${fala.autorNome}]${comboStr}: ${fala.texto}\n`; 
+            });
         } else {
             dialogo = "(Os alunos permaneceram em silêncio.)";
         }
 
-        // 🚀 O NOVO PROMPT: Passamos a "Identidade Secreta" (ID) de cada aluno para a IA!
         const promptIA = `
         Aja como um professor nativo de inglês. Dois alunos participaram num "Roleplay" (duelo de fluência).
+        Cenário encenado: "${sala.cenario || 'Conversa livre'}"
+        
         Avalie o diálogo e atribua um Cristal de Evolução a CADA aluno baseado no seu esforço e gramática.
+        NOTA: Se um aluno tiver o aviso "(Speed Combo 🔥xN)" significa que ele respondeu em poucos segundos! Elogie muito a sua fluência de raciocínio.
         
         Níveis de Evolução (Do menor para o maior):
         1. "Safira" (Título: Orador Audaz) - Nível Básico/Bom.
@@ -198,12 +230,10 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             resultadoAvaliacao = { vencedor: "Empate", feedbackGeral: "Ótimo treino!", jogadores: [] };
         }
 
-        // 🚀 Atualiza a Sala
         await db.collection('workspace_arenas').updateOne(
             { id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } }
         );
 
-        // 🚀 EVOLUÇÃO DO ALUNO: Gravação perfeita baseada no ID retornado pela IA!
         if (resultadoAvaliacao.jogadores && resultadoAvaliacao.jogadores.length > 0) {
             for (const jogador of resultadoAvaliacao.jogadores) {
                 if (!jogador.id || jogador.id === 'Nenhum') continue;
