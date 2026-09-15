@@ -152,7 +152,7 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             dialogo = "(Os alunos permaneceram em silêncio.)";
         }
 
-        // 🚀 O NOVO PROMPT: Avalia a evolução e forja os Cristais individualmente
+        // 🚀 O NOVO PROMPT: Passamos a "Identidade Secreta" (ID) de cada aluno para a IA!
         const promptIA = `
         Aja como um professor nativo de inglês. Dois alunos participaram num "Roleplay" (duelo de fluência).
         Avalie o diálogo e atribua um Cristal de Evolução a CADA aluno baseado no seu esforço e gramática.
@@ -162,6 +162,10 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
         2. "Ametista" (Título: Mestre do Diálogo) - Nível Muito Bom.
         3. "Rubi" (Título: Embaixador da Fluência) - Nível Excelente.
         4. "Diamante Estelar" (Título: Lenda Nativa) - Nível Impecável.
+
+        Identificação dos Alunos na Sala:
+        - Aluno 1: ${sala.jogador1.nome} (ID_Secreto: ${sala.jogador1.id})
+        - Aluno 2: ${sala.jogador2 ? sala.jogador2.nome : 'Nenhum'} (ID_Secreto: ${sala.jogador2 ? sala.jogador2.id : 'Nenhum'})
         
         Diálogo:
         ${dialogo}
@@ -171,8 +175,8 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             "vencedor": "Nome do Aluno que se destacou (ou 'Empate')",
             "feedbackGeral": "Comentário vibrante sobre o duelo geral",
             "jogadores": [
-                { "nome": "Nome Aluno 1", "cristal": "Safira", "titulo": "Orador Audaz", "feedback": "Correção ou elogio direto" },
-                { "nome": "Nome Aluno 2", "cristal": "Ametista", "titulo": "Mestre do Diálogo", "feedback": "Correção ou elogio direto" }
+                { "id": "ID_Secreto do Aluno 1", "nome": "Nome Aluno 1", "cristal": "Safira", "titulo": "Orador Audaz", "feedback": "Correção ou elogio direto" },
+                { "id": "ID_Secreto do Aluno 2", "nome": "Nome Aluno 2", "cristal": "Ametista", "titulo": "Mestre do Diálogo", "feedback": "Correção ou elogio direto" }
             ]
         }
         Nunca retorne texto fora do JSON.
@@ -199,42 +203,18 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             { id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } }
         );
 
-       // 🚀 EVOLUÇÃO DO ALUNO: Atualiza o Cristal no Perfil (Usando IDs Inquebráveis)
+        // 🚀 EVOLUÇÃO DO ALUNO: Gravação perfeita baseada no ID retornado pela IA!
         if (resultadoAvaliacao.jogadores && resultadoAvaliacao.jogadores.length > 0) {
             for (const jogador of resultadoAvaliacao.jogadores) {
+                if (!jogador.id || jogador.id === 'Nenhum') continue;
+
                 const updateQuery = { 
                     $inc: { 'arenaStats.duelosConcluidos': 1 },
                     $set: { 'arenaStats.cristalAtual': jogador.cristal, 'arenaStats.tituloAtual': jogador.titulo }
                 };
                 
-                // 🚀 O SEGREDO: Em vez de confiar no nome que a IA escreveu, cruzamos com os IDs exatos da sala!
-                const nomeIA = String(jogador.nome).trim().toLowerCase();
-                const j1Nome = String(sala.jogador1?.nome || '').trim().toLowerCase();
-                const j2Nome = String(sala.jogador2?.nome || '').trim().toLowerCase();
-                
-                let idDoJogador = null;
-                
-                if (sala.jogador1 && j1Nome && (nomeIA.includes(j1Nome) || j1Nome.includes(nomeIA))) {
-                    idDoJogador = sala.jogador1.id;
-                } else if (sala.jogador2 && j2Nome && (nomeIA.includes(j2Nome) || j2Nome.includes(nomeIA))) {
-                    idDoJogador = sala.jogador2.id;
-                }
-                
-                // Se encontrou o ID exato, guarda a Joia! (Garante 100% de precisão)
-                if (idDoJogador) {
-                    await db.collection('usuarios').updateOne({ id: idDoJogador }, updateQuery);
-                    await db.collection('alunos').updateOne({ id: idDoJogador }, updateQuery);
-                } else {
-                    // Fallback de Segurança Máxima: se a IA alucinar o nome todo, dá a joia a ambos para ninguém ser prejudicado!
-                    if (sala.jogador1?.id) {
-                        await db.collection('usuarios').updateOne({ id: sala.jogador1.id }, updateQuery);
-                        await db.collection('alunos').updateOne({ id: sala.jogador1.id }, updateQuery);
-                    }
-                    if (sala.jogador2?.id) {
-                        await db.collection('usuarios').updateOne({ id: sala.jogador2.id }, updateQuery);
-                        await db.collection('alunos').updateOne({ id: sala.jogador2.id }, updateQuery);
-                    }
-                }
+                await db.collection('usuarios').updateOne({ id: jogador.id }, updateQuery);
+                await db.collection('alunos').updateOne({ id: jogador.id }, updateQuery);
             }
         }
 

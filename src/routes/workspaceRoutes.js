@@ -682,14 +682,14 @@ router.put('/perfil/avatar', verificarToken, async (req, res) => {
 // ============================================================================
 // 🙍 PERFIL: BUSCAR INFO PÚBLICA E ATUALIZAR BIO
 // ============================================================================
-router.get('/perfil/info/:nome', verificarToken, async (req, res) => {
+router.get('/perfil/info/:identificador', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        const nomeBusca = req.params.nome;
+        const idBusca = req.params.identificador;
         
-        // 🚀 O DETETIVE DUPLO: Procura simultaneamente na gaveta de Usuários e Alunos
-        const user = await database.collection('usuarios').findOne({ $or: [{ nome: nomeBusca }, { login: nomeBusca }] });
-        const aluno = await database.collection('alunos').findOne({ $or: [{ nome: nomeBusca }, { login: nomeBusca }] });
+        // 🚀 O DETETIVE ABSOLUTO: Procura pelo ID ou Nome em ambas as coleções
+        const user = await database.collection('usuarios').findOne({ $or: [{ id: idBusca }, { nome: idBusca }, { login: idBusca }] });
+        const aluno = await database.collection('alunos').findOne({ $or: [{ id: idBusca }, { nome: idBusca }, { login: idBusca }] });
         
         let perfilFinal = user || aluno;
         
