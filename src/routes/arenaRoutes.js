@@ -199,7 +199,7 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             { id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } }
         );
 
-       // 🚀 EVOLUÇÃO DO ALUNO: Atualiza o Cristal no Perfil de cada participante no Banco de Dados
+       // 🚀 EVOLUÇÃO DO ALUNO: Atualiza o Cristal no Perfil (Usando IDs Inquebráveis)
         if (resultadoAvaliacao.jogadores && resultadoAvaliacao.jogadores.length > 0) {
             for (const jogador of resultadoAvaliacao.jogadores) {
                 const updateQuery = { 
@@ -207,20 +207,34 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
                     $set: { 'arenaStats.cristalAtual': jogador.cristal, 'arenaStats.tituloAtual': jogador.titulo }
                 };
                 
-                // 🚀 O SEGREDO: Cruza o nome que a IA devolveu com os nomes REAIS de quem estava na sala!
+                // 🚀 O SEGREDO: Em vez de confiar no nome que a IA escreveu, cruzamos com os IDs exatos da sala!
                 const nomeIA = String(jogador.nome).trim().toLowerCase();
                 const j1Nome = String(sala.jogador1?.nome || '').trim().toLowerCase();
                 const j2Nome = String(sala.jogador2?.nome || '').trim().toLowerCase();
                 
-                let nomeParaBuscaBD = jogador.nome; // Fallback
-                if (j1Nome && (nomeIA.includes(j1Nome) || j1Nome.includes(nomeIA))) nomeParaBuscaBD = sala.jogador1.nome;
-                else if (j2Nome && (nomeIA.includes(j2Nome) || j2Nome.includes(nomeIA))) nomeParaBuscaBD = sala.jogador2.nome;
-
-                // Procura tanto pelo 'nome' como pelo 'login' para não haver falhas!
-                const filtroBD = { $or: [{ nome: nomeParaBuscaBD }, { login: nomeParaBuscaBD }] };
+                let idDoJogador = null;
                 
-                await db.collection('usuarios').updateOne(filtroBD, updateQuery);
-                await db.collection('alunos').updateOne(filtroBD, updateQuery);
+                if (sala.jogador1 && j1Nome && (nomeIA.includes(j1Nome) || j1Nome.includes(nomeIA))) {
+                    idDoJogador = sala.jogador1.id;
+                } else if (sala.jogador2 && j2Nome && (nomeIA.includes(j2Nome) || j2Nome.includes(nomeIA))) {
+                    idDoJogador = sala.jogador2.id;
+                }
+                
+                // Se encontrou o ID exato, guarda a Joia! (Garante 100% de precisão)
+                if (idDoJogador) {
+                    await db.collection('usuarios').updateOne({ id: idDoJogador }, updateQuery);
+                    await db.collection('alunos').updateOne({ id: idDoJogador }, updateQuery);
+                } else {
+                    // Fallback de Segurança Máxima: se a IA alucinar o nome todo, dá a joia a ambos para ninguém ser prejudicado!
+                    if (sala.jogador1?.id) {
+                        await db.collection('usuarios').updateOne({ id: sala.jogador1.id }, updateQuery);
+                        await db.collection('alunos').updateOne({ id: sala.jogador1.id }, updateQuery);
+                    }
+                    if (sala.jogador2?.id) {
+                        await db.collection('usuarios').updateOne({ id: sala.jogador2.id }, updateQuery);
+                        await db.collection('alunos').updateOne({ id: sala.jogador2.id }, updateQuery);
+                    }
+                }
             }
         }
 
