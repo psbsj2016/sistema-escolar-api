@@ -218,7 +218,7 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao processar a fala.' }); }
 });
 
-// 4. Rota para Avaliar a Partida e Forjar Cristais
+// 4. Rota para Avaliar a Partida e Forjar Cristais (Fase 3 - GROQ IA)
 router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
     try {
         const salaId = req.params.salaId;
@@ -231,7 +231,7 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
         let dialogo = '';
         if (sala.historico && sala.historico.length > 0) {
             sala.historico.forEach(fala => { 
-                // 🚀 Inclui a métrica do Combo para a IA ler!
+                // Inclui a métrica do Combo para a IA ler!
                 let comboStr = (fala.combo && fala.combo > 0) ? ` (Speed Combo 🔥x${fala.combo})` : '';
                 dialogo += `[${fala.autorNome}]${comboStr}: ${fala.texto}\n`; 
             });
@@ -239,33 +239,34 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             dialogo = "(Os alunos permaneceram em silêncio.)";
         }
 
+        // 🚀 PLANO A: PROMPT CORRIGIDO (Instrução claríssima para usar o ID real)
         const promptIA = `
         Aja como um professor nativo de inglês. Dois alunos participaram num "Roleplay" (duelo de fluência).
         Cenário encenado: "${sala.cenario || 'Conversa livre'}"
         
         Avalie o diálogo e atribua um Cristal de Evolução a CADA aluno baseado no seu esforço e gramática.
-        NOTA: Se um aluno tiver o aviso "(Speed Combo 🔥xN)" significa que ele respondeu em poucos segundos! Elogie muito a sua fluência de raciocínio.
+        NOTA: Se um aluno tiver o aviso "(Speed Combo 🔥xN)" significa que ele respondeu em poucos segundos! Elogie muito a sua fluência de raciocínio no feedback.
         
         Níveis de Evolução (Do menor para o maior):
-        1. "Safira" (Título: Orador Audaz) - Nível Básico/Bom.
-        2. "Ametista" (Título: Mestre do Diálogo) - Nível Muito Bom.
-        3. "Rubi" (Título: Embaixador da Fluência) - Nível Excelente.
-        4. "Diamante Estelar" (Título: Lenda Nativa) - Nível Impecável.
+        1. "Safira" (Título: Orador Audaz)
+        2. "Ametista" (Título: Mestre do Diálogo)
+        3. "Rubi" (Título: Embaixador da Fluência)
+        4. "Diamante Estelar" (Título: Lenda Nativa)
 
-        Identificação dos Alunos na Sala:
-        - Aluno 1: ${sala.jogador1.nome} (ID_Secreto: ${sala.jogador1.id})
-        - Aluno 2: ${sala.jogador2 ? sala.jogador2.nome : 'Nenhum'} (ID_Secreto: ${sala.jogador2 ? sala.jogador2.id : 'Nenhum'})
+        Identificação Exata dos Alunos na Sala:
+        - Jogador 1 -> Nome: ${sala.jogador1.nome} | ID_Real: ${sala.jogador1.id}
+        - Jogador 2 -> Nome: ${sala.jogador2 ? sala.jogador2.nome : 'Nenhum'} | ID_Real: ${sala.jogador2 ? sala.jogador2.id : 'Nenhum'}
         
         Diálogo:
         ${dialogo}
 
-        Retorne APENAS um objeto JSON válido, com esta estrutura exata:
+        Retorne APENAS um objeto JSON válido. SUBSTITUA a palavra "ID_Real_Aqui" pelo código ID_Real do aluno correspondente que lhe dei acima!
         {
             "vencedor": "Nome do Aluno que se destacou (ou 'Empate')",
             "feedbackGeral": "Comentário vibrante sobre o duelo geral",
             "jogadores": [
-                { "id": "ID_Secreto do Aluno 1", "nome": "Nome Aluno 1", "cristal": "Safira", "titulo": "Orador Audaz", "feedback": "Correção ou elogio direto" },
-                { "id": "ID_Secreto do Aluno 2", "nome": "Nome Aluno 2", "cristal": "Ametista", "titulo": "Mestre do Diálogo", "feedback": "Correção ou elogio direto" }
+                { "id": "ID_Real_Aqui", "nome": "Nome Aluno 1", "cristal": "Safira", "titulo": "Orador Audaz", "feedback": "Correção ou elogio direto" },
+                { "id": "ID_Real_Aqui", "nome": "Nome Aluno 2", "cristal": "Ametista", "titulo": "Mestre do Diálogo", "feedback": "Correção ou elogio direto" }
             ]
         }
         Nunca retorne texto fora do JSON.
@@ -274,7 +275,11 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
         const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'llama3-70b-8192', messages: [{ role: 'user', content: promptIA }], temperature: 0.3 })
+            body: JSON.stringify({ 
+                model: 'llama3-70b-8192', 
+                messages: [{ role: 'user', content: promptIA }], 
+                temperature: 0.2 // 🚀 Temperatura mais baixa para a IA ser mais precisa nos IDs
+            })
         });
 
         const groqData = await groqRes.json();
@@ -287,23 +292,46 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             resultadoAvaliacao = { vencedor: "Empate", feedbackGeral: "Ótimo treino!", jogadores: [] };
         }
 
+        // 🚀 PLANO B: O DETETIVE DE NOMES (O Escudo Infalível)
+        if (resultadoAvaliacao.jogadores && resultadoAvaliacao.jogadores.length > 0) {
+            for (const jogador of resultadoAvaliacao.jogadores) {
+                
+                // Tenta usar o ID que a IA devolveu
+                let idDefinitivo = jogador.id;
+                
+                // Se a IA se enganou e devolveu um texto genérico ou "Nenhum", ativamos o Detetive!
+                if (!idDefinitivo || idDefinitivo === 'ID_Real_Aqui' || idDefinitivo === 'ID_Secreto do Aluno 1' || idDefinitivo === 'Nenhum') {
+                    const nomeIA = String(jogador.nome).trim().toLowerCase();
+                    const j1Nome = String(sala.jogador1?.nome || '').trim().toLowerCase();
+                    const j2Nome = String(sala.jogador2?.nome || '').trim().toLowerCase();
+                    
+                    if (sala.jogador1 && j1Nome && (nomeIA.includes(j1Nome) || j1Nome.includes(nomeIA))) {
+                        idDefinitivo = sala.jogador1.id;
+                    } else if (sala.jogador2 && j2Nome && (nomeIA.includes(j2Nome) || j2Nome.includes(nomeIA))) {
+                        idDefinitivo = sala.jogador2.id;
+                    }
+                }
+
+                // Se conseguiu descobrir o ID verdadeiro, guarda a Joia!
+                if (idDefinitivo && idDefinitivo !== 'Nenhum') {
+                    // Substitui o ID na resposta final para o ecrã do aluno também o conseguir ler
+                    jogador.id = idDefinitivo;
+
+                    const updateQuery = { 
+                        $inc: { 'arenaStats.duelosConcluidos': 1 },
+                        $set: { 'arenaStats.cristalAtual': jogador.cristal, 'arenaStats.tituloAtual': jogador.titulo }
+                    };
+                    
+                    await db.collection('usuarios').updateOne({ id: idDefinitivo }, updateQuery);
+                    await db.collection('alunos').updateOne({ id: idDefinitivo }, updateQuery);
+                }
+            }
+        }
+
+        // Atualiza a Sala com o resultado final (já com os IDs devidamente corrigidos pelo Detetive)
         await db.collection('workspace_arenas').updateOne(
             { id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } }
         );
-
-        if (resultadoAvaliacao.jogadores && resultadoAvaliacao.jogadores.length > 0) {
-            for (const jogador of resultadoAvaliacao.jogadores) {
-                if (!jogador.id || jogador.id === 'Nenhum') continue;
-
-                const updateQuery = { 
-                    $inc: { 'arenaStats.duelosConcluidos': 1 },
-                    $set: { 'arenaStats.cristalAtual': jogador.cristal, 'arenaStats.tituloAtual': jogador.titulo }
-                };
-                
-                await db.collection('usuarios').updateOne({ id: jogador.id }, updateQuery);
-                await db.collection('alunos').updateOne({ id: jogador.id }, updateQuery);
-            }
-        }
 
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
@@ -312,7 +340,10 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             });
         }
         res.status(200).json({ success: true, resultado: resultadoAvaliacao });
-    } catch (error) { res.status(500).json({ error: 'Erro ao avaliar a Arena.' }); }
+    } catch (error) { 
+        console.error("Erro na Arena:", error);
+        res.status(500).json({ error: 'Erro ao avaliar a Arena.' }); 
+    }
 });
 
 // ============================================================================
