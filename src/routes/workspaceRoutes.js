@@ -864,12 +864,23 @@ router.get('/avatars', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
         const mapaAvatars = {};
-        const alunos = await database.collection('alunos').find({ avatar: { $exists: true, $ne: null } }).toArray();
-        const usuarios = await database.collection('usuarios').find({ avatar: { $exists: true, $ne: null } }).toArray();
-        alunos.forEach(a => { if(a.nome) mapaAvatars[a.nome] = a.avatar; });
-        usuarios.forEach(u => { const nome = u.nome || u.login; if(nome) mapaAvatars[nome] = u.avatar; });
+        
+        // 🚀 CORREÇÃO DO RADAR: Busca TODOS os alunos e utilizadores, independentemente de terem foto ou não!
+        const alunos = await database.collection('alunos').find({}).toArray();
+        const usuarios = await database.collection('usuarios').find({}).toArray();
+        
+        alunos.forEach(a => { 
+            if(a.nome) mapaAvatars[a.nome] = a.avatar || null; 
+        });
+        usuarios.forEach(u => { 
+            const nome = u.nome || u.login; 
+            if(nome) mapaAvatars[nome] = u.avatar || null; 
+        });
+        
         res.status(200).json(mapaAvatars);
-    } catch (error) { res.status(500).json({ error: 'Erro.' }); }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao carregar o diretório de utilizadores.' }); 
+    }
 });
 
 // ============================================================================
