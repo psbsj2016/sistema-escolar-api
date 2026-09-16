@@ -218,7 +218,9 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao processar a fala.' }); }
 });
 
-// 4. Rota para Avaliar a Partida e Forjar Cristais (Fase 3 - GROQ IA)
+// ============================================================================
+// 4. Rota para Avaliar a Partida e Forjar Cristais (O ALGORITMO INFALÍVEL)
+// ============================================================================
 router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
     try {
         const salaId = req.params.salaId;
@@ -231,7 +233,6 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
         let dialogo = '';
         if (sala.historico && sala.historico.length > 0) {
             sala.historico.forEach(fala => { 
-                // Inclui a métrica do Combo para a IA ler!
                 let comboStr = (fala.combo && fala.combo > 0) ? ` (Speed Combo 🔥x${fala.combo})` : '';
                 dialogo += `[${fala.autorNome}]${comboStr}: ${fala.texto}\n`; 
             });
@@ -239,37 +240,32 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             dialogo = "(Os alunos permaneceram em silêncio.)";
         }
 
-        // 🚀 PLANO A: PROMPT CORRIGIDO (Instrução claríssima para usar o ID real)
+        // 🚀 PROMPT SIMPLIFICADO: A IA só precisa de focar-se nos Nomes e Cristais!
         const promptIA = `
-        Aja como um professor nativo de inglês. Dois alunos participaram num "Roleplay" (duelo de fluência).
+        Aja como um professor nativo de inglês avaliando um "Roleplay" (duelo de fluência).
         Cenário encenado: "${sala.cenario || 'Conversa livre'}"
         
-        Avalie o diálogo e atribua um Cristal de Evolução a CADA aluno baseado no seu esforço e gramática.
-        NOTA: Se um aluno tiver o aviso "(Speed Combo 🔥xN)" significa que ele respondeu em poucos segundos! Elogie muito a sua fluência de raciocínio no feedback.
-        
-        Níveis de Evolução (Do menor para o maior):
+        Níveis de Evolução:
         1. "Safira" (Título: Orador Audaz)
         2. "Ametista" (Título: Mestre do Diálogo)
         3. "Rubi" (Título: Embaixador da Fluência)
         4. "Diamante Estelar" (Título: Lenda Nativa)
 
-        Identificação Exata dos Alunos na Sala:
-        - Jogador 1 -> Nome: ${sala.jogador1.nome} | ID_Real: ${sala.jogador1.id}
-        - Jogador 2 -> Nome: ${sala.jogador2 ? sala.jogador2.nome : 'Nenhum'} | ID_Real: ${sala.jogador2 ? sala.jogador2.id : 'Nenhum'}
+        Jogadores:
+        - ${sala.jogador1.nome}
+        - ${sala.jogador2 ? sala.jogador2.nome : 'Nenhum'}
         
         Diálogo:
         ${dialogo}
 
-        Retorne APENAS um objeto JSON válido. SUBSTITUA a palavra "ID_Real_Aqui" pelo código ID_Real do aluno correspondente que lhe dei acima!
+        Retorne APENAS um objeto JSON válido, avaliando APENAS os nomes listados acima.
         {
-            "vencedor": "Nome do Aluno que se destacou (ou 'Empate')",
-            "feedbackGeral": "Comentário vibrante sobre o duelo geral",
+            "vencedor": "Nome do vencedor ou Empate",
+            "feedbackGeral": "Comentário sobre o duelo",
             "jogadores": [
-                { "id": "ID_Real_Aqui", "nome": "Nome Aluno 1", "cristal": "Safira", "titulo": "Orador Audaz", "feedback": "Correção ou elogio direto" },
-                { "id": "ID_Real_Aqui", "nome": "Nome Aluno 2", "cristal": "Ametista", "titulo": "Mestre do Diálogo", "feedback": "Correção ou elogio direto" }
+                { "nome": "Nome Aluno 1", "cristal": "Safira", "titulo": "Orador Audaz", "feedback": "Correção curta" }
             ]
         }
-        Nunca retorne texto fora do JSON.
         `;
 
         const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -278,7 +274,7 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             body: JSON.stringify({ 
                 model: 'llama3-70b-8192', 
                 messages: [{ role: 'user', content: promptIA }], 
-                temperature: 0.2 // 🚀 Temperatura mais baixa para a IA ser mais precisa nos IDs
+                temperature: 0.2 // Mantém o rigor
             })
         });
 
@@ -292,43 +288,53 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             resultadoAvaliacao = { vencedor: "Empate", feedbackGeral: "Ótimo treino!", jogadores: [] };
         }
 
-        // 🚀 PLANO B: O DETETIVE DE NOMES (O Escudo Infalível)
-        if (resultadoAvaliacao.jogadores && resultadoAvaliacao.jogadores.length > 0) {
-            for (const jogador of resultadoAvaliacao.jogadores) {
-                
-                // Tenta usar o ID que a IA devolveu
-                let idDefinitivo = jogador.id;
-                
-                // Se a IA se enganou e devolveu um texto genérico ou "Nenhum", ativamos o Detetive!
-                if (!idDefinitivo || idDefinitivo === 'ID_Real_Aqui' || idDefinitivo === 'ID_Secreto do Aluno 1' || idDefinitivo === 'Nenhum') {
-                    const nomeIA = String(jogador.nome).trim().toLowerCase();
-                    const j1Nome = String(sala.jogador1?.nome || '').trim().toLowerCase();
-                    const j2Nome = String(sala.jogador2?.nome || '').trim().toLowerCase();
-                    
-                    if (sala.jogador1 && j1Nome && (nomeIA.includes(j1Nome) || j1Nome.includes(nomeIA))) {
-                        idDefinitivo = sala.jogador1.id;
-                    } else if (sala.jogador2 && j2Nome && (nomeIA.includes(j2Nome) || j2Nome.includes(nomeIA))) {
-                        idDefinitivo = sala.jogador2.id;
-                    }
-                }
+        // 🚀 O ALGORITMO INFALÍVEL DE RECOMPENSA (CRIADO AGORA)
+        const jogadoresReais = [sala.jogador1, sala.jogador2].filter(j => j && j.id);
+        const jogadoresCorrigidosParaFrontend = [];
 
-                // Se conseguiu descobrir o ID verdadeiro, guarda a Joia!
-                if (idDefinitivo && idDefinitivo !== 'Nenhum') {
-                    // Substitui o ID na resposta final para o ecrã do aluno também o conseguir ler
-                    jogador.id = idDefinitivo;
+        for (const jogadorReal of jogadoresReais) {
+            // Busca a avaliação gerada pela IA cruzando o NOME do jogador real
+            let avaliacaoIA = resultadoAvaliacao.jogadores?.find(j => 
+                String(j.nome).toLowerCase().trim().includes(String(jogadorReal.nome).toLowerCase().trim()) ||
+                String(jogadorReal.nome).toLowerCase().trim().includes(String(j.nome).toLowerCase().trim())
+            );
 
-                    const updateQuery = { 
-                        $inc: { 'arenaStats.duelosConcluidos': 1 },
-                        $set: { 'arenaStats.cristalAtual': jogador.cristal, 'arenaStats.tituloAtual': jogador.titulo }
-                    };
-                    
-                    await db.collection('usuarios').updateOne({ id: idDefinitivo }, updateQuery);
-                    await db.collection('alunos').updateOne({ id: idDefinitivo }, updateQuery);
-                }
+            // Se a IA alucinar e não criar a avaliação, o Servidor cria uma de consolação
+            if (!avaliacaoIA) {
+                avaliacaoIA = {
+                    nome: jogadorReal.nome,
+                    cristal: "Safira",
+                    titulo: "Sobrevivente da Arena",
+                    feedback: "A IA teve dificuldade em ler as mensagens, mas a sua coragem em participar rendeu-lhe experiência!"
+                };
             }
+            
+            // Força o ID verdadeiro na avaliação para a interface gráfica funcionar perfeitamente
+            avaliacaoIA.id = jogadorReal.id;
+            jogadoresCorrigidosParaFrontend.push(avaliacaoIA);
+
+            // 🚀 A BLINDAGEM DO BANCO DE DADOS: Pegar todos os IDs possíveis do aluno (Usuario ID e Aluno ID)
+            const userRecord = await db.collection('usuarios').findOne({ id: jogadorReal.id });
+            const alunoRef = userRecord ? userRecord.alunoRefId : null;
+
+            const idsParaAtualizar = [jogadorReal.id];
+            if (alunoRef) idsParaAtualizar.push(alunoRef);
+
+            // Adiciona o Fogo (+1 duelo) e regista o Cristal atual!
+            const updateQuery = { 
+                $inc: { 'arenaStats.duelosConcluidos': 1 },
+                $set: { 'arenaStats.cristalAtual': avaliacaoIA.cristal, 'arenaStats.tituloAtual': avaliacaoIA.titulo }
+            };
+            
+            // Atira a atualização para todos os documentos correspondentes de forma brutal!
+            await db.collection('usuarios').updateMany({ $or: [ { id: { $in: idsParaAtualizar } }, { alunoRefId: { $in: idsParaAtualizar } } ] }, updateQuery);
+            await db.collection('alunos').updateMany({ id: { $in: idsParaAtualizar } }, updateQuery);
         }
 
-        // Atualiza a Sala com o resultado final (já com os IDs devidamente corrigidos pelo Detetive)
+        // Substitui a lista de jogadores da IA pela nossa lista 100% precisa
+        resultadoAvaliacao.jogadores = jogadoresCorrigidosParaFrontend;
+
+        // Salva a sala finalizada
         await db.collection('workspace_arenas').updateOne(
             { id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } }
         );
