@@ -315,4 +315,30 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao avaliar a Arena.' }); }
 });
 
+// ============================================================================
+// 5. Rota para buscar o Histórico Épico do Aluno (Fase 3)
+// ============================================================================
+router.get('/historico/:alunoId', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        
+        // Procura salas finalizadas onde o aluno jogou
+        const historico = await db.collection('workspace_arenas')
+            .find({
+                status: 'finalizado',
+                $or: [
+                    { 'jogador1.id': req.params.alunoId },
+                    { 'jogador2.id': req.params.alunoId }
+                ]
+            })
+            .sort({ dataFim: -1 }) // Ordena do mais recente para o mais antigo
+            .limit(20) // Mostra os últimos 20 duelos para não sobrecarregar
+            .toArray();
+        
+        res.status(200).json({ success: true, historico });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao buscar histórico de batalhas.' });
+    }
+});
+
 module.exports = router;
