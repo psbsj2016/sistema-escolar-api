@@ -860,21 +860,39 @@ router.post('/entregas/:id/feedback', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro interno.' }); }
 });
 
+// ============================================================================
+// 🎭 RADAR DE AVATARES (Filtro Rigoroso: Apenas Alunos Ativos com Login)
+// ============================================================================
 router.get('/avatars', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
         const mapaAvatars = {};
         
-        // 🚀 CORREÇÃO DO RADAR: Busca TODOS os alunos e utilizadores, independentemente de terem foto ou não!
+        // 1. Vai buscar TODOS os alunos e TODOS os utilizadores (logins)
         const alunos = await database.collection('alunos').find({}).toArray();
         const usuarios = await database.collection('usuarios').find({}).toArray();
         
-        alunos.forEach(a => { 
-            if(a.nome) mapaAvatars[a.nome] = a.avatar || null; 
+        // 2. Filtra quem é realmente um "Aluno Ativo" (ignora Cancelados/Trancados)
+        const alunosAtivos = alunos.filter(a => !a.status || a.status === 'Ativo');
+
+        // 3. O CRUZAMENTO DE DADOS (A Inteligência Matemática)
+        alunosAtivos.forEach(aluno => {
+            // Verifica se este aluno ativo tem uma conta de acesso criada
+            const temLogin = usuarios.find(u => String(u.alunoRefId) === String(aluno.id) || String(u.nome) === String(aluno.nome));
+            
+            if (temLogin && aluno.nome) {
+                // Se está ativo E tem login, entra para o radar da Arena!
+                // Dá prioridade à foto do login, se não houver, tenta a do cadastro.
+                mapaAvatars[aluno.nome] = temLogin.avatar || aluno.avatar || null;
+            }
         });
-        usuarios.forEach(u => { 
-            const nome = u.nome || u.login; 
-            if(nome) mapaAvatars[nome] = u.avatar || null; 
+
+        // 4. Adiciona os Professores e Gestores ao radar (eles não estão na coleção de alunos)
+        usuarios.forEach(u => {
+            if (u.tipo === 'Professor' || u.tipo === 'Gestor') {
+                const nome = u.nome || u.login;
+                if (nome) mapaAvatars[nome] = u.avatar || null;
+            }
         });
         
         res.status(200).json(mapaAvatars);
