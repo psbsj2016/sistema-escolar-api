@@ -219,6 +219,25 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
+// 🚑 SALVA-VIDAS DA IA: Feedback de Emergência (Se a formatação do JSON falhar)
+// ============================================================================
+async function gerarFeedbackEmergencia(dialogo, nomeJogador) {
+    try {
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+        const prompt = `Atue como um professor de inglês. Leia este diálogo:\n\n${dialogo}\n\nO aluno "${nomeJogador}" participou. Escreva UMA ÚNICA FRASE curta em português dando uma dica gramatical útil ou corrigindo um erro que ele cometeu no diálogo. Não use aspas. Seja motivador.`;
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'user', content: prompt }],
+            model: 'openai/gpt-oss-120b',
+            temperature: 0.4
+        });
+        return completion.choices[0].message.content.trim();
+    } catch (e) {
+        return "O seu esforço foi notável! Continue a praticar para aprimorar a sua fluência.";
+    }
+}
+
+// ============================================================================
 // 4. Rota para Avaliar a Partida e Forjar Cristais (O ALGORITMO INFALÍVEL)
 // ============================================================================
 router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
@@ -299,13 +318,16 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
                 String(jogadorReal.nome).toLowerCase().trim().includes(String(j.nome).toLowerCase().trim())
             );
 
-            // Se a IA alucinar e não criar a avaliação, o Servidor cria uma de consolação
+           // Se a IA principal alucinar e não criar a avaliação para este jogador, 
+            // acionamos o Salva-Vidas para gerar um feedback real e contextualizado!
             if (!avaliacaoIA) {
+                const dicaSalvadora = await gerarFeedbackEmergencia(dialogo, jogadorReal.nome);
+                
                 avaliacaoIA = {
                     nome: jogadorReal.nome,
                     cristal: "Safira",
                     titulo: "Sobrevivente da Arena",
-                    feedback: "A IA teve dificuldade em ler as mensagens, mas a sua coragem em participar rendeu-lhe experiência!"
+                    feedback: dicaSalvadora // 🚀 A Dica Perfeita e Útil entra aqui!
                 };
             }
             

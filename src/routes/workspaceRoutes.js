@@ -2115,4 +2115,47 @@ router.post('/posts/imersao-musical/mais-dias', verificarToken, async (req, res)
     }
 });
 
+// ============================================================================
+// 🎙️ REVISOR DE TRANSCRIÇÃO INTELIGENTE (PONTUAÇÃO PERFEITA)
+// ============================================================================
+router.post('/ingles/transcricao/corrigir', verificarToken, async (req, res) => {
+    try {
+        const { textoCru } = req.body;
+        if (!textoCru) return res.status(400).json({ error: 'Texto vazio.' });
+
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
+        
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+        
+        const systemPrompt = `Você é um Revisor de Transcrição de Áudio super inteligente.
+        A sua ÚNICA função é receber um texto cru captado por um microfone e aplicar a pontuação correta (interrogações, exclamações, vírgulas e letras maiúsculas iniciais).
+        
+        REGRAS ABSOLUTAS:
+        1. NÃO adicione palavras novas. NÃO altere o sentido. Apenas corrija a pontuação e maiúsculas.
+        2. Analise a gramática criticamente: Se começar com Wh- (What, Where, Why, How, Who) ou auxiliares (Do, Does, Are, Is, Can, Could, Would, Should), termine OBRIGATORIAMENTE com "?".
+        3. Se for uma expressão curta de emoção, surpresa ou entusiasmo (ex: "Wow", "Oh my god", "Stop"), termine com "!".
+        4. Retorne APENAS o texto corrigido, sem aspas, sem explicações, sem introduções e sem formatação extra.`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: textoCru }
+            ],
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.1, // Temperatura muito baixa para ser um revisor estrito que não inventa texto
+            max_tokens: 150
+        });
+
+        const textoCorrigido = completion.choices[0].message.content.trim();
+        res.status(200).json({ success: true, textoCorrigido });
+    } catch (error) {
+        console.error("🚨 Erro no Revisor de Transcrição:", error);
+        // Fallback rápido: Se a IA falhar por limite de taxa, devolvemos o texto original com a primeira letra maiúscula para a UX não quebrar
+        const textoFallback = textoCru.charAt(0).toUpperCase() + textoCru.slice(1) + '.';
+        res.status(200).json({ success: true, textoCorrigido: textoFallback });
+    }
+});
+
 module.exports = router;
