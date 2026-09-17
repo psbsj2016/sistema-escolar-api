@@ -307,48 +307,60 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             resultadoAvaliacao = { vencedor: "Empate", feedbackGeral: "Ótimo treino!", jogadores: [] };
         }
 
-        // 🚀 O ALGORITMO INFALÍVEL DE RECOMPENSA (CRIADO AGORA)
+        // 🚀 O ALGORITMO INFALÍVEL DE RECOMPENSA COM PROGRESSÃO RPG
         const jogadoresReais = [sala.jogador1, sala.jogador2].filter(j => j && j.id);
         const jogadoresCorrigidosParaFrontend = [];
 
         for (const jogadorReal of jogadoresReais) {
-            // Busca a avaliação gerada pela IA cruzando o NOME do jogador real
             let avaliacaoIA = resultadoAvaliacao.jogadores?.find(j => 
                 String(j.nome).toLowerCase().trim().includes(String(jogadorReal.nome).toLowerCase().trim()) ||
                 String(jogadorReal.nome).toLowerCase().trim().includes(String(j.nome).toLowerCase().trim())
             );
 
-           // Se a IA principal alucinar e não criar a avaliação para este jogador, 
-            // acionamos o Salva-Vidas para gerar um feedback real e contextualizado!
             if (!avaliacaoIA) {
                 const dicaSalvadora = await gerarFeedbackEmergencia(dialogo, jogadorReal.nome);
-                
-                avaliacaoIA = {
-                    nome: jogadorReal.nome,
-                    cristal: "Safira",
-                    titulo: "Sobrevivente da Arena",
-                    feedback: dicaSalvadora // 🚀 A Dica Perfeita e Útil entra aqui!
-                };
+                avaliacaoIA = { nome: jogadorReal.nome, feedback: dicaSalvadora };
             }
-            
-            // Força o ID verdadeiro na avaliação para a interface gráfica funcionar perfeitamente
-            avaliacaoIA.id = jogadorReal.id;
-            jogadoresCorrigidosParaFrontend.push(avaliacaoIA);
 
-            // 🚀 A BLINDAGEM DO BANCO DE DADOS: Pegar todos os IDs possíveis do aluno (Usuario ID e Aluno ID)
+            // 🚀 MATEMÁTICA DE PROGRESSÃO: Busca o aluno no banco de dados para saber o nível dele
             const userRecord = await db.collection('usuarios').findOne({ id: jogadorReal.id });
             const alunoRef = userRecord ? userRecord.alunoRefId : null;
 
+            // Calcula o total de duelos (os que já tinha + esta vitória)
+            const duelosAtuais = (userRecord && userRecord.arenaStats && userRecord.arenaStats.duelosConcluidos) ? userRecord.arenaStats.duelosConcluidos : 0;
+            const novosDuelos = duelosAtuais + 1; 
+
+            // 🏆 O SISTEMA DE ELOS (RANKS)
+            let cristalCalculado = 'Safira';
+            let tituloCalculado = 'Iniciante da Arena';
+
+            if (novosDuelos >= 30) {
+                cristalCalculado = 'Diamante';
+                tituloCalculado = 'Lenda Nativa';
+            } else if (novosDuelos >= 15) {
+                cristalCalculado = 'Rubi';
+                tituloCalculado = 'Mestre do Diálogo';
+            } else if (novosDuelos >= 5) {
+                cristalCalculado = 'Ametista';
+                tituloCalculado = 'Orador Audaz';
+            }
+
+            // Injeta o Cristal conquistado na avaliação visual do Frontend
+            avaliacaoIA.cristal = cristalCalculado;
+            avaliacaoIA.titulo = tituloCalculado;
+            avaliacaoIA.id = jogadorReal.id;
+            jogadoresCorrigidosParaFrontend.push(avaliacaoIA);
+
+            // Prepara a atualização no Banco de Dados
             const idsParaAtualizar = [jogadorReal.id];
             if (alunoRef) idsParaAtualizar.push(alunoRef);
 
-            // Adiciona o Fogo (+1 duelo) e regista o Cristal atual!
             const updateQuery = { 
                 $inc: { 'arenaStats.duelosConcluidos': 1 },
-                $set: { 'arenaStats.cristalAtual': avaliacaoIA.cristal, 'arenaStats.tituloAtual': avaliacaoIA.titulo }
+                $set: { 'arenaStats.cristalAtual': cristalCalculado, 'arenaStats.tituloAtual': tituloCalculado }
             };
             
-            // Atira a atualização para todos os documentos correspondentes de forma brutal!
+            // Aplica a evolução na conta do Aluno
             await db.collection('usuarios').updateMany({ $or: [ { id: { $in: idsParaAtualizar } }, { alunoRefId: { $in: idsParaAtualizar } } ] }, updateQuery);
             await db.collection('alunos').updateMany({ id: { $in: idsParaAtualizar } }, updateQuery);
         }
