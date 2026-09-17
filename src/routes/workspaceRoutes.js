@@ -728,6 +728,46 @@ router.put('/perfil/bio', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
+// ✏️ PERFIL: ALTERAR NOME DO UTILIZADOR
+// ============================================================================
+router.put('/perfil/nome', verificarToken, async (req, res) => {
+    try {
+        const { id, alunoRefId, novoNome } = req.body;
+        
+        if (!id || !novoNome) {
+            return res.status(400).json({ error: 'Faltam dados obrigatórios para atualizar o nome.' });
+        }
+
+        const database = await connectDB();
+        
+        // 1. Puxa o usuário atual para descobrirmos o nome antigo 
+        // (O Front-end precisa disto para não perder a bolinha verde e a foto no cache)
+        const userAntigo = await database.collection('usuarios').findOne({ id: id });
+        const nomeAntigo = userAntigo ? (userAntigo.nome || userAntigo.login) : null;
+
+        // 2. Atualiza o nome na coleção principal de Acessos (Usuários)
+        await database.collection('usuarios').updateOne(
+            { id: id },
+            { $set: { nome: novoNome } }
+        );
+
+        // 3. Atualiza o nome na coleção da Secretaria (Alunos), se o aluno existir lá
+        if (alunoRefId) {
+            await database.collection('alunos').updateOne(
+                { id: alunoRefId },
+                { $set: { nome: novoNome } }
+            );
+        }
+
+        // Devolve o sucesso e o nome antigo para o Front-end fazer a magia invisível na Arena!
+        res.status(200).json({ success: true, nomeAntigo: nomeAntigo });
+    } catch (error) { 
+        console.error("Erro ao atualizar o nome:", error);
+        res.status(500).json({ error: 'Erro interno ao atualizar o nome na Base de Dados.' }); 
+    }
+});
+
+// ============================================================================
 // 💬 GESTÃO DE FEEDBACKS DO PROFESSOR (EDITAR E APAGAR) E ENTREGAS
 // ============================================================================
 router.put('/entregas/:entregaId/feedback/:feedbackId', verificarToken, async (req, res) => {
