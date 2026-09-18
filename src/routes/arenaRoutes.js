@@ -29,18 +29,32 @@ const sortearCenario = () => CENARIOS_ARENA[Math.floor(Math.random() * CENARIOS_
 
 router.post('/desafio-direto', verificarToken, async (req, res) => {
     try {
-        const { desafiadoNome, desafianteNome, escolaId, minutos } = req.body;
-        const salaId = 'duelo-feed-' + Date.now();
+        const { desafiadoNome, desafianteNome, escolaId, minutos, postId } = req.body;
         const db = await connectDB();
 
-        // 🚀 CRIA A SALA OFICIALMENTE NA BD (O Palco para a IA avaliar depois)
+        // 🛡️ ESCUDO DE OCUPADO: Verifica se o dono do post já está numa batalha
+        const jogadorOcupado = await db.collection('workspace_arenas').findOne({
+            status: 'em_curso',
+            $or: [
+                { 'jogador1.nome': desafiadoNome },
+                { 'jogador2.nome': desafiadoNome }
+            ]
+        });
+
+        if (jogadorOcupado) {
+            return res.status(400).json({ error: 'Tarde demais! Este guerreiro já está a travar uma batalha épica na Arena.' });
+        }
+
+        const salaId = 'duelo-feed-' + Date.now();
+
+        // 🚀 CRIA A SALA OFICIALMENTE NA BD
         const novaSala = {
             id: salaId,
             escolaId: escolaId || 'DEFAULT',
             tipo: 'desafio_feed',
             status: 'aguardando',
-            jogador1: { id: null, nome: desafianteNome }, // O desafiante
-            jogador2: { id: null, nome: desafiadoNome },  // O dono do post (desafiado)
+            jogador1: { id: null, nome: desafianteNome }, 
+            jogador2: { id: null, nome: desafiadoNome },  
             limiteMinutos: parseInt(minutos) || 10,
             criadoEm: new Date().toISOString(),
             historico: []
@@ -55,6 +69,7 @@ router.post('/desafio-direto', verificarToken, async (req, res) => {
                 desafianteNome: desafianteNome,
                 salaId: salaId,
                 minutos: minutos,
+                postId: postId, // 🚀 Passa o ID da publicação em frente
                 escolaId: escolaId || 'DEFAULT'
             });
         }
@@ -64,16 +79,16 @@ router.post('/desafio-direto', verificarToken, async (req, res) => {
 
 router.post('/desafio-direto/aceitar', verificarToken, async (req, res) => {
     try {
-        const { salaId, desafiadoNome, desafianteNome, escolaId, minutos } = req.body;
+        const { salaId, desafiadoNome, desafianteNome, escolaId, minutos, postId } = req.body;
         const db = await connectDB();
 
-        // 🚀 INTELIGÊNCIA: Busca os IDs verdadeiros pelo nome para o algoritmo dar os Cristais corretamente no final!
+        // 🚀 INTELIGÊNCIA: Busca os IDs verdadeiros pelo nome
         const userDesafiado = await db.collection('usuarios').findOne({ $or: [{nome: desafiadoNome}, {login: desafiadoNome}] });
         const userDesafiante = await db.collection('usuarios').findOne({ $or: [{nome: desafianteNome}, {login: desafianteNome}] });
 
         const cenarioSorteado = sortearCenario();
 
-        // Atualiza a sala como 'em_curso' e regista oficialmente a batalha
+        // Atualiza a sala como 'em_curso'
         await db.collection('workspace_arenas').updateOne(
             { id: salaId },
             { $set: { 
@@ -85,7 +100,16 @@ router.post('/desafio-direto/aceitar', verificarToken, async (req, res) => {
             }}
         );
 
-        // 🚀 O GRANDE PUXÃO: Este é o sinal que suga os dois alunos para a tela preta instantaneamente!
+        // 🚪 A PORTA QUE SE FECHA: Destrói o Post do Feed globalmente!
+        if (postId) {
+            await db.collection('workspace_posts').deleteOne({ id: postId });
+            if (global.workspaceStream) {
+                // Emite o sinal para desaparecer do feed de todos os alunos instantaneamente
+                global.workspaceStream.emit('evento_realtime', { type: 'POST_APAGADO', postId: postId, escolaId: escolaId || 'DEFAULT' });
+            }
+        }
+
+        // 🚀 O GRANDE PUXÃO
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ARENA_MATCH_ENCONTRADO',
