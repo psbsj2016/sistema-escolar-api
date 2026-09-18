@@ -22,6 +22,99 @@ const CENARIOS_ARENA = [
 // Função utilitária para sortear um cenário
 const sortearCenario = () => CENARIOS_ARENA[Math.floor(Math.random() * CENARIOS_ARENA.length)];
 
+// ============================================================================
+// ⚔️ VIA RÁPIDA DA ARENA (MATCHMAKING DO FEED - 10 MINUTOS)
+// IMPORTANTE: Fica acima de /:salaId para que o servidor a leia primeiro!
+// ============================================================================
+
+router.post('/desafio-direto', verificarToken, async (req, res) => {
+    try {
+        const { desafiadoNome, desafianteNome, escolaId, minutos } = req.body;
+        const salaId = 'duelo-feed-' + Date.now();
+        const db = await connectDB();
+
+        // 🚀 CRIA A SALA OFICIALMENTE NA BD (O Palco para a IA avaliar depois)
+        const novaSala = {
+            id: salaId,
+            escolaId: escolaId || 'DEFAULT',
+            tipo: 'desafio_feed',
+            status: 'aguardando',
+            jogador1: { id: null, nome: desafianteNome }, // O desafiante
+            jogador2: { id: null, nome: desafiadoNome },  // O dono do post (desafiado)
+            limiteMinutos: parseInt(minutos) || 10,
+            criadoEm: new Date().toISOString(),
+            historico: []
+        };
+
+        await db.collection('workspace_arenas').insertOne(novaSala);
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_DESAFIO_DIRETO',
+                destinatarios: [desafiadoNome],
+                desafianteNome: desafianteNome,
+                salaId: salaId,
+                minutos: minutos,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+        res.status(200).json({ success: true, salaId });
+    } catch (error) { res.status(500).json({ error: 'Erro ao enviar desafio direto.' }); }
+});
+
+router.post('/desafio-direto/aceitar', verificarToken, async (req, res) => {
+    try {
+        const { salaId, desafiadoNome, desafianteNome, escolaId, minutos } = req.body;
+        const db = await connectDB();
+
+        // 🚀 INTELIGÊNCIA: Busca os IDs verdadeiros pelo nome para o algoritmo dar os Cristais corretamente no final!
+        const userDesafiado = await db.collection('usuarios').findOne({ $or: [{nome: desafiadoNome}, {login: desafiadoNome}] });
+        const userDesafiante = await db.collection('usuarios').findOne({ $or: [{nome: desafianteNome}, {login: desafianteNome}] });
+
+        const cenarioSorteado = sortearCenario();
+
+        // Atualiza a sala como 'em_curso' e regista oficialmente a batalha
+        await db.collection('workspace_arenas').updateOne(
+            { id: salaId },
+            { $set: { 
+                status: 'em_curso', 
+                jogador1: { id: userDesafiante?.id || null, nome: desafianteNome },
+                jogador2: { id: userDesafiado?.id || null, nome: desafiadoNome },
+                iniciadoEm: new Date().toISOString(),
+                cenario: "🔥 DUELO RÁPIDO DO FEED 🔥\n" + cenarioSorteado
+            }}
+        );
+
+        // 🚀 O GRANDE PUXÃO: Este é o sinal que suga os dois alunos para a tela preta instantaneamente!
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_MATCH_ENCONTRADO',
+                destinatarios: [desafiadoNome, desafianteNome],
+                salaId: salaId,
+                limiteMinutos: minutos,
+                cenario: "🔥 DUELO RÁPIDO DO FEED 🔥\n" + cenarioSorteado,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao aceitar desafio.' }); }
+});
+
+router.post('/desafio-direto/recusar', verificarToken, async (req, res) => {
+    try {
+        const { desafianteNome, escolaId } = req.body;
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_DESAFIO_RECUSADO',
+                destinatarios: [desafianteNome],
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+        res.status(200).json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao recusar desafio.' }); }
+});
+
 // 1. Rota para Procurar Duelo Aleatório
 router.post('/procurar', verificarToken, async (req, res) => {
     try {

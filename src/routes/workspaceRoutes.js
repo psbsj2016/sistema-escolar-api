@@ -1406,64 +1406,6 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// ⚔️ VIA RÁPIDA DA ARENA (MATCHMAKING DO FEED - 10 MINUTOS)
-// ============================================================================
-
-router.post('/arena/desafio-direto', verificarToken, async (req, res) => {
-    try {
-        const { desafiadoNome, desafianteNome, escolaId, minutos } = req.body;
-        const salaId = 'duelo-feed-' + Date.now();
-
-        // Usa global.workspaceStream para garantir total estabilidade
-        if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', {
-                type: 'ARENA_DESAFIO_DIRETO',
-                destinatarios: [desafiadoNome],
-                desafianteNome: desafianteNome,
-                salaId: salaId,
-                minutos: minutos,
-                escolaId: escolaId || 'DEFAULT'
-            });
-        }
-        res.status(200).json({ success: true, salaId });
-    } catch (error) { res.status(500).json({ error: 'Erro ao enviar desafio direto.' }); }
-});
-
-router.post('/arena/desafio-direto/aceitar', verificarToken, async (req, res) => {
-    try {
-        const { salaId, desafiadoNome, desafianteNome, escolaId, minutos } = req.body;
-        const cenarioEspecial = "🔥 DUELO RÁPIDO DO FEED 🔥\nMostrem a vossa fluência em 10 minutos de pura adrenalina!";
-
-        if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', {
-                type: 'ARENA_MATCH_ENCONTRADO',
-                destinatarios: [desafiadoNome, desafianteNome],
-                salaId: salaId,
-                limiteMinutos: minutos,
-                cenario: cenarioEspecial,
-                escolaId: escolaId || 'DEFAULT'
-            });
-        }
-        res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro ao aceitar desafio.' }); }
-});
-
-router.post('/arena/desafio-direto/recusar', verificarToken, async (req, res) => {
-    try {
-        const { desafianteNome, escolaId } = req.body;
-
-        if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', {
-                type: 'ARENA_DESAFIO_RECUSADO',
-                destinatarios: [desafianteNome],
-                escolaId: escolaId || 'DEFAULT'
-            });
-        }
-        res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro ao recusar desafio.' }); }
-});
-
-// ============================================================================
 // 🏴‍☠️ BAÚ DO INGLÊS E IA (Ptt Cursos)
 // ============================================================================
 router.post('/ingles/xp', verificarToken, async (req, res) => {
