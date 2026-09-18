@@ -320,11 +320,20 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
         // Grava a mensagem na base de dados
         await db.collection('workspace_arenas').updateOne({ id: salaId }, { $push: { historico: novaFala } });
         
-        // 🚀 INTERVENÇÃO DIVINA: Verifica se chegamos a um múltiplo de 10 mensagens!
+      // 🚀 INTERVENÇÃO DIVINA E PLOT TWISTS!
         const salaAtualizada = await db.collection('workspace_arenas').findOne({ id: salaId });
-        if (salaAtualizada && salaAtualizada.historico && salaAtualizada.historico.length % 10 === 0) {
-            // Dispara a IA em segundo plano (não trava o chat dos alunos!)
-            gerarDicaDoMestre(salaAtualizada, escolaId);
+        
+        if (salaAtualizada && salaAtualizada.historico) {
+            const totalMensagens = salaAtualizada.historico.length;
+            
+            // Na exata 6ª mensagem da partida, lançamos o Plot Twist!
+            if (totalMensagens === 6) {
+                gerarPlotTwist(salaAtualizada, escolaId);
+            } 
+            // A cada 10 mensagens, o Mestre volta para dar uma dica gramatical
+            else if (totalMensagens > 0 && totalMensagens % 10 === 0) {
+                gerarDicaDoMestre(salaAtualizada, escolaId);
+            }
         }
 
         // Avisa imediatamente o colega que há uma nova mensagem
@@ -334,6 +343,53 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
         res.status(200).json({ success: true, fala: novaFala });
     } catch (error) { res.status(500).json({ error: 'Erro ao processar a fala.' }); }
 });
+
+// ============================================================================
+// 🌪️ GERADOR DE PLOT TWISTS (REVIRAVOLTAS ÉPICAS)
+// ============================================================================
+async function gerarPlotTwist(sala, escolaId) {
+    try {
+        const promptIA = `
+        Atue como o Mestre da Guilda num jogo de Roleplay (simulação) em inglês.
+        O cenário original dos alunos é: "${sala.cenario || 'Conversa livre'}".
+        
+        Sua missão: Inventar um "Plot Twist" (uma reviravolta inesperada, dramática ou engraçada) que acabou de acontecer neste cenário para forçar os alunos a mudarem o rumo da conversa e o vocabulário.
+        
+        Regras:
+        1. Escreva apenas UMA frase curta e impactante.
+        2. Comece com um aviso em português e descreva o novo desafio em inglês.
+        Exemplo: "🚨 Atenção! The restaurant just caught on fire! You need to escape immediately!"
+        Exemplo 2: "🚨 Cuidado! An alien just stole your luggage! What do you do?"
+        
+        Não use aspas e vá direto ao assunto. Seja criativo!
+        `;
+
+        const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                model: 'llama3-70b-8192', 
+                messages: [{ role: 'user', content: promptIA }], 
+                temperature: 0.8 // Mais alto para gerar ideias mais malucas e criativas!
+            })
+        });
+
+        const groqData = await groqRes.json();
+        const twist = groqData.choices[0].message.content.trim();
+
+        // Envia o Plot Twist para os alunos pelo túnel SSE
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_PLOT_TWIST',
+                salaId: sala.id,
+                twist: twist,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+    } catch (error) {
+        console.error("Erro na Criação do Plot Twist:", error);
+    }
+}
 
 // ============================================================================
 // 🚑 SALVA-VIDAS DA IA: Feedback de Emergência (Se a formatação do JSON falhar)
