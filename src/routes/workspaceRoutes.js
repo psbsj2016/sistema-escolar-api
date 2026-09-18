@@ -1414,15 +1414,17 @@ router.post('/arena/desafio-direto', verificarToken, async (req, res) => {
         const { desafiadoNome, desafianteNome, escolaId, minutos } = req.body;
         const salaId = 'duelo-feed-' + Date.now();
 
-        workspaceStream.emit('evento_realtime', {
-            type: 'ARENA_DESAFIO_DIRETO',
-            destinatarios: [desafiadoNome],
-            desafianteNome: desafianteNome,
-            salaId: salaId,
-            minutos: minutos,
-            escolaId: escolaId || 'DEFAULT'
-        });
-
+        // Usa global.workspaceStream para garantir total estabilidade
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_DESAFIO_DIRETO',
+                destinatarios: [desafiadoNome],
+                desafianteNome: desafianteNome,
+                salaId: salaId,
+                minutos: minutos,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
         res.status(200).json({ success: true, salaId });
     } catch (error) { res.status(500).json({ error: 'Erro ao enviar desafio direto.' }); }
 });
@@ -1432,15 +1434,16 @@ router.post('/arena/desafio-direto/aceitar', verificarToken, async (req, res) =>
         const { salaId, desafiadoNome, desafianteNome, escolaId, minutos } = req.body;
         const cenarioEspecial = "🔥 DUELO RÁPIDO DO FEED 🔥\nMostrem a vossa fluência em 10 minutos de pura adrenalina!";
 
-        workspaceStream.emit('evento_realtime', {
-            type: 'ARENA_MATCH_ENCONTRADO',
-            destinatarios: [desafiadoNome, desafianteNome],
-            salaId: salaId,
-            limiteMinutos: minutos,
-            cenario: cenarioEspecial,
-            escolaId: escolaId || 'DEFAULT'
-        });
-
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_MATCH_ENCONTRADO',
+                destinatarios: [desafiadoNome, desafianteNome],
+                salaId: salaId,
+                limiteMinutos: minutos,
+                cenario: cenarioEspecial,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
         res.status(200).json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro ao aceitar desafio.' }); }
 });
@@ -1449,12 +1452,13 @@ router.post('/arena/desafio-direto/recusar', verificarToken, async (req, res) =>
     try {
         const { desafianteNome, escolaId } = req.body;
 
-        workspaceStream.emit('evento_realtime', {
-            type: 'ARENA_DESAFIO_RECUSADO',
-            destinatarios: [desafianteNome],
-            escolaId: escolaId || 'DEFAULT'
-        });
-
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_DESAFIO_RECUSADO',
+                destinatarios: [desafianteNome],
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
         res.status(200).json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro ao recusar desafio.' }); }
 });
