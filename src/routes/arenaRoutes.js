@@ -79,16 +79,14 @@ router.post('/desafio-direto', verificarToken, async (req, res) => {
 
 router.post('/desafio-direto/aceitar', verificarToken, async (req, res) => {
     try {
-        const { salaId, desafiadoNome, desafianteNome, escolaId, minutos, postId } = req.body;
+        const { salaId, desafiadoNome, desafianteNome, escolaId, minutos } = req.body;
         const db = await connectDB();
 
-        // 🚀 INTELIGÊNCIA: Busca os IDs verdadeiros pelo nome
         const userDesafiado = await db.collection('usuarios').findOne({ $or: [{nome: desafiadoNome}, {login: desafiadoNome}] });
         const userDesafiante = await db.collection('usuarios').findOne({ $or: [{nome: desafianteNome}, {login: desafianteNome}] });
 
         const cenarioSorteado = sortearCenario();
 
-        // Atualiza a sala como 'em_curso'
         await db.collection('workspace_arenas').updateOne(
             { id: salaId },
             { $set: { 
@@ -100,16 +98,10 @@ router.post('/desafio-direto/aceitar', verificarToken, async (req, res) => {
             }}
         );
 
-        // 🚪 A PORTA QUE SE FECHA: Destrói o Post do Feed globalmente!
-        if (postId) {
-            await db.collection('workspace_posts').deleteOne({ id: postId });
-            if (global.workspaceStream) {
-                // Emite o sinal para desaparecer do feed de todos os alunos instantaneamente
-                global.workspaceStream.emit('evento_realtime', { type: 'POST_APAGADO', postId: postId, escolaId: escolaId || 'DEFAULT' });
-            }
-        }
+        // 🚪 A PORTA QUE NÃO SE FECHA:
+        // O código de apagar a publicação (postId) foi removido. 
+        // O Botão fica imortal. O Escudo de Ocupado trata do resto!
 
-        // 🚀 O GRANDE PUXÃO
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ARENA_MATCH_ENCONTRADO',
@@ -190,11 +182,26 @@ router.post('/procurar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao aceder à Arena.' }); }
 });
 
-// 2. Rota para Convidar um Colega Específico
+// 2. Rota para Convidar um Colega Específico (Blindada contra nomes errados)
 router.post('/convidar', verificarToken, async (req, res) => {
     try {
         const { alunoId, alunoNome, colegaNome, escolaId, limiteMinutos } = req.body;
         const db = await connectDB();
+
+        // 🛡️ O RADAR EXATO: Procura o guerreiro na base de dados ignorando maiúsculas/minúsculas
+        const userAlvo = await db.collection('usuarios').findOne({
+            $or: [
+                { nome: new RegExp(`^${colegaNome.trim()}$`, 'i') },
+                { login: new RegExp(`^${colegaNome.trim()}$`, 'i') }
+            ]
+        });
+
+        // Se o aluno digitou um nome que não existe, o servidor trava a ação!
+        if (!userAlvo) {
+            return res.status(404).json({ error: 'Guerreiro não encontrado! Selecione o nome correto na lista.' });
+        }
+
+        const nomeColegaReal = userAlvo.nome || userAlvo.login;
 
         const novaSala = {
             id: crypto.randomUUID(),
@@ -202,7 +209,7 @@ router.post('/convidar', verificarToken, async (req, res) => {
             tipo: 'convite',
             status: 'aguardando',
             jogador1: { id: alunoId, nome: alunoNome },
-            jogador2: { id: null, nome: colegaNome },
+            jogador2: { id: userAlvo.id, nome: nomeColegaReal },
             limiteMinutos: parseInt(limiteMinutos) || 50,
             criadoEm: new Date().toISOString()
         };
@@ -214,7 +221,7 @@ router.post('/convidar', verificarToken, async (req, res) => {
                 type: 'ARENA_CONVITE_RECEBIDO',
                 salaId: novaSala.id,
                 remetenteNome: alunoNome,
-                destinatarios: [colegaNome],
+                destinatarios: [nomeColegaReal], // 🚀 Agora é 100% infalível!
                 escolaId: escolaId,
                 limiteMinutos: novaSala.limiteMinutos
             });
@@ -320,17 +327,17 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
         // Grava a mensagem na base de dados
         await db.collection('workspace_arenas').updateOne({ id: salaId }, { $push: { historico: novaFala } });
         
-      // 🚀 INTERVENÇÃO DIVINA E PLOT TWISTS!
+     // 🚀 INTERVENÇÃO DIVINA E PLOT TWISTS!
         const salaAtualizada = await db.collection('workspace_arenas').findOne({ id: salaId });
         
         if (salaAtualizada && salaAtualizada.historico) {
             const totalMensagens = salaAtualizada.historico.length;
             
-            // Na exata 6ª mensagem da partida, lançamos o Plot Twist!
-            if (totalMensagens === 6) {
+            // Progressão Aritmética: Plot Twist na 6ª, 9ª, 12ª, 15ª fala, etc.
+            if (totalMensagens >= 6 && totalMensagens % 3 === 0) {
                 gerarPlotTwist(salaAtualizada, escolaId);
             } 
-            // A cada 10 mensagens, o Mestre volta para dar uma dica gramatical
+            // A dica do mestre continua a acontecer nas dezenas redondas (10, 20...)
             else if (totalMensagens > 0 && totalMensagens % 10 === 0) {
                 gerarDicaDoMestre(salaAtualizada, escolaId);
             }
