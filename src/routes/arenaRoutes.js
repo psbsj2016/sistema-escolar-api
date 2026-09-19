@@ -416,7 +416,7 @@ async function responderComoIA(sala, escolaId) {
         const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
         let dialogo = '';
         
-        // Pega no máximo as últimas 15 mensagens para manter o contexto rápido e barato
+        // Pega no máximo nas últimas 15 mensagens para manter o contexto rápido e barato
         sala.historico.slice(-15).forEach(fala => { 
             dialogo += `[${fala.autorNome}]: ${fala.texto}\n`; 
         });
@@ -440,7 +440,7 @@ async function responderComoIA(sala, escolaId) {
 
         const completion = await groq.chat.completions.create({
             messages: [{ role: 'user', content: promptIA }],
-            model: 'llama3-70b-8192',
+            model: 'openai/gpt-oss-120b', // 🚀 MODELO OFICIAL DA SUA PLATAFORMA ALINHADO!
             temperature: 0.6 // Temperatura equilibrada para respostas naturais
         });
 
