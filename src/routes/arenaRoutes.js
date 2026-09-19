@@ -19,41 +19,49 @@ const CENARIOS_ARENA = [
     "Planning a trip: Two friends disagree on whether to go to the beach or the mountains."
 ];
 
-// Função utilitária para sortear um cenário
 const sortearCenario = () => CENARIOS_ARENA[Math.floor(Math.random() * CENARIOS_ARENA.length)];
 
 // ============================================================================
 // ⚔️ VIA RÁPIDA DA ARENA (MATCHMAKING DO FEED - 10 MINUTOS)
-// IMPORTANTE: Fica acima de /:salaId para que o servidor a leia primeiro!
 // ============================================================================
 
 router.post('/desafio-direto', verificarToken, async (req, res) => {
     try {
         const { desafiadoNome, desafianteNome, escolaId, minutos, postId } = req.body;
+        const desafianteId = req.usuario?.id || req.body.alunoId; 
         const db = await connectDB();
 
-        // 🛡️ ESCUDO DE OCUPADO: Verifica se o dono do post já está numa batalha
-        const jogadorOcupado = await db.collection('workspace_arenas').findOne({
+        // 🛡️ ESCUDO INTELIGENTE: Ignora batalhas fantasmas cujo tempo já expirou!
+        const arenasAtivas = await db.collection('workspace_arenas').find({
             status: 'em_curso',
             $or: [
                 { 'jogador1.nome': desafiadoNome },
-                { 'jogador2.nome': desafiadoNome }
+                { 'jogador2.nome': desafiadoNome },
+                { 'jogador1.nome': desafianteNome },
+                { 'jogador2.nome': desafianteNome }
             ]
+        }).toArray();
+
+        const agora = new Date().getTime();
+        const jogadorOcupado = arenasAtivas.some(arena => {
+            if (!arena.iniciadoEm) return false;
+            const inicio = new Date(arena.iniciadoEm).getTime();
+            const limiteMs = (arena.limiteMinutos || 10) * 60000;
+            return (agora - inicio) < (limiteMs + 60000); // 1 min de tolerância após o tempo oficial
         });
 
         if (jogadorOcupado) {
-            return res.status(400).json({ error: 'Tarde demais! Este guerreiro já está a travar uma batalha épica na Arena.' });
+            return res.status(400).json({ error: 'Um dos guerreiros já está a travar uma batalha ao vivo. Aguarde!' });
         }
 
         const salaId = 'duelo-feed-' + Date.now();
 
-        // 🚀 CRIA A SALA OFICIALMENTE NA BD
         const novaSala = {
             id: salaId,
             escolaId: escolaId || 'DEFAULT',
             tipo: 'desafio_feed',
             status: 'aguardando',
-            jogador1: { id: null, nome: desafianteNome }, 
+            jogador1: { id: desafianteId, nome: desafianteNome }, 
             jogador2: { id: null, nome: desafiadoNome },  
             limiteMinutos: parseInt(minutos) || 10,
             criadoEm: new Date().toISOString(),
@@ -69,7 +77,7 @@ router.post('/desafio-direto', verificarToken, async (req, res) => {
                 desafianteNome: desafianteNome,
                 salaId: salaId,
                 minutos: minutos,
-                postId: postId, // 🚀 Passa o ID da publicação em frente
+                postId: postId, 
                 escolaId: escolaId || 'DEFAULT'
             });
         }
@@ -98,14 +106,13 @@ router.post('/desafio-direto/aceitar', verificarToken, async (req, res) => {
             }}
         );
 
-        // 🚪 A PORTA QUE NÃO SE FECHA:
-        // O código de apagar a publicação (postId) foi removido. 
-        // O Botão fica imortal. O Escudo de Ocupado trata do resto!
+        // 🚪 PORTA IMORTAL: O Post de desafio no Feed NÃO é apagado.
 
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ARENA_MATCH_ENCONTRADO',
                 destinatarios: [desafiadoNome, desafianteNome],
+                destinatariosIds: [userDesafiante?.id, userDesafiado?.id], // A BLINDAGEM INFALÍVEL
                 salaId: salaId,
                 limiteMinutos: minutos,
                 cenario: "🔥 DUELO RÁPIDO DO FEED 🔥\n" + cenarioSorteado,
@@ -119,7 +126,6 @@ router.post('/desafio-direto/aceitar', verificarToken, async (req, res) => {
 router.post('/desafio-direto/recusar', verificarToken, async (req, res) => {
     try {
         const { desafianteNome, escolaId } = req.body;
-
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ARENA_DESAFIO_RECUSADO',
@@ -142,7 +148,7 @@ router.post('/procurar', verificarToken, async (req, res) => {
         });
 
         if (salaEspera) {
-            const cenarioSorteado = sortearCenario(); // 🚀 Sorteia a missão!
+            const cenarioSorteado = sortearCenario();
 
             await db.collection('workspace_arenas').updateOne(
                 { id: salaEspera.id },
@@ -159,22 +165,18 @@ router.post('/procurar', verificarToken, async (req, res) => {
                     type: 'ARENA_MATCH_ENCONTRADO',
                     salaId: salaEspera.id,
                     destinatarios: [salaEspera.jogador1.nome, alunoNome],
+                    destinatariosIds: [salaEspera.jogador1.id, alunoId], // BLINDAGEM
                     escolaId: escolaId,
                     limiteMinutos: salaEspera.limiteMinutos,
-                    cenario: cenarioSorteado // 🚀 Envia a missão para a tela
+                    cenario: cenarioSorteado 
                 });
             }
             return res.status(200).json({ success: true, salaId: salaEspera.id, mensagem: 'Oponente encontrado!' });
         } else {
             const novaSala = {
-                id: crypto.randomUUID(),
-                escolaId: escolaId,
-                tipo: 'aleatorio',
-                status: 'aguardando',
-                jogador1: { id: alunoId, nome: alunoNome },
-                jogador2: null,
-                limiteMinutos: parseInt(limiteMinutos) || 50,
-                criadoEm: new Date().toISOString()
+                id: crypto.randomUUID(), escolaId: escolaId, tipo: 'aleatorio', status: 'aguardando',
+                jogador1: { id: alunoId, nome: alunoNome }, jogador2: null,
+                limiteMinutos: parseInt(limiteMinutos) || 50, criadoEm: new Date().toISOString()
             };
             await db.collection('workspace_arenas').insertOne(novaSala);
             return res.status(201).json({ success: true, salaId: novaSala.id, mensagem: 'A aguardar oponente...' });
@@ -182,13 +184,12 @@ router.post('/procurar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao aceder à Arena.' }); }
 });
 
-// 2. Rota para Convidar um Colega Específico (Blindada contra nomes errados)
+// 2. Rota para Convidar um Colega Específico (Blindada)
 router.post('/convidar', verificarToken, async (req, res) => {
     try {
         const { alunoId, alunoNome, colegaNome, escolaId, limiteMinutos } = req.body;
         const db = await connectDB();
 
-        // 🛡️ O RADAR EXATO: Procura o guerreiro na base de dados ignorando maiúsculas/minúsculas
         const userAlvo = await db.collection('usuarios').findOne({
             $or: [
                 { nome: new RegExp(`^${colegaNome.trim()}$`, 'i') },
@@ -196,22 +197,15 @@ router.post('/convidar', verificarToken, async (req, res) => {
             ]
         });
 
-        // Se o aluno digitou um nome que não existe, o servidor trava a ação!
-        if (!userAlvo) {
-            return res.status(404).json({ error: 'Guerreiro não encontrado! Selecione o nome correto na lista.' });
-        }
+        if (!userAlvo) return res.status(404).json({ error: 'Guerreiro não encontrado! Selecione o nome na lista.' });
 
         const nomeColegaReal = userAlvo.nome || userAlvo.login;
 
         const novaSala = {
-            id: crypto.randomUUID(),
-            escolaId: escolaId,
-            tipo: 'convite',
-            status: 'aguardando',
+            id: crypto.randomUUID(), escolaId: escolaId, tipo: 'convite', status: 'aguardando',
             jogador1: { id: alunoId, nome: alunoNome },
             jogador2: { id: userAlvo.id, nome: nomeColegaReal },
-            limiteMinutos: parseInt(limiteMinutos) || 50,
-            criadoEm: new Date().toISOString()
+            limiteMinutos: parseInt(limiteMinutos) || 50, criadoEm: new Date().toISOString()
         };
 
         await db.collection('workspace_arenas').insertOne(novaSala);
@@ -221,7 +215,8 @@ router.post('/convidar', verificarToken, async (req, res) => {
                 type: 'ARENA_CONVITE_RECEBIDO',
                 salaId: novaSala.id,
                 remetenteNome: alunoNome,
-                destinatarios: [nomeColegaReal], // 🚀 Agora é 100% infalível!
+                destinatarios: [nomeColegaReal],
+                destinatariosIds: [userAlvo.id], // BLINDAGEM
                 escolaId: escolaId,
                 limiteMinutos: novaSala.limiteMinutos
             });
@@ -240,16 +235,13 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
         const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
         if (!sala) return res.status(404).json({ error: 'Sala não encontrada.' });
 
-        const cenarioSorteado = sortearCenario(); // 🚀 Sorteia a missão também nos convites!
+        const cenarioSorteado = sortearCenario();
 
         await db.collection('workspace_arenas').updateOne(
             { id: salaId },
             { $set: { 
-                status: 'em_curso', 
-                'jogador2.id': alunoId, 
-                'jogador2.nome': alunoNome, 
-                iniciadoEm: new Date().toISOString(),
-                cenario: cenarioSorteado
+                status: 'em_curso', 'jogador2.id': alunoId, 'jogador2.nome': alunoNome, 
+                iniciadoEm: new Date().toISOString(), cenario: cenarioSorteado
             } }
         );
 
@@ -258,6 +250,7 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
                 type: 'ARENA_MATCH_ENCONTRADO',
                 salaId: salaId,
                 destinatarios: [sala.jogador1.nome, alunoNome],
+                destinatariosIds: [sala.jogador1.id, alunoId], // A CURA DOS EVENTOS FANTASMAS!
                 escolaId: escolaId,
                 limiteMinutos: sala.limiteMinutos,
                 cenario: cenarioSorteado
@@ -268,54 +261,77 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🚀 O CÉREBRO DO MESTRE DA GUILDA (IA em Tempo Real)
+// 🚀 O CÉREBRO DO MESTRE DA GUILDA E DOS PLOT TWISTS (CORRIGIDO PARA GROQ-SDK)
 // ============================================================================
 async function gerarDicaDoMestre(sala, escolaId) {
     try {
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
         let dialogo = '';
-        // Pega apenas nas últimas 10 mensagens para dar contexto focado à IA
         const ultimasMensagens = sala.historico.slice(-10);
-        ultimasMensagens.forEach(fala => {
-            dialogo += `[${fala.autorNome}]: ${fala.texto}\n`;
-        });
+        ultimasMensagens.forEach(fala => { dialogo += `[${fala.autorNome}]: ${fala.texto}\n`; });
 
         const promptIA = `
         Aja como o "Mestre da Guilda", um sábio professor nativo de inglês observando dois alunos a praticarem num Roleplay.
         Cenário atual deles: "${sala.cenario || 'Conversa livre'}".
         
-        Aqui estão as últimas 10 mensagens do diálogo:
+        Aqui estão as últimas 10 mensagens:
         ${dialogo}
         
         Sua missão: Escreva UMA DICA RÁPIDA E AMIGÁVEL (máximo de 2 frases) para eles.
-        Pode ser a correção de um erro gramatical comum que notou no diálogo, a sugestão de um vocabulário mais nativo, ou um elogio à fluência deles.
-        Responda de forma direta e inspiradora. Seja o mentor.
         IMPORTANTE: Responda APENAS com a frase da dica, sem aspas, sem introduções e sem JSON. Misture português com inglês.
         `;
 
-        const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'llama3-70b-8192', messages: [{ role: 'user', content: promptIA }], temperature: 0.5 })
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'user', content: promptIA }],
+            model: 'openai/gpt-oss-120b',
+            temperature: 0.5
         });
 
-        const groqData = await groqRes.json();
-        const dica = groqData.choices[0].message.content.trim();
+        const dica = completion.choices[0].message.content.trim();
 
-        // Transmite a Dica Mágica para os alunos pelo túnel SSE em Tempo Real
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
-                type: 'ARENA_DICA_MESTRE',
-                salaId: sala.id,
-                dica: dica,
-                escolaId: escolaId || 'DEFAULT'
+                type: 'ARENA_DICA_MESTRE', salaId: sala.id, dica: dica, escolaId: escolaId || 'DEFAULT'
             });
         }
-    } catch (error) {
-        console.error("Erro na Intervenção Divina do Mestre:", error);
-    }
+    } catch (error) { console.error("Erro na Dica do Mestre:", error); }
 }
 
-// 3. Rota para Receber a Voz e Disparar a IA
+async function gerarPlotTwist(sala, escolaId) {
+    try {
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+        const promptIA = `
+        Atue como o Mestre da Guilda num jogo de Roleplay (simulação) em inglês.
+        O cenário original dos alunos é: "${sala.cenario || 'Conversa livre'}".
+        
+        Sua missão: Inventar um "Plot Twist" (uma reviravolta inesperada, dramática ou engraçada) que acabou de acontecer neste cenário para forçar os alunos a mudarem o rumo da conversa.
+        
+        Regras:
+        1. Escreva apenas UMA frase curta e impactante.
+        2. Comece com um aviso em português e descreva o novo desafio em inglês.
+        Exemplo: "🚨 Atenção! The restaurant just caught on fire! You need to escape immediately!"
+        Não use aspas e vá direto ao assunto. Seja muito criativo!
+        `;
+
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'user', content: promptIA }],
+            model: 'openai/gpt-oss-120b',
+            temperature: 0.8
+        });
+
+        const twist = completion.choices[0].message.content.trim();
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_PLOT_TWIST', salaId: sala.id, twist: twist, escolaId: escolaId || 'DEFAULT'
+            });
+        }
+    } catch (error) { console.error("Erro no Plot Twist:", error); }
+}
+
+// 3. Rota para Receber a Voz e Disparar a IA (COM MATEMÁTICA PERFEITA)
 router.post('/:salaId/falar', verificarToken, async (req, res) => {
     try {
         const { texto, autorId, autorNome, escolaId, combo } = req.body;
@@ -323,27 +339,28 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
         const db = await connectDB();
         
         const novaFala = { id: crypto.randomUUID(), autorId, autorNome, texto, combo, data: new Date().toISOString() };
-        
-        // Grava a mensagem na base de dados
         await db.collection('workspace_arenas').updateOne({ id: salaId }, { $push: { historico: novaFala } });
         
-     // 🚀 INTERVENÇÃO DIVINA E PLOT TWISTS!
+        // 🚀 A MATEMÁTICA ESTRATÉGICA DOS PLOT TWISTS!
         const salaAtualizada = await db.collection('workspace_arenas').findOne({ id: salaId });
         
         if (salaAtualizada && salaAtualizada.historico) {
-            const totalMensagens = salaAtualizada.historico.length;
+            const hist = salaAtualizada.historico;
+            const total = hist.length;
             
-            // Progressão Aritmética: Plot Twist na 6ª, 9ª, 12ª, 15ª fala, etc.
-            if (totalMensagens >= 6 && totalMensagens % 3 === 0) {
+            // Conta quantas vezes cada jogador falou
+            const falasJ1 = hist.filter(h => h.autorId === salaAtualizada.jogador1.id).length;
+            const falasJ2 = hist.filter(h => h.autorId === salaAtualizada.jogador2?.id).length;
+
+            // Condição infalível: Se AMBOS já falaram pelo menos 3 vezes e a soma total é um múltiplo de 3 (6, 9, 12, 15...)
+            if (falasJ1 >= 3 && falasJ2 >= 3 && total % 3 === 0) {
                 gerarPlotTwist(salaAtualizada, escolaId);
             } 
-            // A dica do mestre continua a acontecer nas dezenas redondas (10, 20...)
-            else if (totalMensagens > 0 && totalMensagens % 10 === 0) {
+            else if (total > 0 && total % 10 === 0) {
                 gerarDicaDoMestre(salaAtualizada, escolaId);
             }
         }
 
-        // Avisa imediatamente o colega que há uma nova mensagem
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', { type: 'ARENA_NOVA_FALA', salaId: salaId, fala: novaFala, escolaId: escolaId || 'DEFAULT' });
         }
@@ -352,74 +369,18 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🌪️ GERADOR DE PLOT TWISTS (REVIRAVOLTAS ÉPICAS)
-// ============================================================================
-async function gerarPlotTwist(sala, escolaId) {
-    try {
-        const promptIA = `
-        Atue como o Mestre da Guilda num jogo de Roleplay (simulação) em inglês.
-        O cenário original dos alunos é: "${sala.cenario || 'Conversa livre'}".
-        
-        Sua missão: Inventar um "Plot Twist" (uma reviravolta inesperada, dramática ou engraçada) que acabou de acontecer neste cenário para forçar os alunos a mudarem o rumo da conversa e o vocabulário.
-        
-        Regras:
-        1. Escreva apenas UMA frase curta e impactante.
-        2. Comece com um aviso em português e descreva o novo desafio em inglês.
-        Exemplo: "🚨 Atenção! The restaurant just caught on fire! You need to escape immediately!"
-        Exemplo 2: "🚨 Cuidado! An alien just stole your luggage! What do you do?"
-        
-        Não use aspas e vá direto ao assunto. Seja criativo!
-        `;
-
-        const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                model: 'llama3-70b-8192', 
-                messages: [{ role: 'user', content: promptIA }], 
-                temperature: 0.8 // Mais alto para gerar ideias mais malucas e criativas!
-            })
-        });
-
-        const groqData = await groqRes.json();
-        const twist = groqData.choices[0].message.content.trim();
-
-        // Envia o Plot Twist para os alunos pelo túnel SSE
-        if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', {
-                type: 'ARENA_PLOT_TWIST',
-                salaId: sala.id,
-                twist: twist,
-                escolaId: escolaId || 'DEFAULT'
-            });
-        }
-    } catch (error) {
-        console.error("Erro na Criação do Plot Twist:", error);
-    }
-}
-
-// ============================================================================
-// 🚑 SALVA-VIDAS DA IA: Feedback de Emergência (Se a formatação do JSON falhar)
+// 🚑 SALVA-VIDAS DA IA E ROTAS FINAIS MANTIDAS INTACTAS
 // ============================================================================
 async function gerarFeedbackEmergencia(dialogo, nomeJogador) {
     try {
         const Groq = require('groq-sdk');
         const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
         const prompt = `Atue como um professor de inglês. Leia este diálogo:\n\n${dialogo}\n\nO aluno "${nomeJogador}" participou. Escreva UMA ÚNICA FRASE curta em português dando uma dica gramatical útil ou corrigindo um erro que ele cometeu no diálogo. Não use aspas. Seja motivador.`;
-        const completion = await groq.chat.completions.create({
-            messages: [{ role: 'user', content: prompt }],
-            model: 'openai/gpt-oss-120b',
-            temperature: 0.4
-        });
+        const completion = await groq.chat.completions.create({ messages: [{ role: 'user', content: prompt }], model: 'openai/gpt-oss-120b', temperature: 0.4 });
         return completion.choices[0].message.content.trim();
-    } catch (e) {
-        return "O seu esforço foi notável! Continue a praticar para aprimorar a sua fluência.";
-    }
+    } catch (e) { return "O seu esforço foi notável! Continue a praticar para aprimorar a sua fluência."; }
 }
 
-// ============================================================================
-// 4. Rota para Avaliar a Partida e Forjar Cristais (O ALGORITMO INFALÍVEL)
-// ============================================================================
 router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
     try {
         const salaId = req.params.salaId;
@@ -439,55 +400,25 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             dialogo = "(Os alunos permaneceram em silêncio.)";
         }
 
-        // 🚀 PROMPT SIMPLIFICADO: A IA só precisa de focar-se nos Nomes e Cristais!
         const promptIA = `
         Aja como um professor nativo de inglês avaliando um "Roleplay" (duelo de fluência).
         Cenário encenado: "${sala.cenario || 'Conversa livre'}"
-        
-        Níveis de Evolução:
-        1. "Safira" (Título: Orador Audaz)
-        2. "Ametista" (Título: Mestre do Diálogo)
-        3. "Rubi" (Título: Embaixador da Fluência)
-        4. "Diamante Estelar" (Título: Lenda Nativa)
-
-        Jogadores:
-        - ${sala.jogador1.nome}
-        - ${sala.jogador2 ? sala.jogador2.nome : 'Nenhum'}
-        
-        Diálogo:
-        ${dialogo}
-
-        Retorne APENAS um objeto JSON válido, avaliando APENAS os nomes listados acima.
-        {
-            "vencedor": "Nome do vencedor ou Empate",
-            "feedbackGeral": "Comentário sobre o duelo",
-            "jogadores": [
-                { "nome": "Nome Aluno 1", "cristal": "Safira", "titulo": "Orador Audaz", "feedback": "Correção curta" }
-            ]
-        }
+        Níveis de Evolução: 1. "Safira", 2. "Ametista", 3. "Rubi", 4. "Diamante Estelar".
+        Jogadores: - ${sala.jogador1.nome} | - ${sala.jogador2 ? sala.jogador2.nome : 'Nenhum'}
+        Diálogo: ${dialogo}
+        Retorne APENAS um JSON: {"vencedor": "Nome ou Empate", "feedbackGeral": "Comentário", "jogadores": [{"nome": "Nome Aluno", "cristal": "Safira", "titulo": "Orador Audaz", "feedback": "Correção curta"}]}
         `;
 
-        const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                model: 'llama3-70b-8192', 
-                messages: [{ role: 'user', content: promptIA }], 
-                temperature: 0.2 // Mantém o rigor
-            })
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'user', content: promptIA }], model: 'llama3-70b-8192', temperature: 0.2, response_format: { type: 'json_object' }
         });
 
-        const groqData = await groqRes.json();
         let resultadoAvaliacao = {};
-        
-        try {
-            let conteudoIA = groqData.choices[0].message.content;
-            resultadoAvaliacao = JSON.parse(conteudoIA.replace(/```json/g, '').replace(/```/g, '').trim());
-        } catch (e) {
-            resultadoAvaliacao = { vencedor: "Empate", feedbackGeral: "Ótimo treino!", jogadores: [] };
-        }
+        try { resultadoAvaliacao = JSON.parse(completion.choices[0].message.content); } 
+        catch (e) { resultadoAvaliacao = { vencedor: "Empate", feedbackGeral: "Ótimo treino!", jogadores: [] }; }
 
-        // 🚀 O ALGORITMO INFALÍVEL DE RECOMPENSA COM PROGRESSÃO RPG
         const jogadoresReais = [sala.jogador1, sala.jogador2].filter(j => j && j.id);
         const jogadoresCorrigidosParaFrontend = [];
 
@@ -502,56 +433,33 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
                 avaliacaoIA = { nome: jogadorReal.nome, feedback: dicaSalvadora };
             }
 
-            // 🚀 MATEMÁTICA DE PROGRESSÃO: Busca o aluno no banco de dados para saber o nível dele
             const userRecord = await db.collection('usuarios').findOne({ id: jogadorReal.id });
             const alunoRef = userRecord ? userRecord.alunoRefId : null;
 
-            // Calcula o total de duelos (os que já tinha + esta vitória)
             const duelosAtuais = (userRecord && userRecord.arenaStats && userRecord.arenaStats.duelosConcluidos) ? userRecord.arenaStats.duelosConcluidos : 0;
             const novosDuelos = duelosAtuais + 1; 
 
-            // 🏆 O SISTEMA DE ELOS (RANKS)
-            let cristalCalculado = 'Safira';
-            let tituloCalculado = 'Iniciante da Arena';
+            let cristalCalculado = 'Safira', tituloCalculado = 'Iniciante da Arena';
+            if (novosDuelos >= 30) { cristalCalculado = 'Diamante'; tituloCalculado = 'Lenda Nativa'; } 
+            else if (novosDuelos >= 15) { cristalCalculado = 'Rubi'; tituloCalculado = 'Mestre do Diálogo'; } 
+            else if (novosDuelos >= 5) { cristalCalculado = 'Ametista'; tituloCalculado = 'Orador Audaz'; }
 
-            if (novosDuelos >= 30) {
-                cristalCalculado = 'Diamante';
-                tituloCalculado = 'Lenda Nativa';
-            } else if (novosDuelos >= 15) {
-                cristalCalculado = 'Rubi';
-                tituloCalculado = 'Mestre do Diálogo';
-            } else if (novosDuelos >= 5) {
-                cristalCalculado = 'Ametista';
-                tituloCalculado = 'Orador Audaz';
-            }
-
-            // Injeta o Cristal conquistado na avaliação visual do Frontend
             avaliacaoIA.cristal = cristalCalculado;
             avaliacaoIA.titulo = tituloCalculado;
             avaliacaoIA.id = jogadorReal.id;
             jogadoresCorrigidosParaFrontend.push(avaliacaoIA);
 
-            // Prepara a atualização no Banco de Dados
             const idsParaAtualizar = [jogadorReal.id];
             if (alunoRef) idsParaAtualizar.push(alunoRef);
 
-            const updateQuery = { 
-                $inc: { 'arenaStats.duelosConcluidos': 1 },
-                $set: { 'arenaStats.cristalAtual': cristalCalculado, 'arenaStats.tituloAtual': tituloCalculado }
-            };
+            const updateQuery = { $inc: { 'arenaStats.duelosConcluidos': 1 },$set: { 'arenaStats.cristalAtual': cristalCalculado, 'arenaStats.tituloAtual': tituloCalculado } };
             
-            // Aplica a evolução na conta do Aluno
-            await db.collection('usuarios').updateMany({ $or: [ { id: { $in: idsParaAtualizar } }, { alunoRefId: { $in: idsParaAtualizar } } ] }, updateQuery);
+            await db.collection('usuarios').updateMany({ $or: [ { id: { $in: idsParaAtualizar } }, { alunoRefId: {$in: idsParaAtualizar } } ] }, updateQuery);
             await db.collection('alunos').updateMany({ id: { $in: idsParaAtualizar } }, updateQuery);
         }
 
-        // Substitui a lista de jogadores da IA pela nossa lista 100% precisa
         resultadoAvaliacao.jogadores = jogadoresCorrigidosParaFrontend;
-
-        // Salva a sala finalizada
-        await db.collection('workspace_arenas').updateOne(
-            { id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } }
-        );
+        await db.collection('workspace_arenas').updateOne({ id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } });
 
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
@@ -560,36 +468,17 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             });
         }
         res.status(200).json({ success: true, resultado: resultadoAvaliacao });
-    } catch (error) { 
-        console.error("Erro na Arena:", error);
-        res.status(500).json({ error: 'Erro ao avaliar a Arena.' }); 
-    }
+    } catch (error) { res.status(500).json({ error: 'Erro ao avaliar a Arena.' }); }
 });
 
-// ============================================================================
-// 5. Rota para buscar o Histórico Épico do Aluno (Fase 3)
-// ============================================================================
 router.get('/historico/:alunoId', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        
-        // Procura salas finalizadas onde o aluno jogou
-        const historico = await db.collection('workspace_arenas')
-            .find({
-                status: 'finalizado',
-                $or: [
-                    { 'jogador1.id': req.params.alunoId },
-                    { 'jogador2.id': req.params.alunoId }
-                ]
-            })
-            .sort({ dataFim: -1 }) // Ordena do mais recente para o mais antigo
-            .limit(20) // Mostra os últimos 20 duelos para não sobrecarregar
-            .toArray();
-        
+        const historico = await db.collection('workspace_arenas').find({
+            status: 'finalizado', $or: [{ 'jogador1.id': req.params.alunoId }, { 'jogador2.id': req.params.alunoId }]
+        }).sort({ dataFim: -1 }).limit(20).toArray();
         res.status(200).json({ success: true, historico });
-    } catch (error) {
-        res.status(500).json({ error: 'Erro ao buscar histórico de batalhas.' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Erro ao buscar histórico de batalhas.' }); }
 });
 
 module.exports = router;
