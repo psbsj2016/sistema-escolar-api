@@ -294,6 +294,54 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
+// 🆘 LIFELINE: BOTÃO DE SOCORRO (IDEIAS DA IA)
+// ============================================================================
+router.post('/:salaId/ajuda', verificarToken, async (req, res) => {
+    try {
+        const salaId = req.params.salaId;
+        const db = await connectDB();
+        const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
+
+        if (!sala) return res.status(404).json({ error: 'Sala não encontrada.' });
+
+        let dialogo = '';
+        if (sala.historico && sala.historico.length > 0) {
+            // Puxamos apenas as últimas 8 mensagens para a IA não se distrair
+            sala.historico.slice(-8).forEach(fala => {
+                dialogo += `[${fala.autorNome}]: ${fala.texto}\n`;
+            });
+        } else {
+            dialogo = "(O debate acabou de começar. Ninguém falou ainda.)";
+        }
+
+        const promptIA = `
+        Você é um professor de inglês ajudando um aluno que "deu branco" no meio de um Roleplay.
+        Cenário atual: "${sala.cenario || 'Conversa livre'}"
+        Diálogo até o momento:
+        ${dialogo}
+
+        A sua missão: O aluno precisa de falar agora e não sabe o que dizer. Forneça EXATAMENTE 3 opções de frases curtas (máximo 7 palavras cada), naturais e em inglês, que ele possa usar para continuar a conversa de forma lógica.
+        Retorne APENAS um JSON válido nesta estrutura exata: {"sugestoes": ["Frase 1", "Frase 2", "Frase 3"]}
+        `;
+
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'user', content: promptIA }],
+            model: 'openai/gpt-oss-120b',
+            temperature: 0.6, // Equilíbrio perfeito entre criatividade e precisão
+            response_format: { type: 'json_object' }
+        });
+
+        const resposta = JSON.parse(completion.choices[0].message.content);
+        res.status(200).json({ success: true, sugestoes: resposta.sugestoes });
+    } catch (error) {
+        console.error("Erro no Socorro da IA:", error);
+        res.status(500).json({ error: 'O Mestre não pôde formular as dicas a tempo.' });
+    }
+});
+
+// ============================================================================
 // 🚀 O CÉREBRO DO MESTRE DA GUILDA E DOS PLOT TWISTS (CORRIGIDO PARA GROQ-SDK)
 // ============================================================================
 async function gerarDicaDoMestre(sala, escolaId) {
