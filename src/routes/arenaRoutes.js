@@ -137,6 +137,39 @@ router.post('/desafio-direto/recusar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao recusar desafio.' }); }
 });
 
+// ============================================================================
+// 🤖 MODO SOLO: TREINO CONTRA A IA (PvE)
+// ============================================================================
+router.post('/solo', verificarToken, async (req, res) => {
+    try {
+        const { alunoId, alunoNome, escolaId, limiteMinutos } = req.body;
+        const db = await connectDB();
+        
+        const salaId = 'solo-' + Date.now() + '-' + crypto.randomUUID().substring(0, 8);
+        const cenarioSorteado = sortearCenario();
+
+        const novaSala = {
+            id: salaId,
+            escolaId: escolaId || 'DEFAULT',
+            tipo: 'solo',
+            status: 'em_curso', // Começa imediatamente!
+            jogador1: { id: alunoId, nome: alunoNome },
+            jogador2: { id: 'ia_groq', nome: 'Mestre da Guilda 🤖' },
+            limiteMinutos: parseInt(limiteMinutos) || 15,
+            iniciadoEm: new Date().toISOString(),
+            cenario: "🤖 TREINO SOLO \n" + cenarioSorteado,
+            historico: []
+        };
+
+        await db.collection('workspace_arenas').insertOne(novaSala);
+        
+        // Devolve o sucesso imediatamente para o frontend abrir a tela
+        res.status(200).json({ success: true, salaId: novaSala.id, cenario: novaSala.cenario });
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao invocar a IA para treino solo.' }); 
+    }
+});
+
 // 1. Rota para Procurar Duelo Aleatório
 router.post('/procurar', verificarToken, async (req, res) => {
     try {
@@ -364,9 +397,79 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', { type: 'ARENA_NOVA_FALA', salaId: salaId, fala: novaFala, escolaId: escolaId || 'DEFAULT' });
         }
+        
+        // 🚀 GATILHO DO MODO SOLO: Se o aluno falou, a IA tem de lhe responder!
+        if (salaAtualizada && salaAtualizada.tipo === 'solo' && autorId !== 'ia_groq') {
+            // Chamamos a função sem 'await' para não bloquear o envio do sucesso para o frontend
+            responderComoIA(salaAtualizada, escolaId);
+        }
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', { type: 'ARENA_NOVA_FALA', salaId: salaId, fala: novaFala, escolaId: escolaId || 'DEFAULT' });
+        }
         res.status(200).json({ success: true, fala: novaFala });
     } catch (error) { res.status(500).json({ error: 'Erro ao processar a fala.' }); }
 });
+
+// Faz a IA conversar com o aluno no Modo Solo
+async function responderComoIA(sala, escolaId) {
+    try {
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+        let dialogo = '';
+        
+        // Pega no máximo as últimas 15 mensagens para manter o contexto rápido e barato
+        sala.historico.slice(-15).forEach(fala => { 
+            dialogo += `[${fala.autorNome}]: ${fala.texto}\n`; 
+        });
+
+        const promptIA = `
+        Aja estritamente como um personagem num Roleplay em inglês com um aluno.
+        Cenário da cena: "${sala.cenario}".
+        Você é a OUTRA pessoa na cena (ex: o empregado de mesa, o amigo, o chefe, etc).
+        O aluno (${sala.jogador1.nome}) é o protagonista com quem você está a falar.
+        
+        Diálogo até ao momento:
+        ${dialogo}
+        
+        Como VOCÊ (o personagem da cena) responde agora à última mensagem?
+        Regras de ouro:
+        1. Escreva apenas a sua fala, sem o seu nome, sem aspas e sem explicações.
+        2. Seja muito natural, direto e conversacional. Use vocabulário nativo.
+        3. Termine quase sempre com uma pergunta ou um gatilho para o aluno ter de responder.
+        4. O idioma da sua resposta DEVE ser estritamente Inglês.
+        `;
+
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'user', content: promptIA }],
+            model: 'llama3-70b-8192',
+            temperature: 0.6 // Temperatura equilibrada para respostas naturais
+        });
+
+        const respostaDaIA = completion.choices[0].message.content.trim();
+        
+        // Constrói o objeto de fala da IA
+        const novaFalaIA = { 
+            id: crypto.randomUUID(), 
+            autorId: 'ia_groq', 
+            autorNome: 'Mestre da Guilda 🤖', 
+            texto: respostaDaIA, 
+            data: new Date().toISOString() 
+        };
+
+        const db = await connectDB();
+        await db.collection('workspace_arenas').updateOne({ id: sala.id }, { $push: { historico: novaFalaIA } });
+
+        // Dispara a fala da IA pelo túnel para desenhar no ecrã do aluno
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_NOVA_FALA', salaId: sala.id, fala: novaFalaIA, escolaId: escolaId || 'DEFAULT'
+            });
+        }
+    } catch (error) { 
+        console.error("Erro na resposta Solo da IA:", error); 
+    }
+}
 
 // ============================================================================
 // 🚑 SALVA-VIDAS DA IA E ROTAS FINAIS MANTIDAS INTACTAS
