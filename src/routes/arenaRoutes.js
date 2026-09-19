@@ -393,10 +393,6 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
                 gerarDicaDoMestre(salaAtualizada, escolaId);
             }
         }
-
-        if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', { type: 'ARENA_NOVA_FALA', salaId: salaId, fala: novaFala, escolaId: escolaId || 'DEFAULT' });
-        }
         
         // 🚀 GATILHO DO MODO SOLO: Se o aluno falou, a IA tem de lhe responder!
         if (salaAtualizada && salaAtualizada.tipo === 'solo' && autorId !== 'ia_groq') {
@@ -404,9 +400,11 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
             responderComoIA(salaAtualizada, escolaId);
         }
 
+        // 🚀 Emite o sinal apenas UMA vez para desenhar a fala no ecrã!
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', { type: 'ARENA_NOVA_FALA', salaId: salaId, fala: novaFala, escolaId: escolaId || 'DEFAULT' });
         }
+        
         res.status(200).json({ success: true, fala: novaFala });
     } catch (error) { res.status(500).json({ error: 'Erro ao processar a fala.' }); }
 });
