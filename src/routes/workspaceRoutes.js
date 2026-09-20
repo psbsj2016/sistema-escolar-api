@@ -1958,10 +1958,24 @@ router.get('/ingles/musica/status', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const userId = req.query.userId;
+        const escolaId = req.query.escolaId || 'DEFAULT';
+
         if (!userId) return res.status(400).json({ error: 'ID de utilizador ausente.' });
         
         const data = await db.collection('workspace_ingles_data').findOne({ userId: userId }) || {};
-        res.json({ success: true, musicaAtiva: data.musicaAtiva || null, historicoMusicas: data.historicoMusicas || [] });
+        
+        // 🚀 O SEGREDO DO CATÁLOGO: Puxamos TODAS as músicas da escola, ignorando o limite de 50 do Feed!
+        const catalogo = await db.collection('workspace_posts')
+            .find({ escolaId: escolaId, categoria: 'musica' })
+            .sort({ dataCriacao: -1 })
+            .toArray();
+
+        res.json({ 
+            success: true, 
+            musicaAtiva: data.musicaAtiva || null, 
+            historicoMusicas: data.historicoMusicas || [],
+            catalogo: catalogo // Envia a biblioteca inteira para o Frontend
+        });
     } catch (error) { res.status(500).json({ error: 'Erro ao buscar o seu estúdio musical.' }); }
 });
 
