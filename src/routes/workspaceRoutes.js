@@ -1950,62 +1950,68 @@ router.post('/posts/imersao/mais-quiz', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🎶 HUB DE ESTUDO: IMERSÃO MUSICAL (Minijogo e 14 Dias de Fluência)
+// 🎶 HUB DE ESTUDO LMS: IMERSÃO MUSICAL (Montra, Histórico e Treino Ativo)
 // ============================================================================
+
+// 1. Verificar o Estado Musical do Aluno
+router.get('/ingles/musica/status', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const userId = req.query.userId;
+        if (!userId) return res.status(400).json({ error: 'ID de utilizador ausente.' });
+        
+        const data = await db.collection('workspace_ingles_data').findOne({ userId: userId }) || {};
+        res.json({ success: true, musicaAtiva: data.musicaAtiva || null, historicoMusicas: data.historicoMusicas || [] });
+    } catch (error) { res.status(500).json({ error: 'Erro ao buscar o seu estúdio musical.' }); }
+});
+
+// 2. Concluir um Treino Musical e Enviar para o Histórico
+router.post('/ingles/musica/concluir', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { userId, postId } = req.body;
+        
+        // Remove a música ativa e atira o ID para o array de histórico
+        await db.collection('workspace_ingles_data').updateOne(
+            { userId: userId },
+            { 
+                $push: { historicoMusicas: postId },$unset: { musicaAtiva: "" }
+            },
+            { upsert: true }
+        );
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao concluir o treino.' }); }
+});
+
+// 3. Iniciar um Treino Específico (Selecionado da Montra)
 router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
     try {
-        const { escolaId } = req.body;
+        const { postId, userId } = req.body;
         const database = await connectDB();
         
-        // 🚀 MUDANÇA 1: Liberdade Total!
-        // Removemos a restrição de "destino" (turma vs global). 
-        // A IA agora varre todas as publicações da escola para encontrar músicas.
-        const filtro = { escolaId: escolaId || 'DEFAULT' };
+        // Puxa exatamente o post que o aluno clicou
+        const postOriginal = await database.collection('workspace_posts').findOne({ id: postId });
+        if (!postOriginal) return res.status(404).json({ error: 'A música desapareceu dos arquivos da escola.' });
 
-        // Puxamos os últimos 100 posts para ter uma base de dados rica
-       const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(100).toArray();
-        
-        // 🚀 FILTRO INTELIGENTE: Puxa primeiro os posts marcados oficialmente como "musica"
-        const postsMusicais = postsBrutos.filter(p => {
-            if (p.categoria === 'musica') return true; // É uma música oficial!
-            
-            // Plano B: Tenta adivinhar se é música caso o professor se tenha esquecido da tag
-            const texto = (p.texto || '').toLowerCase();
-            const temMidiaAnexa = p.anexos && p.anexos.some(a => a.tipo.includes('video') || a.tipo.includes('audio'));
-            const temMidiaLink = texto.includes('youtube.com') || texto.includes('youtu.be') || texto.includes('tiktok.com') || texto.includes('spotify.com');
-            return temMidiaAnexa || temMidiaLink;
-        });
-
-        // Coloca os posts oficiais de música no topo da lista para a IA ver primeiro
-        postsMusicais.sort((a, b) => (a.categoria === 'musica' ? -1 : 1));
-
-        if (postsMusicais.length === 0) {
-            return res.status(400).json({ error: 'Não encontrei vídeos ou áudios no Feed. Partilhe um link do YouTube ou Spotify para ativarmos o modo musical!' });
-        }
-
-        // Enviamos os 15 vídeos mais recentes para a IA escolher o melhor
-        const conteudoParaIA = postsMusicais.slice(0, 15).map(p => `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''}`).join('\n\n');
+        const conteudoParaIA = `[POST_ID: ${postOriginal.id} | Autor: ${postOriginal.autorNome}]: ${postOriginal.texto || ''}`;
 
         const Groq = require('groq-sdk');
         const chaveApi = process.env.GROQ_API_KEY;
         if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
-        // 🚀 PROMPT MUSICAL BLINDADO: Obriga a ir até ao 14 e pede concisão
         const systemPrompt = `Você é um professor de INGLÊS especialista em fluência através da música.
-        Abaixo estão publicações do Feed da plataforma contendo vídeos e links.
+        Abaixo está uma publicação do Feed da plataforma contendo a letra de uma música.
         
         REGRAS ABSOLUTAS:
-        1. SELEÇÃO: Analise os posts abaixo e ESCOLHA APENAS UM que seja claramente uma MÚSICA.
-        2. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
-        3. ESTRUTURA MÁXIMA: Extraia EXATAMENTE 14 frases vitais dessa música. É OBRIGATÓRIO GERAR O PLANO DO DIA 1 ATÉ AO DIA 14. NÃO PARE A MEIO.
-        4. MINIJOGO: Para CADA frase, escolha UMA palavra vital e esconda-a na "fraseOculta" substituindo-a por "____". Coloque a palavra correta em "palavraEscondida".
-        5. CONCISÃO: Seja muito direto e breve nas explicações ("explicacao") e desafios ("desafio") para poupar memória.
+        1. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
+        2. ESTRUTURA MÁXIMA: Extraia EXATAMENTE 14 frases vitais dessa música. É OBRIGATÓRIO GERAR O PLANO DO DIA 1 ATÉ AO DIA 14. NÃO PARE A MEIO.
+        3. MINIJOGO: Para CADA frase, escolha UMA palavra vital e esconda-a na "fraseOculta" substituindo-a por "____". Coloque a palavra correta em "palavraEscondida".
+        4. CONCISÃO: Seja muito direto e breve nas explicações e desafios para poupar memória.
         
         Retorne APENAS JSON válido com a estrutura exata:
         {
             "tituloMusica": "Nome da Música e Artista",
-            "idPostEscolhido": "ID_DO_POST",
             "planoEstudos": [
                 {
                     "dia": 1,
@@ -2019,98 +2025,75 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
             ]
         }`;
 
-        // 🚀 EXPANSÃO DE MEMÓRIA: Adicionado o max_tokens para a IA não cortar o texto!
         const completion = await groq.chat.completions.create({
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: conteudoParaIA }
-            ],
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: conteudoParaIA }],
             model: 'openai/gpt-oss-120b', 
             temperature: 0.3,
-            max_tokens: 4500, // Dá fôlego extra de texto para ela conseguir chegar ao dia 14
+            max_tokens: 4500, 
             response_format: { type: 'json_object' } 
         });
 
         const imersaoGerada = JSON.parse(completion.choices[0].message.content);
-        const postOriginal = postsMusicais.find(p => String(p.id) === String(imersaoGerada.idPostEscolhido));
+
+        // 🚀 O SEGREDO DO LMS: Guarda o plano gerado na Base de Dados atrelado ao aluno!
+        await database.collection('workspace_ingles_data').updateOne(
+            { userId: userId },
+            { $set: { musicaAtiva: { plano: imersaoGerada, postOriginal: postOriginal } } },
+            { upsert: true }
+        );
 
         res.status(200).json({ success: true, plano: imersaoGerada, postOriginal: postOriginal });
 
     } catch (error) {
         console.error("🚨 Erro na Imersão Musical:", error);
-        res.status(500).json({ error: 'O motor musical falhou. Certifique-se de que há vídeos musicais no Feed.' });
+        res.status(500).json({ error: 'O motor musical falhou. A IA precisa de uma afinação.' });
     }
 });
 
-// ============================================================================
-// 🎶 HUB DE ESTUDO: GERAR MAIS DIAS (Imersão Musical contínua até 30)
-// ============================================================================
+// 4. Gerar Mais Dias (e atualizar a BD)
 router.post('/posts/imersao-musical/mais-dias', verificarToken, async (req, res) => {
     try {
-        const { escolaId, postId, ultimoDia } = req.body;
-        if (!postId) return res.status(400).json({ error: 'Post base não encontrado.' });
-
+        const { userId, postId, ultimoDia } = req.body;
         const database = await connectDB();
+        
         const post = await database.collection('workspace_posts').findOne({ id: postId });
         if (!post) return res.status(404).json({ error: 'A publicação com a música original já não existe.' });
 
-        // 🚀 O LIMITADOR DE 30 DIAS: Gera blocos de até 7 dias, mas trava no teto de 30
         const maxDiasGeracao = Math.min(7, 30 - ultimoDia); 
-        if (maxDiasGeracao <= 0) {
-            return res.status(400).json({ error: 'Já atingiu o limite máximo de 30 dias para esta música!' });
-        }
+        if (maxDiasGeracao <= 0) return res.status(400).json({ error: 'Já atingiu o limite de 30 dias!' });
 
         const conteudoParaIA = `[LETRA DA MÚSICA]: ${post.texto || ''}`;
 
         const Groq = require('groq-sdk');
-        const chaveApi = process.env.GROQ_API_KEY;
-        if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
-        const groq = new Groq({ apiKey: chaveApi.trim() });
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
 
-        // 🚀 PROMPT INTELIGENTE: Pede frases novas e obriga a contar a partir do último dia gerado
-        const systemPrompt = `Você é um professor de INGLÊS especialista em fluência através da música.
-        O aluno já completou os primeiros ${ultimoDia} dias de estudo desta música.
+        const systemPrompt = `Você é um professor de INGLÊS especialista em música.
+        O aluno já completou os primeiros ${ultimoDia} dias desta música.
+        Extraia ${maxDiasGeracao} NOVAS frases da letra. O plano deve iniciar no dia ${ultimoDia + 1} e ir até o dia ${ultimoDia + maxDiasGeracao}.
         
-        Sua missão: Extraia ${maxDiasGeracao} NOVAS frases ou expressões da letra (que não sejam as óbvias do início) para continuar o plano de estudos.
-        O plano deve iniciar OBRIGATORIAMENTE no dia ${ultimoDia + 1} e ir até o dia ${ultimoDia + maxDiasGeracao}.
-
-        REGRAS ABSOLUTAS:
-        1. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
-        2. MINIJOGO: Para CADA frase, escolha UMA palavra vital e esconda-a na "fraseOculta" usando "____". Coloque a palavra correta em "palavraEscondida".
-        3. CONCISÃO: Seja muito direto e breve nas explicações para poupar memória.
-
-        Retorne APENAS JSON válido com a estrutura exata:
-        {
-            "planoEstudos": [
-                {
-                    "dia": ${ultimoDia + 1},
-                    "fraseOriginal": "Nova frase exata e completa da música",
-                    "fraseOculta": "Frase com a palavra substituída por ____",
-                    "palavraEscondida": "A palavra exata",
-                    "traducao": "Tradução curta",
-                    "explicacao": "Explicação muito breve (use HTML <strong> se precisar)",
-                    "desafio": "Desafio muito curto"
-                }
-            ]
-        }`;
+        Retorne APENAS JSON: {"planoEstudos": [{"dia": ${ultimoDia + 1}, "fraseOriginal": "...", "fraseOculta": "...", "palavraEscondida": "...", "traducao": "...", "explicacao": "...", "desafio": "..."}]}`;
 
         const completion = await groq.chat.completions.create({
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: conteudoParaIA }
-            ],
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: conteudoParaIA }],
             model: 'openai/gpt-oss-120b', 
-            temperature: 0.5, // Subimos a temperatura para evitar que repita as frases anteriores
+            temperature: 0.5, 
             max_tokens: 4500,
             response_format: { type: 'json_object' } 
         });
 
         const planoGerado = JSON.parse(completion.choices[0].message.content);
+
+        // 🚀 Atualiza a Base de Dados do Aluno juntando as novas lições!
+        await database.collection('workspace_ingles_data').updateOne(
+            { userId: userId },
+            { $push: { "musicaAtiva.plano.planoEstudos": { $each: planoGerado.planoEstudos } } }
+        );
+
         res.status(200).json({ success: true, plano: planoGerado.planoEstudos });
 
     } catch (error) {
-        console.error("🚨 Erro ao gerar mais dias na Imersão Musical:", error);
-        res.status(500).json({ error: 'A IA falhou ao gerar as novas frases. Tente novamente.' });
+        console.error("🚨 Erro ao gerar mais dias:", error);
+        res.status(500).json({ error: 'A IA falhou ao gerar as novas frases.' });
     }
 });
 
