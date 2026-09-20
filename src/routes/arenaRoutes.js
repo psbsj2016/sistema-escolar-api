@@ -630,4 +630,53 @@ router.get('/historico/:alunoId', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao buscar histórico de batalhas.' }); }
 });
 
+// ============================================================================
+// 🎭 FASE 4: ÁRBITRO DE PERSONAGENS (QUEM CLICA PRIMEIRO, ESCOLHE)
+// ============================================================================
+router.post('/:salaId/escolher-papel', verificarToken, async (req, res) => {
+    try {
+        const salaId = req.params.salaId;
+        const { alunoId, papelEscolhido, papelRestante, cenarioTexto } = req.body;
+        const db = await connectDB();
+        
+        const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
+        if (!sala) return res.status(404).json({ error: 'Sala não encontrada.' });
+
+        // 1. Se o oponente foi mais rápido e já trancou a sala, avisamos este aluno do que sobrou
+        if (sala.papeisDefinidos) {
+            const meuPapel = (sala.jogador1.id === alunoId) ? sala.jogador1.papel : sala.jogador2.papel;
+            return res.status(200).json({ success: true, papel: meuPapel, mensagem: 'O oponente foi mais rápido!' });
+        }
+
+        // 2. É o primeiro a clicar! Vamos trancar os personagens na base de dados.
+        let updateData = { papeisDefinidos: true, cenario: cenarioTexto };
+        if (sala.jogador1.id === alunoId) {
+            updateData['jogador1.papel'] = papelEscolhido;
+            updateData['jogador2.papel'] = papelRestante;
+        } else {
+            updateData['jogador2.papel'] = papelEscolhido;
+            updateData['jogador1.papel'] = papelRestante;
+        }
+
+        await db.collection('workspace_arenas').updateOne({ id: salaId }, { $set: updateData });
+
+        // 3. Avisa instantaneamente o oponente, pelo túnel SSE, sobre o papel que lhe restou
+        if (global.workspaceStream) {
+            const destinatario = sala.jogador1.id === alunoId ? sala.jogador2?.nome : sala.jogador1?.nome;
+            if (destinatario) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ARENA_PAPEIS_DEFINIDOS',
+                    salaId: salaId,
+                    seuPapel: papelRestante // Diz ao oponente o que ele vai ser
+                });
+            }
+        }
+
+        // Devolve o "Ok" a quem clicou primeiro
+        res.status(200).json({ success: true, papel: papelEscolhido });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao processar escolha de papel.' });
+    }
+});
+
 module.exports = router;
