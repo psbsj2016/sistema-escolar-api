@@ -223,21 +223,32 @@ router.post('/convidar', verificarToken, async (req, res) => {
         const { alunoId, alunoNome, colegaNome, escolaId, limiteMinutos } = req.body;
         const db = await connectDB();
 
-        const userAlvo = await db.collection('usuarios').findOne({
+        // 🚀 CORREÇÃO 1: Procura de forma mais abrangente na coleção de Utilizadores
+        let userAlvo = await db.collection('usuarios').findOne({
             $or: [
                 { nome: new RegExp(`^${colegaNome.trim()}$`, 'i') },
                 { login: new RegExp(`^${colegaNome.trim()}$`, 'i') }
             ]
         });
 
-        if (!userAlvo) return res.status(404).json({ error: 'Guerreiro não encontrado! Selecione o nome na lista.' });
+        // 🚀 CORREÇÃO 2: Se não achar, procura na coleção de Alunos (cobre alunos sem login ativo)
+        if (!userAlvo) {
+            userAlvo = await db.collection('alunos').findOne({
+                $or: [
+                    { nome: new RegExp(`^${colegaNome.trim()}$`, 'i') },
+                    { login: new RegExp(`^${colegaNome.trim()}$`, 'i') }
+                ]
+            });
+        }
+
+        if (!userAlvo) return res.status(404).json({ error: 'Guerreiro não encontrado! Selecione um nome sugerido na lista.' });
 
         const nomeColegaReal = userAlvo.nome || userAlvo.login;
 
         const novaSala = {
             id: crypto.randomUUID(), escolaId: escolaId, tipo: 'convite', status: 'aguardando',
             jogador1: { id: alunoId, nome: alunoNome },
-            jogador2: { id: userAlvo.id, nome: nomeColegaReal },
+            jogador2: { id: String(userAlvo.id), nome: nomeColegaReal },
             limiteMinutos: parseInt(limiteMinutos) || 50, criadoEm: new Date().toISOString()
         };
 
@@ -249,7 +260,7 @@ router.post('/convidar', verificarToken, async (req, res) => {
                 salaId: novaSala.id,
                 remetenteNome: alunoNome,
                 destinatarios: [nomeColegaReal],
-                destinatariosIds: [userAlvo.id], // BLINDAGEM
+                destinatariosIds: [String(userAlvo.id)], // BLINDAGEM
                 escolaId: escolaId,
                 limiteMinutos: novaSala.limiteMinutos
             });
@@ -536,8 +547,18 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
         const db = await connectDB();
         const escolaId = req.body.escolaId || 'DEFAULT';
 
+        // 🚀 TRAVA ATÓMICA (Anti-Colisão Dupla): Apenas 1 jogador aciona a IA
+        const updateResult = await db.collection('workspace_arenas').updateOne(
+            { id: salaId, status: 'em_curso' },
+            { $set: { status: 'avaliando' } }
+        );
+
+        // Se não modificou, é porque a sala já está em avaliação pelo outro jogador ou já acabou!
+        if (updateResult.modifiedCount === 0) {
+            return res.status(200).json({ success: true, mensagem: 'Avaliação já em andamento. Aguarde o Mestre.' });
+        }
+
         const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
-        if (!sala || sala.status === 'finalizado') return res.status(400).json({ error: 'Sala inválida ou já avaliada.' });
 
         let dialogo = '';
         if (sala.historico && sala.historico.length > 0) {
@@ -558,15 +579,28 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
         Retorne APENAS um JSON: {"vencedor": "Nome ou Empate", "feedbackGeral": "Comentário", "jogadores": [{"nome": "Nome Aluno", "cristal": "Safira", "titulo": "Orador Audaz", "feedback": "Correção curta"}]}
         `;
 
-        const Groq = require('groq-sdk');
-        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
-        const completion = await groq.chat.completions.create({
-            messages: [{ role: 'user', content: promptIA }], model: 'llama3-70b-8192', temperature: 0.2, response_format: { type: 'json_object' }
-        });
-
         let resultadoAvaliacao = {};
-        try { resultadoAvaliacao = JSON.parse(completion.choices[0].message.content); } 
-        catch (e) { resultadoAvaliacao = { vencedor: "Empate", feedbackGeral: "Ótimo treino!", jogadores: [] }; }
+        
+        // 🚀 PROTEÇÃO SALVA-VIDAS CONTRA QUEDAS DA IA
+        try {
+            const Groq = require('groq-sdk');
+            const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+            const completion = await groq.chat.completions.create({
+                messages: [{ role: 'user', content: promptIA }], 
+                model: 'openai/gpt-oss-120b', // 🚀 Unificado para evitar erros de limite de taxa 
+                temperature: 0.2, 
+                response_format: { type: 'json_object' }
+            });
+            resultadoAvaliacao = JSON.parse(completion.choices[0].message.content); 
+        } catch (iaError) {
+            console.error("🚨 Erro na Groq durante a avaliação:", iaError);
+            // Fallback elegante para destravar os alunos em caso de falha da IA!
+            resultadoAvaliacao = { 
+                vencedor: "Empate", 
+                feedbackGeral: "A conexão com os Deuses da Arena oscilou, mas a vossa coragem foi registada! Excelente treino.", 
+                jogadores: [] 
+            };
+        }
 
         const jogadoresReais = [sala.jogador1, sala.jogador2].filter(j => j && j.id);
         const jogadoresCorrigidosParaFrontend = [];
@@ -617,7 +651,9 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             });
         }
         res.status(200).json({ success: true, resultado: resultadoAvaliacao });
-    } catch (error) { res.status(500).json({ error: 'Erro ao avaliar a Arena.' }); }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao avaliar a Arena.' }); 
+    }
 });
 
 router.get('/historico/:alunoId', verificarToken, async (req, res) => {
