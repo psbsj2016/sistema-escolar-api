@@ -353,77 +353,67 @@ router.post('/:salaId/ajuda', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🚀 O CÉREBRO DO MESTRE DA GUILDA E DOS PLOT TWISTS (CORRIGIDO PARA GROQ-SDK)
+// 🧙‍♂️ O MESTRE DA GUILDA COMO NPC (INTERVENÇÃO NO CHAT)
 // ============================================================================
-async function gerarDicaDoMestre(sala, escolaId) {
+async function intervirComoMestre(sala, escolaId) {
     try {
         const Groq = require('groq-sdk');
         const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+        const db = await connectDB();
         let dialogo = '';
-        const ultimasMensagens = sala.historico.slice(-10);
-        ultimasMensagens.forEach(fala => { dialogo += `[${fala.autorNome}]: ${fala.texto}\n`; });
+        
+        // Pega nas últimas mensagens para o Mestre entender o contexto
+        sala.historico.slice(-8).forEach(fala => { 
+            dialogo += `[${fala.autorNome}]: ${fala.texto}\n`; 
+        });
 
         const promptIA = `
-        Aja como o "Mestre da Guilda", um sábio professor nativo de inglês observando dois alunos a praticarem num Roleplay.
+        Aja como o "Mestre da Guilda" (um sábio, divertido e às vezes intrometido NPC) interagindo DIRETAMENTE num Roleplay em inglês com dois alunos.
         Cenário atual deles: "${sala.cenario || 'Conversa livre'}".
         
-        Aqui estão as últimas 10 mensagens:
+        Diálogo até agora:
         ${dialogo}
         
-        Sua missão: Escreva UMA DICA RÁPIDA E AMIGÁVEL (máximo de 2 frases) para eles.
-        IMPORTANTE: Responda APENAS com a frase da dica, sem aspas, sem introduções e sem JSON. Misture português com inglês.
-        `;
-
-        const completion = await groq.chat.completions.create({
-            messages: [{ role: 'user', content: promptIA }],
-            model: 'openai/gpt-oss-120b',
-            temperature: 0.5
-        });
-
-        const dica = completion.choices[0].message.content.trim();
-
-        if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', {
-                type: 'ARENA_DICA_MESTRE', salaId: sala.id, dica: dica, escolaId: escolaId || 'DEFAULT'
-            });
-        }
-    } catch (error) { console.error("Erro na Dica do Mestre:", error); }
-}
-
-async function gerarPlotTwist(sala, escolaId) {
-    try {
-        const Groq = require('groq-sdk');
-        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
-        const promptIA = `
-        Atue como o Mestre da Guilda num jogo de Roleplay (simulação) em inglês.
-        O cenário original dos alunos é: "${sala.cenario || 'Conversa livre'}".
-        
-        Sua missão: Inventar um "Plot Twist" (uma reviravolta inesperada, dramática ou engraçada) que acabou de acontecer neste cenário para forçar os alunos a mudarem o rumo da conversa.
-        
+        Sua missão: Entre na história como um personagem da cena ou comente a situação interagindo com eles em INGLÊS.
         Regras:
-        1. Escreva apenas UMA frase curta e impactante.
-        2. Comece com um aviso em português e descreva o novo desafio em inglês.
-        Exemplo: "🚨 Atenção! The restaurant just caught on fire! You need to escape immediately!"
-        Não use aspas e vá direto ao assunto. Seja muito criativo!
+        1. Escreva APENAS a sua fala (sem o seu nome, sem aspas, sem introdução).
+        2. Seja criativo! Pode ser o gerente do restaurante, um cliente chateado na mesa ao lado, um polícia, ou apenas um narrador astuto.
+        3. Faça uma pergunta ou crie um pequeno obstáculo para eles resolverem.
+        4. Máximo de 2 frases curtas.
         `;
 
         const completion = await groq.chat.completions.create({
             messages: [{ role: 'user', content: promptIA }],
             model: 'openai/gpt-oss-120b',
-            temperature: 0.8
+            temperature: 0.7
         });
 
-        const twist = completion.choices[0].message.content.trim();
+        const falaDoMestre = completion.choices[0].message.content.trim();
 
+        // 🚀 O SEGREDO: Salva a fala na base de dados para o Avaliador final poder ler!
+        const novaFalaIA = { 
+            id: crypto.randomUUID(), 
+            autorId: 'mestre_guilda', 
+            autorNome: '🧙‍♂️ Mestre da Guilda', 
+            texto: falaDoMestre, 
+            data: new Date().toISOString() 
+        };
+
+        await db.collection('workspace_arenas').updateOne({ id: sala.id }, { $push: { historico: novaFalaIA } });
+
+        // Dispara como uma NOVA FALA normal para aparecer nos balões de chat de ambos!
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
-                type: 'ARENA_PLOT_TWIST', salaId: sala.id, twist: twist, escolaId: escolaId || 'DEFAULT'
+                type: 'ARENA_NOVA_FALA', 
+                salaId: sala.id, 
+                fala: novaFalaIA, 
+                escolaId: escolaId || 'DEFAULT'
             });
         }
-    } catch (error) { console.error("Erro no Plot Twist:", error); }
+    } catch (error) { console.error("Erro na Intervenção do Mestre:", error); }
 }
 
-// 3. Rota para Receber a Voz e Disparar a IA (COM MATEMÁTICA PERFEITA)
+// 3. Rota para Receber a Voz e Disparar a IA (Sem Plot Twist)
 router.post('/:salaId/falar', verificarToken, async (req, res) => {
     try {
         const { texto, autorId, autorNome, escolaId, combo } = req.body;
@@ -433,33 +423,23 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
         const novaFala = { id: crypto.randomUUID(), autorId, autorNome, texto, combo, data: new Date().toISOString() };
         await db.collection('workspace_arenas').updateOne({ id: salaId }, { $push: { historico: novaFala } });
         
-        // 🚀 A MATEMÁTICA ESTRATÉGICA DOS PLOT TWISTS!
         const salaAtualizada = await db.collection('workspace_arenas').findOne({ id: salaId });
         
         if (salaAtualizada && salaAtualizada.historico) {
             const hist = salaAtualizada.historico;
             const total = hist.length;
             
-            // Conta quantas vezes cada jogador falou
-            const falasJ1 = hist.filter(h => h.autorId === salaAtualizada.jogador1.id).length;
-            const falasJ2 = hist.filter(h => h.autorId === salaAtualizada.jogador2?.id).length;
-
-            // Condição infalível: Se AMBOS já falaram pelo menos 3 vezes e a soma total é um múltiplo de 3 (6, 9, 12, 15...)
-            if (falasJ1 >= 3 && falasJ2 >= 3 && total % 3 === 0) {
-                gerarPlotTwist(salaAtualizada, escolaId);
-            } 
-            else if (total > 0 && total % 10 === 0) {
-                gerarDicaDoMestre(salaAtualizada, escolaId);
+            // 🚀 O Mestre entra na conversa a cada 6 mensagens enviadas no modo Humano vs Humano!
+            if (total > 0 && total % 6 === 0 && salaAtualizada.tipo !== 'solo') {
+                intervirComoMestre(salaAtualizada, escolaId);
             }
         }
         
-        // 🚀 GATILHO DO MODO SOLO: Se o aluno falou, a IA tem de lhe responder!
+        // GATILHO DO MODO SOLO: Se o aluno falou, a IA tem de lhe responder!
         if (salaAtualizada && salaAtualizada.tipo === 'solo' && autorId !== 'ia_groq') {
-            // Chamamos a função sem 'await' para não bloquear o envio do sucesso para o frontend
             responderComoIA(salaAtualizada, escolaId);
         }
 
-        // 🚀 Emite o sinal apenas UMA vez para desenhar a fala no ecrã!
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', { type: 'ARENA_NOVA_FALA', salaId: salaId, fala: novaFala, escolaId: escolaId || 'DEFAULT' });
         }
