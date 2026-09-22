@@ -2148,4 +2148,68 @@ router.post('/ingles/transcricao/corrigir', verificarToken, async (req, res) => 
     }
 });
 
+// ============================================================================
+// ⚔️ ARENA: SISTEMA DE DESAFIO ALEATÓRIO RÁPIDO (SINALIZADOR)
+// ============================================================================
+// Memória RAM ultrarrápida do servidor para gerir quem clica primeiro
+global.desafiosAtivos = global.desafiosAtivos || {};
+
+router.post('/arena/desafio-aleatorio', verificarToken, async (req, res) => {
+    try {
+        const { desafianteNome, escolaId, minutos } = req.body;
+        const desafioId = 'rnd_' + Date.now();
+        
+        // Regista o desafio como pendente
+        global.desafiosAtivos[desafioId] = { status: 'pendente', desafiante: desafianteNome };
+
+        // Emite o alerta (Sinalizador) para todos da escola
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'DESAFIO_ALEATORIO_BROADCAST',
+                desafioId: desafioId,
+                desafianteNome: desafianteNome,
+                escolaId: escolaId || 'DEFAULT',
+                minutos: minutos || 10
+            });
+        }
+
+        res.json({ success: true, desafioId });
+    } catch (e) {
+        res.status(500).json({ error: 'Erro ao lançar o sinalizador.' });
+    }
+});
+
+router.post('/arena/desafio-aleatorio/aceitar', verificarToken, async (req, res) => {
+    try {
+        const { desafioId, desafiadoNome, escolaId } = req.body;
+        
+        const desafio = global.desafiosAtivos[desafioId];
+        if (!desafio) return res.status(404).json({ error: 'Este desafio já expirou ou não existe.' });
+        
+        // 🚀 O CADEADO: Se já foi aceite, barra os cliques atrasados!
+        if (desafio.status === 'aceito') {
+            return res.status(400).json({ error: 'Alguém foi mais rápido e já aceitou este desafio! 🏃💨' });
+        }
+
+        // Tranca o desafio com o nome do vencedor
+        desafio.status = 'aceito';
+        desafio.desafiado = desafiadoNome;
+
+        // Avisa a rede para fechar os Pop-ups dos outros e puxar o criador para a batalha
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'DESAFIO_ALEATORIO_FECHADO',
+                desafioId: desafioId,
+                desafianteNome: desafio.desafiante,
+                desafiadoNome: desafiadoNome,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+
+        res.json({ success: true, desafianteNome: desafio.desafiante });
+    } catch (e) {
+        res.status(500).json({ error: 'Erro ao processar aceitação.' });
+    }
+});
+
 module.exports = router;
