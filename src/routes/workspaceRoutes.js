@@ -1812,20 +1812,17 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             }
         }
 
-        // 1. Radar Duplo: Busca os Posts do Feed E os Materiais da Biblioteca
         const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(40).toArray();
         const materiaisBrutos = await database.collection('workspace_materiais').find(filtro).sort({ dataCriacao: -1 }).limit(30).toArray();
         
-        // 2. Formatamos tudo com as "Etiquetas de Identificação" para a IA
         const conteudoPosts = postsBrutos.map(p => {
             let infoAnexos = (p.anexos || []).map(a => a.nome + ' (' + a.tipo + ')').join(', ');
-            return `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''} ${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
+            return `[POST_ID: ${p.id} \vert{} Autor:${p.autorNome}]: ${p.texto \vert{}\vert{} ''}${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
         }).join('\n\n');
 
-       // 🚀 MÁGICA DE METADADOS: Passa as palavras-chave diretamente para a Inteligência Artificial ler!
         const conteudoMateriais = materiaisBrutos.map(m => {
-        const tagsInfo = m.tags ? ` | Palavras-Chave (Prioridade Máxima): ${m.tags}` : '';
-        return `[MATERIAL_ID: ${m.id} | Autor: ${m.autorNome} | Título: ${m.titulo || ''}${tagsInfo}]: Descrição: ${m.descricao || ''}. Ficheiro: ${m.nomeOriginal || m.url}`;
+            const tagsInfo = m.tags ? ` | Palavras-Chave: ${m.tags}` : '';
+            return `[MATERIAL_ID: ${m.id} \vert{} Título: ${m.titulo || ''}${tagsInfo}]: Descrição: ${m.descricao || ''}`;
         }).join('\n\n');
 
         const conteudoParaIA = `--- PUBLICAÇÕES DO FEED ---\n${conteudoPosts}\n\n--- MATERIAIS DA ESCOLA ---\n${conteudoMateriais}`;
@@ -1839,38 +1836,27 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
         if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
+        // 🚀 MÁGICA 1: O Prompt Dinâmico Bilingue
         const instrucaoFoco = termoBusca 
-            ? `O aluno quer focar-se em: "${termoBusca}". Filtra e foca a tua análise estritamente neste tema.` 
-            : `Cria uma imersão com base nos temas mais importantes encontrados nestes conteúdos.`;
+            ? `O aluno quer focar-se em: "${termoBusca}". Filtra a análise estritamente neste tema. IMPORTANTE: Aja como um professor bilingue. Se o termo de busca estiver em Inglês (ex: "Phrasal verbs"), todo o resumo, explicações e o quiz DEVEM SER EM INGLÊS. Se o termo estiver em Português, use PORTUGUÊS.` 
+            : `Cria uma imersão com base nos temas mais importantes. Responda em Português.`;
 
-     // 🚀 PROMPT EXTREMO: Gatilhos de Exaustão e Profundidade Universitária
-        const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
-        Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
-        ${instrucaoFoco}
+        const systemPrompt = `Você é a Inteligência Artificial de elite de uma escola de INGLÊS.
+        Abaixo estão os conteúdos da escola. ${instrucaoFoco}
         
-        REGRAS ABSOLUTAS E INQUEBRÁVEIS:
-        1. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
-        2. PROFUNDIDADE (GATILHO DE EXAUSTÃO): O seu "resumo" deve ser massivo, aprofundado e digno de uma aula universitária. Não economize palavras. Dê múltiplos exemplos práticos em frases bilingues, crie cenários de uso, explique exceções à regra gramatical e mergulhe em detalhes minuciosos.
-        3. FORMATAÇÃO RICA: Use HTML puro (<strong>, <em>, <ul>, <li>, <table>). Crie tabelas de vocabulário ou comparações estruturadas sempre que fizer sentido para enriquecer o visual da aula.
-        4. RECURSOS (PRIORIDADE MÁXIMA): Use as "Palavras-Chave" dos materiais fornecidos para encontrar os PDFs/Vídeos exatos que o aluno precisa.
+        REGRAS INQUEBRÁVEIS:
+        1. IDIOMA: Respeite a instrução de idioma acima (Inglês ou Português).
+        2. PROFUNDIDADE: O resumo deve ser massivo, aprofundado e digno de uma aula universitária. Dê exemplos e explique detalhes.
+        3. FORMATAÇÃO: Use HTML puro (<strong>, <em>, <ul>, <li>, <table>).
         
         A sua missão:
-        1. Crie um "titulo" cativante.
-        2. Escreva o "resumo" ENORME e ricamente detalhado.
-        3. Guarde os IDs de conteúdos sugeridos em "postsRelacionados" ou "materiaisRelacionados" (Máximo 6).
-        4. Crie um "quiz" com 3 perguntas difíceis. (NOTA IMPORTANTE: No quiz, use o número 1, 2, 3 ou 4 para a chave "respostaCorreta").
-        5. Crie um material de revisão focado e aprofundado ("tituloNota" e "conteudoParaNota").
+        1. "titulo" cativante.
+        2. "resumo" ENORME e detalhado em HTML.
+        3. "postsRelacionados" ou "materiaisRelacionados" (IDs em array).
+        4. "quiz" com 3 perguntas difíceis ("respostaCorreta" deve ser 1, 2, 3 ou 4).
+        5. "tituloNota" e "conteudoParaNota" para revisão.
         
-        Retorne APENAS JSON válido com a estrutura exata:
-        {
-            "titulo": "Título",
-            "resumo": "Texto gigantesco, exaustivo, com exemplos e tabelas HTML...",
-            "postsRelacionados": ["POST_ID_1"],
-            "materiaisRelacionados": ["MATERIAL_ID_1"],
-            "quiz": [{"pergunta": "...","opcoes": ["A", "B", "C", "D"],"respostaCorreta": 1, "explicacao": "Explicação detalhada..."}],
-            "tituloNota": "Anotações: Tema",
-            "conteudoParaNota": "Conteúdo longo e bem formatado em HTML..."
-        }`;
+        Retorne APENAS um JSON válido. Não coloque o JSON dentro de blocos de Markdown (\`\`\`json). Devolva apenas o objeto {}.`;
 
         const completion = await groq.chat.completions.create({
             messages: [
@@ -1878,14 +1864,20 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
                 { role: 'user', content: conteudoParaIA }
             ],
             model: 'openai/gpt-oss-120b', 
-            temperature: 0.4, // Subimos levemente a temperatura para estimular a criatividade na escrita longa
-            max_tokens: 6000, // 🚀 EXPANSÃO DE MEMÓRIA: Fôlego para textos gigantes!
+            temperature: 0.4, 
+            max_tokens: 6000, 
             response_format: { type: 'json_object' } 
         });
 
-        const imersaoGerada = JSON.parse(completion.choices[0].message.content);
+        // 🚀 MÁGICA 2: A "Lavandaria" do JSON (Filtro de Limpeza Anti-Erro 500)
+        let conteudoLimpo = completion.choices[0].message.content.trim();
+        // Remove lixo Markdown caso a IA seja "teimosa"
+        if (conteudoLimpo.startsWith('```')) {
+            conteudoLimpo = conteudoLimpo.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+        }
         
-        // 3. O Servidor resolve os Materiais escolhidos pela IA e manda prontos para o Frontend
+        const imersaoGerada = JSON.parse(conteudoLimpo);
+        
         let materiaisDetalhados = [];
         if (imersaoGerada.materiaisRelacionados && imersaoGerada.materiaisRelacionados.length > 0) {
             materiaisDetalhados = materiaisBrutos.filter(m => imersaoGerada.materiaisRelacionados.includes(m.id));
@@ -1895,7 +1887,7 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
 
     } catch (error) {
         console.error("🚨 Erro na Imersão Específica:", error);
-        res.status(500).json({ error: 'O motor de imersão falhou. Tente pesquisar novamente.' });
+        res.status(500).json({ error: 'O motor de imersão falhou. A IA enviou dados incompreensíveis. Tente de novo.' });
     }
 });
 
