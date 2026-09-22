@@ -1841,22 +1841,23 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             ? `O aluno quer focar-se em: "${termoBusca}". Filtra a análise estritamente neste tema. IMPORTANTE: Aja como um professor bilingue. Se o termo de busca estiver em Inglês (ex: "Phrasal verbs"), todo o resumo, explicações e o quiz DEVEM SER EM INGLÊS. Se o termo estiver em Português, use PORTUGUÊS.` 
             : `Cria uma imersão com base nos temas mais importantes. Responda em Português.`;
 
-        const systemPrompt = `Você é a Inteligência Artificial de elite de uma escola de INGLÊS.
-        Abaixo estão os conteúdos da escola. ${instrucaoFoco}
+        const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
+        Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
+        ${instrucaoFoco}
         
-        REGRAS INQUEBRÁVEIS:
-        1. IDIOMA: Respeite a instrução de idioma acima (Inglês ou Português).
-        2. PROFUNDIDADE: O resumo deve ser massivo, aprofundado e digno de uma aula universitária. Dê exemplos e explique detalhes.
-        3. FORMATAÇÃO: Use HTML puro (<strong>, <em>, <ul>, <li>, <table>).
+        REGRAS ABSOLUTAS E INQUEBRÁVEIS:
+        1. IDIOMA: Respeite rigorosamente a instrução de idioma acima (Inglês ou Português).
+        2. PROFUNDIDADE (GATILHO DE EXAUSTÃO): O seu "resumo" deve ser massivo, aprofundado e digno de uma aula universitária. Dê exemplos e explique detalhes.
+        3. FORMATAÇÃO RICA: Use HTML puro (<strong>, <em>, <ul>, <li>, <table>).
         
         A sua missão:
-        1. "titulo" cativante.
-        2. "resumo" ENORME e detalhado em HTML.
-        3. "postsRelacionados" ou "materiaisRelacionados" (IDs em array).
-        4. "quiz" com 3 perguntas difíceis ("respostaCorreta" deve ser 1, 2, 3 ou 4).
-        5. "tituloNota" e "conteudoParaNota" para revisão.
+        1. Crie um "titulo" cativante.
+        2. Escreva o "resumo" ENORME e ricamente detalhado.
+        3. Guarde IDs sugeridos em "postsRelacionados" ou "materiaisRelacionados".
+        4. Crie um "quiz" com 3 perguntas difíceis. (A respostaCorreta deve ser o NÚMERO 1, 2, 3 ou 4).
+        5. Crie o "tituloNota" e "conteudoParaNota".
         
-        Retorne APENAS um JSON válido. Não coloque o JSON dentro de blocos de Markdown (\`\`\`json). Devolva apenas o objeto {}.`;
+        Retorne APENAS JSON válido. NÃO use formatação Markdown como \`\`\`json no início ou no fim. Apenas o objeto puro.`;
 
         const completion = await groq.chat.completions.create({
             messages: [
@@ -1869,9 +1870,10 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             response_format: { type: 'json_object' } 
         });
 
-        // 🚀 MÁGICA 2: A "Lavandaria" do JSON (Filtro de Limpeza Anti-Erro 500)
+        // 🚀 MÁGICA 2: A "Lavandaria" do JSON (Filtro Anti-Erro 500)
         let conteudoLimpo = completion.choices[0].message.content.trim();
-        // Remove lixo Markdown caso a IA seja "teimosa"
+        
+        // Arranca o código Markdown se a IA teimar em enviá-lo
         if (conteudoLimpo.startsWith('```')) {
             conteudoLimpo = conteudoLimpo.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
         }
