@@ -1817,7 +1817,7 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
         
         const conteudoPosts = postsBrutos.map(p => {
             let infoAnexos = (p.anexos || []).map(a => a.nome + ' (' + a.tipo + ')').join(', ');
-            return `[POST_ID: ${p.id} \vert{} Autor:${p.autorNome}]: ${p.texto \vert{}\vert{} ''}${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
+            return `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''} ${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
         }).join('\n\n');
 
         const conteudoMateriais = materiaisBrutos.map(m => {
