@@ -647,48 +647,49 @@ router.get('/historico/:alunoId', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🎭 FASE 4: ÁRBITRO DE PERSONAGENS (QUEM CLICA PRIMEIRO, ESCOLHE)
+// 🎭 FASE 4: ÁRBITRO DE PERSONAGENS (APERTO DE MÃO DUPLO)
 // ============================================================================
 router.post('/:salaId/escolher-papel', verificarToken, async (req, res) => {
     try {
         const salaId = req.params.salaId;
-        const { alunoId, papelEscolhido, papelRestante, cenarioTexto } = req.body;
+        const { alunoId, papelEscolhido } = req.body;
         const db = await connectDB();
         
         const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
         if (!sala) return res.status(404).json({ error: 'Sala não encontrada.' });
 
-        // 1. Se o oponente foi mais rápido e já trancou a sala, avisamos este aluno do que sobrou
-        if (sala.papeisDefinidos) {
-            const meuPapel = (sala.jogador1.id === alunoId) ? sala.jogador1.papel : sala.jogador2.papel;
-            return res.status(200).json({ success: true, papel: meuPapel, mensagem: 'O oponente foi mais rápido!' });
-        }
+        const isJogador1 = sala.jogador1.id === alunoId;
 
-        // 2. É o primeiro a clicar! Vamos trancar os personagens na base de dados.
-        let updateData = { papeisDefinidos: true, cenario: cenarioTexto };
-        if (sala.jogador1.id === alunoId) {
-            updateData['jogador1.papel'] = papelEscolhido;
-            updateData['jogador2.papel'] = papelRestante;
-        } else {
-            updateData['jogador2.papel'] = papelEscolhido;
-            updateData['jogador1.papel'] = papelRestante;
-        }
+        // 1. Grava a escolha na base de dados para o jogador específico
+        const updateField = isJogador1 ? 'jogador1.papel' : 'jogador2.papel';
+        await db.collection('workspace_arenas').updateOne({ id: salaId }, { $set: { [updateField]: papelEscolhido } });
 
-        await db.collection('workspace_arenas').updateOne({ id: salaId }, { $set: updateData });
+        // 2. Verifica se agora AMBOS os jogadores já têm papel
+        const salaAtualizada = await db.collection('workspace_arenas').findOne({ id: salaId });
+        const j1Pronto = !!salaAtualizada.jogador1.papel;
+        const j2Pronto = !!salaAtualizada.jogador2.papel;
 
-        // 3. Avisa instantaneamente o oponente, pelo túnel SSE, sobre o papel que lhe restou
-        if (global.workspaceStream) {
-            const destinatario = sala.jogador1.id === alunoId ? sala.jogador2?.nome : sala.jogador1?.nome;
-            if (destinatario) {
+        if (j1Pronto && j2Pronto) {
+            // 🎯 TIRO DE PARTIDA! Ambos escolheram.
+            if (global.workspaceStream) {
                 global.workspaceStream.emit('evento_realtime', {
-                    type: 'ARENA_PAPEIS_DEFINIDOS',
+                    type: 'ARENA_TODOS_PRONTOS',
                     salaId: salaId,
-                    seuPapel: papelRestante // Diz ao oponente o que ele vai ser
+                    escolaId: req.usuario?.escolaId || 'DEFAULT'
+                });
+            }
+        } else {
+            // 🛑 APENAS UM ESCOLHEU! Avisa a rede para bloquear visualmente esse botão no oponente
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ARENA_PAPEL_BLOQUEADO',
+                    salaId: salaId,
+                    papelBloqueado: papelEscolhido,
+                    escolaId: req.usuario?.escolaId || 'DEFAULT'
                 });
             }
         }
 
-        // Devolve o "Ok" a quem clicou primeiro
         res.status(200).json({ success: true, papel: papelEscolhido });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao processar escolha de papel.' });
