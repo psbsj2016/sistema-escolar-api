@@ -696,4 +696,46 @@ router.post('/:salaId/escolher-papel', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🌍 O TRADUTOR MÁGICO DA ARENA (SMART TOUCH)
+// ============================================================================
+router.post('/traduzir', verificarToken, async (req, res) => {
+    try {
+        const { texto } = req.body;
+        if (!texto) return res.status(400).json({ error: 'Texto não fornecido.' });
+
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+
+        const promptIA = `
+        Aja como um dicionário e guia de pronúncia de inglês para falantes de português (Portugal e Brasil).
+        Analise o seguinte texto selecionado pelo aluno na Arena (pode ser uma palavra ou uma frase inteira): "${texto}"
+        
+        Sua missão:
+        1. "traducao": Forneça a melhor tradução direta para o português, considerando o contexto.
+        2. "pronuncia": Escreva como o aluno deve LER essa palavra/frase em português para soar como um nativo de inglês (exemplo: para "apple", escreva "é-pôl").
+
+        Retorne APENAS um objeto JSON estrito com esta estrutura, sem aspas adicionais ou formatação extra:
+        {
+            "traducao": "Sua tradução aqui",
+            "pronuncia": "A pronúncia figurada aqui"
+        }
+        `;
+
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'user', content: promptIA }],
+            model: 'openai/gpt-oss-120b',
+            temperature: 0.1, // Temperatura baixa porque queremos fatos exatos, não criatividade
+            response_format: { type: 'json_object' }
+        });
+
+        const resposta = JSON.parse(completion.choices[0].message.content.trim());
+        res.status(200).json({ success: true, ...resposta });
+
+    } catch (error) {
+        console.error("Erro no Tradutor da Arena:", error);
+        res.status(500).json({ error: 'Falha ao comunicar com a IA de tradução.' });
+    }
+});
+
 module.exports = router;
