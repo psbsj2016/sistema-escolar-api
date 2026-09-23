@@ -362,35 +362,35 @@ async function intervirComoMestre(sala, escolaId) {
         const db = await connectDB();
         let dialogo = '';
         
-        // Pega nas últimas mensagens para o Mestre entender o contexto
-        sala.historico.slice(-8).forEach(fala => { 
+        // Aumentámos um pouco o histórico lido para o Mestre ter ainda mais contexto
+        sala.historico.slice(-10).forEach(fala => { 
             dialogo += `[${fala.autorNome}]: ${fala.texto}\n`; 
         });
 
+        // 🚀 PROMPT AFINADO: Foco 100% no contexto da conversa atual!
         const promptIA = `
-        Aja como o "Mestre da Guilda" (um sábio, divertido e às vezes intrometido NPC) interagindo DIRETAMENTE num Roleplay em inglês com dois alunos.
-        Cenário atual deles: "${sala.cenario || 'Conversa livre'}".
+        Aja como o "Mestre da Guilda" (um NPC sábio que observa a cena) interagindo DIRETAMENTE no Roleplay de inglês entre os alunos.
+        Cenário atual: "${sala.cenario || 'Conversa livre'}".
         
-        Diálogo até agora:
+        Diálogo recente:
         ${dialogo}
         
-        Sua missão: Entre na história como um personagem da cena ou comente a situação interagindo com eles em INGLÊS.
+        Sua missão: Leia o diálogo acima e faça um comentário ou adicione uma ação PERFEITAMENTE alinhada com o que eles estão a debater neste exato momento. Não mude de assunto nem crie eventos aleatórios descontextualizados. Acompanhe a "vibe" e o ritmo da conversa.
         Regras:
-        1. Escreva APENAS a sua fala (sem o seu nome, sem aspas, sem introdução).
-        2. Seja criativo! Pode ser o gerente do restaurante, um cliente chateado na mesa ao lado, um polícia, ou apenas um narrador astuto.
-        3. Faça uma pergunta ou crie um pequeno obstáculo para eles resolverem.
-        4. Máximo de 2 frases curtas.
+        1. O seu idioma DEVE ser INGLÊS.
+        2. Escreva APENAS a sua fala (sem o seu nome, sem aspas e sem JSON).
+        3. Seja um personagem imersivo na cena (ex: o gerente, um passante, uma voz no intercomunicador, ou uma voz narrativa) que reage estritamente à ÚLTIMA coisa que aconteceu.
+        4. Seja breve (máximo 2 frases curtas).
         `;
 
         const completion = await groq.chat.completions.create({
             messages: [{ role: 'user', content: promptIA }],
             model: 'openai/gpt-oss-120b',
-            temperature: 0.7
+            temperature: 0.6 // Temperatura afinada para ser criativo, mas não perder o rumo
         });
 
         const falaDoMestre = completion.choices[0].message.content.trim();
 
-        // 🚀 O SEGREDO: Salva a fala na base de dados para o Avaliador final poder ler!
         const novaFalaIA = { 
             id: crypto.randomUUID(), 
             autorId: 'mestre_guilda', 
@@ -401,7 +401,6 @@ async function intervirComoMestre(sala, escolaId) {
 
         await db.collection('workspace_arenas').updateOne({ id: sala.id }, { $push: { historico: novaFalaIA } });
 
-        // Dispara como uma NOVA FALA normal para aparecer nos balões de chat de ambos!
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ARENA_NOVA_FALA', 
@@ -413,7 +412,7 @@ async function intervirComoMestre(sala, escolaId) {
     } catch (error) { console.error("Erro na Intervenção do Mestre:", error); }
 }
 
-// 3. Rota para Receber a Voz e Disparar a IA (Sem Plot Twist)
+// 3. Rota para Receber a Voz e Disparar a IA (Com o novo Ritmo)
 router.post('/:salaId/falar', verificarToken, async (req, res) => {
     try {
         const { texto, autorId, autorNome, escolaId, combo } = req.body;
@@ -429,13 +428,14 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
             const hist = salaAtualizada.historico;
             const total = hist.length;
             
-            // 🚀 O Mestre entra na conversa a cada 6 mensagens enviadas no modo Humano vs Humano!
-            if (total > 0 && total % 6 === 0 && salaAtualizada.tipo !== 'solo') {
+            // 🚀 MATEMÁTICA ATUALIZADA: O Mestre entra na conversa a cada 10 mensagens trocadas!
+            // Isto garante que intervém de forma mais espaçada, sem interromper o fluxo constante.
+            if (total > 0 && total % 10 === 0 && salaAtualizada.tipo !== 'solo') {
                 intervirComoMestre(salaAtualizada, escolaId);
             }
         }
         
-        // GATILHO DO MODO SOLO: Se o aluno falou, a IA tem de lhe responder!
+        // GATILHO DO MODO SOLO
         if (salaAtualizada && salaAtualizada.tipo === 'solo' && autorId !== 'ia_groq') {
             responderComoIA(salaAtualizada, escolaId);
         }
