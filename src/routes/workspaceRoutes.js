@@ -1812,17 +1812,26 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             }
         }
 
-        const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(40).toArray();
-        const materiaisBrutos = await database.collection('workspace_materiais').find(filtro).sort({ dataCriacao: -1 }).limit(30).toArray();
+       // 🚀 OTIMIZAÇÃO DE TOKENS: Reduzido de 40/30 para 12/8 para não estourar a memória da Groq
+        const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(12).toArray();
+        const materiaisBrutos = await database.collection('workspace_materiais').find(filtro).sort({ dataCriacao: -1 }).limit(8).toArray();
         
         const conteudoPosts = postsBrutos.map(p => {
             let infoAnexos = (p.anexos || []).map(a => a.nome + ' (' + a.tipo + ')').join(', ');
-            return `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''} ${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
+            
+            // 🚀 CORTADOR DE TEXTO: Se o post for gigantesco, enviamos apenas os primeiros 400 caracteres
+            let textoSeguro = p.texto ? p.texto.substring(0, 400) + (p.texto.length > 400 ? '...' : '') : '';
+            
+            return `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${textoSeguro} ${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
         }).join('\n\n');
 
         const conteudoMateriais = materiaisBrutos.map(m => {
             const tagsInfo = m.tags ? ` | Palavras-Chave: ${m.tags}` : '';
-            return `[MATERIAL_ID: ${m.id} \vert{} Título: ${m.titulo || ''}${tagsInfo}]: Descrição: ${m.descricao || ''}`;
+            
+            // 🚀 CORTADOR DE TEXTO: Limita a descrição do material também
+            let descSegura = m.descricao ? m.descricao.substring(0, 200) + (m.descricao.length > 200 ? '...' : '') : '';
+            
+            return `[MATERIAL_ID: ${m.id} | Título: ${m.titulo || ''}${tagsInfo}]: Descrição: ${descSegura}`;
         }).join('\n\n');
 
         const conteudoParaIA = `--- PUBLICAÇÕES DO FEED ---\n${conteudoPosts}\n\n--- MATERIAIS DA ESCOLA ---\n${conteudoMateriais}`;
@@ -2001,7 +2010,12 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
         const postOriginal = await database.collection('workspace_posts').findOne({ id: postId });
         if (!postOriginal) return res.status(404).json({ error: 'A música desapareceu dos arquivos da escola.' });
 
-        const conteudoParaIA = `[POST_ID: ${postOriginal.id} | Autor: ${postOriginal.autorNome}]: ${postOriginal.texto || ''}`;
+       // 🚀 OTIMIZAÇÃO DE TOKENS: Enviamos apenas as 8 músicas mais recentes (em vez de 15),
+        // e cortamos letras que ultrapassem os 1200 caracteres.
+        const conteudoParaIA = postsMusicais.slice(0, 8).map(p => {
+            let letraSegura = p.texto ? p.texto.substring(0, 1200) + (p.texto.length > 1200 ? '\n[...Música Cortada por Segurança...]' : '') : '';
+            return `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${letraSegura}`;
+        }).join('\n\n');
 
         const Groq = require('groq-sdk');
         const chaveApi = process.env.GROQ_API_KEY;
@@ -2037,7 +2051,7 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
             messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: conteudoParaIA }],
             model: 'openai/gpt-oss-120b', 
             temperature: 0.3,
-            max_tokens: 4500, 
+            max_tokens: 3000, // 🚀 Reduzido para libertar espaço para o pedido
             response_format: { type: 'json_object' } 
         });
 
