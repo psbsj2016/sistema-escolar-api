@@ -1519,10 +1519,22 @@ router.post('/ingles/debate', verificarToken, async (req, res) => {
 
 router.post('/ingles/ia-teste/falar', verificarToken, async (req, res) => {
     try {
-        if (!req.body.mensagem) return res.status(400).json({ error: 'Mensagem vazia.' });
-        const pensamento = PttAIEngine.pensar(req.body.mensagem);
-        res.json({ success: true, resposta: pensamento.resposta, bastidores: `A Ptt AI classificou esta frase como: [${pensamento.intencaoDetetada}]` });
-    } catch (error) { res.status(500).json({ success: false, error: 'O cérebro falhou.' }); }
+        // 🚀 Recebe a mensagem e agora também o Histórico do Chat!
+        const { mensagem, historico = [] } = req.body;
+        if (!mensagem) return res.status(400).json({ error: 'Mensagem vazia.' });
+        
+        // 🚀 O 'await' é obrigatório agora que o Cérebro é Híbrido!
+        const pensamento = await PttAIEngine.pensar(mensagem, historico);
+        
+        res.json({ 
+            success: true, 
+            resposta: pensamento.resposta, 
+            bastidores: `A Ptt AI classificou esta frase como: [${pensamento.intencaoDetetada}]` 
+        });
+    } catch (error) { 
+        console.error(error);
+        res.status(500).json({ success: false, error: 'O cérebro falhou.' }); 
+    }
 });
 
 router.post('/ingles/ia-teste/ensinar', verificarToken, async (req, res) => {

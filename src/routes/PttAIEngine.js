@@ -1,24 +1,25 @@
 // ============================================================================
-// 🧠 PTT AI ENGINE - O CÉREBRO DINÂMICO E ESCALÁVEL DA PTT CURSOS
+// 🧠 PTT AI ENGINE 2.0 - O CÉREBRO HÍBRIDO (LOCAL + GROQ)
 // ============================================================================
 const natural = require('natural');
 const fs = require('fs');
 const path = require('path');
+const Groq = require('groq-sdk'); // 🚀 NOVO: Adicionado SDK do Groq
 
 const BRAIN_PATH = path.join(__dirname, 'ptt_brain.json');
 const RESPONSES_PATH = path.join(__dirname, 'ptt_responses.json');
-const CORRECTIONS_PATH = path.join(__dirname, 'ptt_corrections.json'); // 🚀 NOVO: O Cofre de Correções
+const CORRECTIONS_PATH = path.join(__dirname, 'ptt_corrections.json');
 
 class PttAIEngine {
     constructor() {
         this.classifier = new natural.BayesClassifier();
         this.isTrained = false;
         this.respostas = {}; 
-        this.correcoes = {}; // 🚀 O Olheiro Ortográfico
+        this.correcoes = {}; 
     }
 
     async init() {
-        // 1. Carrega as Respostas
+        // 1. Carrega as Respostas Locais (Camada de Emergência)
         if (fs.existsSync(RESPONSES_PATH)) {
             try { this.respostas = JSON.parse(fs.readFileSync(RESPONSES_PATH, 'utf8')); } 
             catch(e) { this.respostas = {}; }
@@ -32,12 +33,11 @@ class PttAIEngine {
             fs.writeFileSync(RESPONSES_PATH, JSON.stringify(this.respostas, null, 2));
         }
 
-        // 2. 🚀 Carrega o Olheiro Ortográfico
+        // 2. Carrega o Olheiro Ortográfico (Camada de Ferro)
         if (fs.existsSync(CORRECTIONS_PATH)) {
             try { this.correcoes = JSON.parse(fs.readFileSync(CORRECTIONS_PATH, 'utf8')); } 
             catch(e) { this.correcoes = {}; }
         } else {
-            // Alguns erros clássicos para a máquina já nascer inteligente
             this.correcoes = {
                 "teatcher": "teacher",
                 "confortable": "comfortable",
@@ -56,7 +56,7 @@ class PttAIEngine {
                     if (!err && classifier) {
                         this.classifier = classifier;
                         this.isTrained = true;
-                        console.log("🧠 Ptt AI: Cérebro, Respostas e Correções carregados!");
+                        console.log("🧠 Ptt AI 2.0: Cérebro Híbrido inicializado!");
                     }
                     resolve();
                 });
@@ -102,13 +102,9 @@ class PttAIEngine {
         return `A Ptt AI aprendeu que "${frase}" significa "${categoria}".`;
     }
 
-    // 🚀 NOVO: O Professor dita uma nova regra gramatical
     async ensinarCorrecao(erro, certo) {
-        // Limpa o erro para o formato padrão, sem símbolos
         const erroLimpo = erro.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
         this.correcoes[erroLimpo] = certo;
-        
-        // Grava no cofre de correções
         fs.writeFileSync(CORRECTIONS_PATH, JSON.stringify(this.correcoes, null, 2));
         return `A Ptt AI agora vai bloquear "${erro}" e exigir "${certo}".`;
     }
@@ -125,44 +121,84 @@ class PttAIEngine {
         return limpa.length > 2 ? limpa : "this topic";
     }
 
-    pensar(fraseDoAluno) {
+    // ====================================================================
+    // 🚀 O NOVO PENSAMENTO HÍBRIDO (AGORA É ASSÍNCRONO)
+    // ====================================================================
+    async pensar(fraseDoAluno, historico = []) {
         if (!this.isTrained) return { intencaoDetetada: 'unknown', resposta: "I am still learning..." };
 
         const textoNormalizado = fraseDoAluno.toLowerCase();
-        
-        // ====================================================================
-        // 🚀 O INTERCETOR: Olheiro Ortográfico entra em ação!
-        // ====================================================================
-        // A máquina limpa pontos de interrogação para analisar só as palavras
         const textoSemPontuacao = textoNormalizado.replace(/[^a-z0-9 ]/g, '');
-        
+
+        // 🛡️ CAMADA 1: O OLHEIRO ORTOGRÁFICO (REGRAS LOCAIS)
         for (const [erro, certo] of Object.entries(this.correcoes)) {
-            // Procura o erro exato no meio da frase do aluno
             const regexErro = new RegExp(`\\b${erro}\\b`, 'i');
             
             if (regexErro.test(textoSemPontuacao)) {
-                // Se encontrar o erro, ELA PARA TUDO! E exige que o aluno escreva de novo.
                 return {
                     intencaoDetetada: 'correcao_pedagogica',
-                    bastidoresAviso: `Erro detetado: [${erro}] -> [${certo}]`,
+                    bastidoresAviso: `Erro grave detetado e travado: [${erro}]`,
                     resposta: `Wait a second, wizard! 🧙‍♂️ I noticed a small mistake. You wrote "**${erro}**", but the correct form is "**${certo}**". Please, rewrite your sentence correctly so we can continue!`
                 };
             }
         }
-        // ====================================================================
 
-        // Se a ortografia estiver perfeita, a máquina prossegue normalmente
-        const intencao = this.classifier.classify(textoNormalizado);
-        const temaExtraido = this.extrairTema(fraseDoAluno);
+        // 🧠 CAMADA 2: O CÉREBRO GERATIVO (GROQ + MEMÓRIA)
+        try {
+            const chaveApi = process.env.GROQ_API_KEY;
+            if (!chaveApi) throw new Error("Chave Groq Ausente");
 
-        let respostaGerada = "That's an interesting point about " + temaExtraido + ". Tell me more!";
-        if (this.respostas[intencao] && this.respostas[intencao].length > 0) {
-            const arrayDeRespostas = this.respostas[intencao];
-            respostaGerada = arrayDeRespostas[Math.floor(Math.random() * arrayDeRespostas.length)];
+            const groq = new Groq({ apiKey: chaveApi.trim() });
+
+            // A Personalidade da sua IA ganha vida aqui!
+            const systemPrompt = `
+            Você é a 'PTT AI', uma professora de inglês hiper-inteligente, paciente e motivadora da Ptt Cursos.
+            
+            Regras de Ouro:
+            1. Responda de forma natural, coloquial e imersiva em INGLÊS.
+            2. Se o aluno cometer erros gramaticais leves, corrija-o gentilmente antes de continuar o assunto.
+            3. Se o aluno pedir uma explicação complexa sobre gramática, PODE USAR O PORTUGUÊS para explicar, mas dê os exemplos em Inglês.
+            4. Seja direta e concisa (máximo 4 frases).
+            5. Termine SEMPRE a sua mensagem com uma pergunta relacionada para manter a conversa ativa.
+            `;
+
+            // Junta a personalidade, o que eles conversaram antes, e a nova pergunta!
+            const mensagensFormatadas = [
+                { role: 'system', content: systemPrompt },
+                ...historico,
+                { role: 'user', content: fraseDoAluno }
+            ];
+
+            const completion = await groq.chat.completions.create({
+                messages: mensagensFormatadas,
+                model: 'openai/gpt-oss-120b',
+                temperature: 0.7 
+            });
+
+            return { 
+                intencaoDetetada: 'conversacao_fluida_groq', 
+                resposta: completion.choices[0].message.content.trim() 
+            };
+
+        } catch (error) {
+            console.error("🚨 Groq falhou ou limitou. Acionando Cérebro Local de Emergência...");
+
+            // ⚙️ CAMADA 3: CÉREBRO DE EMERGÊNCIA (Baseado no seu código antigo)
+            const intencao = this.classifier.classify(textoNormalizado);
+            const temaExtraido = this.extrairTema(fraseDoAluno);
+
+            let respostaGerada = "That's an interesting point about " + temaExtraido + ". Tell me more!";
+            if (this.respostas[intencao] && this.respostas[intencao].length > 0) {
+                const arrayDeRespostas = this.respostas[intencao];
+                respostaGerada = arrayDeRespostas[Math.floor(Math.random() * arrayDeRespostas.length)];
+            }
+            respostaGerada = respostaGerada.replace(/\[TEMA\]/g, temaExtraido);
+
+            return { 
+                intencaoDetetada: `emergencia_${intencao}`, 
+                resposta: respostaGerada 
+            };
         }
-        respostaGerada = respostaGerada.replace(/\[TEMA\]/g, temaExtraido);
-
-        return { intencaoDetetada: intencao, resposta: respostaGerada };
     }
 }
 
