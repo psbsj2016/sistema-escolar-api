@@ -22,105 +22,103 @@ const CENARIOS_ARENA = [
 const sortearCenario = () => CENARIOS_ARENA[Math.floor(Math.random() * CENARIOS_ARENA.length)];
 
 // ============================================================================
-// ⚔️ VIA RÁPIDA DA ARENA (MATCHMAKING DO FEED - 10 MINUTOS)
+// ⚔️ ARENA: SISTEMA DE DESAFIO ALEATÓRIO RÁPIDO (SINALIZADOR)
 // ============================================================================
+// Memória RAM ultrarrápida do servidor para gerir quem clica primeiro
+global.desafiosAtivos = global.desafiosAtivos || {};
 
-router.post('/desafio-direto', verificarToken, async (req, res) => {
+// 🚀 CORREÇÃO 1: Rota ajustada para não ter '/arena' duplicado
+router.post('/desafio-aleatorio', verificarToken, async (req, res) => {
     try {
-        const { desafiadoNome, desafianteNome, escolaId, minutos, postId } = req.body;
-        const desafianteId = req.usuario?.id || req.body.alunoId; 
-        const db = await connectDB();
+        const { desafianteNome, escolaId, minutos } = req.body;
+        const desafioId = 'rnd_' + Date.now();
+        
+        global.desafiosAtivos[desafioId] = { 
+            status: 'pendente', 
+            desafiante: desafianteNome,
+            minutos: parseInt(minutos) || 10 // Guarda o tempo escolhido
+        };
 
-        // 🛡️ ESCUDO INTELIGENTE: Ignora batalhas fantasmas cujo tempo já expirou!
-        const arenasAtivas = await db.collection('workspace_arenas').find({
-            status: 'em_curso',
-            $or: [
-                { 'jogador1.nome': desafiadoNome },
-                { 'jogador2.nome': desafiadoNome },
-                { 'jogador1.nome': desafianteNome },
-                { 'jogador2.nome': desafianteNome }
-            ]
-        }).toArray();
-
-        const agora = new Date().getTime();
-        const jogadorOcupado = arenasAtivas.some(arena => {
-            if (!arena.iniciadoEm) return false;
-            const inicio = new Date(arena.iniciadoEm).getTime();
-            const limiteMs = (arena.limiteMinutos || 10) * 60000;
-            return (agora - inicio) < (limiteMs + 60000); // 1 min de tolerância após o tempo oficial
-        });
-
-        if (jogadorOcupado) {
-            return res.status(400).json({ error: 'Um dos guerreiros já está a travar uma batalha ao vivo. Aguarde!' });
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'DESAFIO_ALEATORIO_BROADCAST',
+                desafioId: desafioId,
+                desafianteNome: desafianteNome,
+                escolaId: escolaId || 'DEFAULT',
+                minutos: minutos || 10
+            });
         }
 
-        const salaId = 'duelo-feed-' + Date.now();
+        res.json({ success: true, desafioId });
+    } catch (e) {
+        res.status(500).json({ error: 'Erro ao lançar o sinalizador.' });
+    }
+});
+
+// 🚀 CORREÇÃO 2: Cria a Sala e emite o Raio Trator (ARENA_MATCH_ENCONTRADO)
+router.post('/desafio-aleatorio/aceitar', verificarToken, async (req, res) => {
+    try {
+        const { desafioId, desafiadoNome, escolaId } = req.body;
+        const db = await connectDB();
+        
+        const desafio = global.desafiosAtivos[desafioId];
+        if (!desafio) return res.status(404).json({ error: 'Este desafio já expirou ou não existe.' });
+        
+        if (desafio.status === 'aceito') {
+            return res.status(400).json({ error: 'Alguém foi mais rápido e já aceitou este desafio! 🏃💨' });
+        }
+
+        desafio.status = 'aceito';
+        desafio.desafiado = desafiadoNome;
+
+        // 🚀 CRIA A SALA OFICIAL NA BASE DE DADOS
+        const userDesafiado = await db.collection('usuarios').findOne({ $or: [{nome: desafiadoNome}, {login: desafiadoNome}] });
+        const userDesafiante = await db.collection('usuarios').findOne({ $or: [{nome: desafio.desafiante}, {login: desafio.desafiante}] });
+
+        const salaId = 'rnd-match-' + Date.now();
+        const cenarioSorteado = sortearCenario();
 
         const novaSala = {
             id: salaId,
             escolaId: escolaId || 'DEFAULT',
-            tipo: 'desafio_feed',
-            status: 'aguardando',
-            jogador1: { id: desafianteId, nome: desafianteNome }, 
-            jogador2: { id: null, nome: desafiadoNome },  
-            limiteMinutos: parseInt(minutos) || 10,
-            criadoEm: new Date().toISOString(),
+            tipo: 'desafio_aleatorio',
+            status: 'em_curso',
+            jogador1: { id: userDesafiante?.id || null, nome: desafio.desafiante },
+            jogador2: { id: userDesafiado?.id || null, nome: desafiadoNome },
+            limiteMinutos: desafio.minutos,
+            iniciadoEm: new Date().toISOString(),
+            cenario: "⚡ COMBATE ALEATÓRIO RÁPIDO ⚡\n" + cenarioSorteado,
             historico: []
         };
 
         await db.collection('workspace_arenas').insertOne(novaSala);
 
         if (global.workspaceStream) {
+            // 1. Fecha o popup para os restantes alunos da escola
             global.workspaceStream.emit('evento_realtime', {
-                type: 'ARENA_DESAFIO_DIRETO',
-                destinatarios: [desafiadoNome],
-                desafianteNome: desafianteNome,
-                salaId: salaId,
-                minutos: minutos,
-                postId: postId, 
+                type: 'DESAFIO_ALEATORIO_FECHADO',
+                desafioId: desafioId,
+                desafianteNome: desafio.desafiante,
+                desafiadoNome: desafiadoNome,
                 escolaId: escolaId || 'DEFAULT'
             });
-        }
-        res.status(200).json({ success: true, salaId });
-    } catch (error) { res.status(500).json({ error: 'Erro ao enviar desafio direto.' }); }
-});
 
-router.post('/desafio-direto/aceitar', verificarToken, async (req, res) => {
-    try {
-        const { salaId, desafiadoNome, desafianteNome, escolaId, minutos } = req.body;
-        const db = await connectDB();
-
-        const userDesafiado = await db.collection('usuarios').findOne({ $or: [{nome: desafiadoNome}, {login: desafiadoNome}] });
-        const userDesafiante = await db.collection('usuarios').findOne({ $or: [{nome: desafianteNome}, {login: desafianteNome}] });
-
-        const cenarioSorteado = sortearCenario();
-
-        await db.collection('workspace_arenas').updateOne(
-            { id: salaId },
-            { $set: { 
-                status: 'em_curso', 
-                jogador1: { id: userDesafiante?.id || null, nome: desafianteNome },
-                jogador2: { id: userDesafiado?.id || null, nome: desafiadoNome },
-                iniciadoEm: new Date().toISOString(),
-                cenario: "🔥 DUELO RÁPIDO DO FEED 🔥\n" + cenarioSorteado
-            }}
-        );
-
-        // 🚪 PORTA IMORTAL: O Post de desafio no Feed NÃO é apagado.
-
-        if (global.workspaceStream) {
+            // 🚀 2. O RAIO TRATOR: Puxa AMBOS para a Arena instantaneamente!
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ARENA_MATCH_ENCONTRADO',
-                destinatarios: [desafiadoNome, desafianteNome],
-                destinatariosIds: [userDesafiante?.id, userDesafiado?.id], // A BLINDAGEM INFALÍVEL
+                destinatarios: [desafio.desafiante, desafiadoNome],
+                destinatariosIds: [userDesafiante?.id, userDesafiado?.id], 
                 salaId: salaId,
-                limiteMinutos: minutos,
-                cenario: "🔥 DUELO RÁPIDO DO FEED 🔥\n" + cenarioSorteado,
+                limiteMinutos: novaSala.limiteMinutos,
+                cenario: novaSala.cenario,
                 escolaId: escolaId || 'DEFAULT'
             });
         }
-        res.status(200).json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro ao aceitar desafio.' }); }
+
+        res.json({ success: true, desafianteNome: desafio.desafiante, salaId: salaId });
+    } catch (e) {
+        res.status(500).json({ error: 'Erro ao processar aceitação.' });
+    }
 });
 
 router.post('/desafio-direto/recusar', verificarToken, async (req, res) => {
@@ -737,5 +735,7 @@ router.post('/traduzir', verificarToken, async (req, res) => {
         res.status(500).json({ error: 'Falha ao comunicar com a IA de tradução.' });
     }
 });
+
+
 
 module.exports = router;
