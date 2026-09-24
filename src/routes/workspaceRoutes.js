@@ -66,6 +66,8 @@ const upload = multer({
 const verificarToken = async (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Acesso negado. Faça login.' });
+    
+    // A presença online passa a ser controlada EXCLUSIVAMENTE pelo Heartbeat (/ping) e só quando a aba está aberta.
     next();
 };
 
@@ -98,6 +100,7 @@ router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
             return res.status(400).json({ error: 'Faltam dados do ficheiro para gerar a autorização.' });
         }
 
+        // 🚀 BLINDAGEM DE NUVEM: Remove espaços e acentos que quebram o link na Cloudflare R2!
         const nomeSeguro = String(nomeFicheiro).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
         const nomeFinal = `doc_${Date.now()}_${nomeSeguro}`;
 
@@ -283,13 +286,16 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
             escolaId: escolaId || 'DEFAULT'
         });
 
-        // Geração de Notificações Offline
+        // ====================================================================
+        // 🚀 VARREDURA COMPLETA: Geração de Notificações Offline
+        // ====================================================================
         try {
             const nomeTurmaOficial = turmaNome || 'Fórum da Turma';
             const idTurmaLower = String(turmaId).toLowerCase().trim();
             const nomeTurmaLower = String(nomeTurmaOficial).toLowerCase().trim();
             const isGlobal = idTurmaLower === 'global' || idTurmaLower === 'geral';
 
+            // Puxa Utilizadores e Alunos para cruzar os dados
             const usuarios = await database.collection('usuarios').find({}).toArray();
             const alunos = await database.collection('alunos').find({}).toArray();
             
@@ -305,12 +311,14 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
                 } else if (user.tipo === 'Aluno') {
                     let turmasDoAluno = [];
                     
+                    // 1. Busca turmas diretamente no documento do Utilizador
                     if (user.turma) turmasDoAluno.push(user.turma);
                     if (user.turmas) {
                         if (Array.isArray(user.turmas)) turmasDoAluno.push(...user.turmas);
                         else turmasDoAluno.push(user.turmas);
                     }
                     
+                    // 2. Busca turmas no documento oficial do Aluno (alunoRefId)
                     if (user.alunoRefId) {
                         const perfilAluno = alunos.find(a => String(a.id) === String(user.alunoRefId));
                         if (perfilAluno) {
@@ -323,6 +331,7 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
                         }
                     }
 
+                    // Verifica se o aluno pertence à turma do bate-papo
                     const pertence = isGlobal || turmasDoAluno.some(t => {
                         if (!t) return false;
                         const tLower = String(t).toLowerCase().trim();
@@ -357,6 +366,7 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
         } catch (erroNotificacao) {
             console.error("Falha ao gerar notificação de chat:", erroNotificacao);
         }
+        // ====================================================================
 
         res.status(201).json({ success: true, mensagem: novaMensagem });
     } catch (error) { 
@@ -384,7 +394,7 @@ router.post('/posts', verificarToken, async (req, res) => {
         const novoPost = {
             id: crypto.randomUUID(), escolaId: escolaId || 'DEFAULT', autorNome: autorNome || 'Desconhecido',
             autorTipo: autorTipo || 'Professor', destino: destino || 'global', destinoNome: destinoNome || 'Público Geral',
-            categoria: categoria || 'normal', 
+            categoria: categoria || 'normal', // 🚀 NOVO: Guarda a categoria do post (Música ou Normal)
             texto: texto, anexos: anexos || [], dataCriacao: new Date().toISOString(), comentarios: [], likes: [], dislikes: []
         };
 
@@ -552,6 +562,7 @@ router.delete('/posts/:id', verificarToken, async (req, res) => {
 router.put('/posts/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
+        // 🚀 NOVO: Grava o texto E a categoria na base de dados
         await database.collection('workspace_posts').updateOne(
             { id: req.params.id }, 
             { $set: { 
@@ -676,12 +687,14 @@ router.get('/perfil/info/:identificador', verificarToken, async (req, res) => {
         const database = await connectDB();
         const idBusca = req.params.identificador;
         
+        // 🚀 O DETETIVE ABSOLUTO: Procura pelo ID ou Nome em ambas as coleções
         const user = await database.collection('usuarios').findOne({ $or: [{ id: idBusca }, { nome: idBusca }, { login: idBusca }] });
         const aluno = await database.collection('alunos').findOne({ $or: [{ id: idBusca }, { nome: idBusca }, { login: idBusca }] });
         
         let perfilFinal = user || aluno;
         
         if (perfilFinal) {
+            // Se as estatísticas de batalha acabaram na coleção 'alunos', nós puxamo-las à força!
             let stats = perfilFinal.arenaStats;
             if (!stats && user && user.arenaStats) stats = user.arenaStats;
             if (!stats && aluno && aluno.arenaStats) stats = aluno.arenaStats;
@@ -691,7 +704,7 @@ router.get('/perfil/info/:identificador', verificarToken, async (req, res) => {
                 bio: perfilFinal.bio || "A evoluir e a participar ativamente na nossa comunidade de aprendizagem.",
                 tipo: perfilFinal.tipo || "Aluno",
                 avatar: perfilFinal.avatar || null,
-                arenaStats: stats || null 
+                arenaStats: stats || null // 🚀 AGORA NUNCA MAIS SE PERDE!
             });
         } else {
             res.status(404).json({ error: 'Usuário não encontrado.' });
@@ -705,7 +718,7 @@ router.put('/perfil/bio', verificarToken, async (req, res) => {
     try {
         const { id, bio } = req.body;
         const database = await connectDB();
-        const bioSegura = String(bio).substring(0, 150); 
+        const bioSegura = String(bio).substring(0, 150); // Limita a 150 caracteres para manter o design limpo
         
         await database.collection('usuarios').updateOne({ id: id }, { $set: { bio: bioSegura } });
         res.status(200).json({ success: true, bio: bioSegura });
@@ -727,14 +740,18 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
 
         const database = await connectDB();
         
+        // 1. Puxa o usuário atual para descobrirmos o nome antigo 
+        // (O Front-end precisa disto para não perder a bolinha verde e a foto no cache)
         const userAntigo = await database.collection('usuarios').findOne({ id: id });
         const nomeAntigo = userAntigo ? (userAntigo.nome || userAntigo.login) : null;
 
+        // 2. Atualiza o nome na coleção principal de Acessos (Usuários)
         await database.collection('usuarios').updateOne(
             { id: id },
             { $set: { nome: novoNome } }
         );
 
+        // 3. Atualiza o nome na coleção da Secretaria (Alunos), se o aluno existir lá
         if (alunoRefId) {
             await database.collection('alunos').updateOne(
                 { id: alunoRefId },
@@ -742,6 +759,7 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
             );
         }
 
+        // Devolve o sucesso e o nome antigo para o Front-end fazer a magia invisível na Arena!
         res.status(200).json({ success: true, nomeAntigo: nomeAntigo });
     } catch (error) { 
         console.error("Erro ao atualizar o nome:", error);
@@ -890,19 +908,26 @@ router.get('/avatars', verificarToken, async (req, res) => {
         const database = await connectDB();
         const mapaAvatars = {};
         
+        // 1. Vai buscar TODOS os alunos e TODOS os utilizadores (logins)
         const alunos = await database.collection('alunos').find({}).toArray();
         const usuarios = await database.collection('usuarios').find({}).toArray();
         
+        // 2. Filtra quem é realmente um "Aluno Ativo" (ignora Cancelados/Trancados)
         const alunosAtivos = alunos.filter(a => !a.status || a.status === 'Ativo');
 
+        // 3. O CRUZAMENTO DE DADOS (A Inteligência Matemática)
         alunosAtivos.forEach(aluno => {
+            // Verifica se este aluno ativo tem uma conta de acesso criada
             const temLogin = usuarios.find(u => String(u.alunoRefId) === String(aluno.id) || String(u.nome) === String(aluno.nome));
             
             if (temLogin && aluno.nome) {
+                // Se está ativo E tem login, entra para o radar da Arena!
+                // Dá prioridade à foto do login, se não houver, tenta a do cadastro.
                 mapaAvatars[aluno.nome] = temLogin.avatar || aluno.avatar || null;
             }
         });
 
+        // 4. Adiciona os Professores e Gestores ao radar (eles não estão na coleção de alunos)
         usuarios.forEach(u => {
             if (u.tipo === 'Professor' || u.tipo === 'Gestor') {
                 const nome = u.nome || u.login;
@@ -1255,7 +1280,7 @@ router.put('/materiais/:id', verificarToken, async (req, res) => {
             { $set: {
                 titulo: materialAtualizado.titulo, 
                 descricao: materialAtualizado.descricao, 
-                tags: materialAtualizado.tags,
+                tags: materialAtualizado.tags, // 🚀 NOVO: Guarda as palavras-chave na BD
                 destino: materialAtualizado.destino,
                 destinoNome: materialAtualizado.destinoNome, 
                 url: materialAtualizado.url, 
@@ -1401,16 +1426,19 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
         const db = await connectDB();
         const escolaId = req.query.escolaId || 'DEFAULT';
         
+        // 1. Busca os dados matemáticos do ranking
         const ranking = await db.collection('workspace_ingles_stats')
             .find({ escolaId: escolaId, "coins.bronze": { $gt: 0 } })
             .sort({ "coins.bronze": -1 })
             .limit(50)
             .toArray();
         
-        const alunos = await db.collection('alunos').find({ avatar: { $exists: true,$ne: null } }).toArray();
-        const usuarios = await db.collection('usuarios').find({ avatar: { $exists: true,$ne: null } }).toArray();
+        // 2. Busca as fotos de perfil ignorando filtros rígidos para evitar perdas
+        const alunos = await db.collection('alunos').find({ avatar: { $exists: true, $ne: null } }).toArray();
+        const usuarios = await db.collection('usuarios').find({ avatar: { $exists: true, $ne: null } }).toArray();
         
         const mapaAvatars = {};
+        // 🚀 Mapeia tanto pelo ID oficial quanto pelo nome para garantir precisão absoluta
         alunos.forEach(a => { 
             if(a.id) mapaAvatars[a.id] = a.avatar; 
             if(a.nome) mapaAvatars[a.nome] = a.avatar; 
@@ -1421,10 +1449,11 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
             if(u.login) mapaAvatars[u.login] = u.avatar; 
         });
 
+        // 3. Junta as fotos ao ranking e calcula as Ligas
         const comLiga = ranking.map((r, i) => ({ 
             userId: r.userId, 
             nome: r.nome, 
-            avatar: mapaAvatars[r.userId] || mapaAvatars[r.nome] || null, 
+            avatar: mapaAvatars[r.userId] || mapaAvatars[r.nome] || null, // 🚀 A foto real entra aqui
             coins: r.coins || {bronze: 0, prata: 0, ouro: 0}, 
             streak: r.streak || 1, 
             posicao: i + 1, 
@@ -1512,6 +1541,7 @@ router.post('/ingles/ia-teste/ensinar-correcao', verificarToken, async (req, res
     } catch (error) { res.status(500).json({ success: false, error: 'Erro ao treinar o olheiro ortográfico.' }); }
 });
 
+// 🚀 ROTA DA IA GERATIVA PREMIUM (GROQ) E AVALIAÇÃO DE JOGOS
 router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
     try {
         const { mensagem, historico = [] } = req.body;
@@ -1534,7 +1564,7 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
 
         const respostaGroq = await groq.chat.completions.create({
             messages: [{ role: 'system', content: INSTRUCOES_PROFESSOR }, ...historico, { role: 'user', content: mensagem }],
-            model: 'openai/gpt-oss-120b', 
+            model: 'openai/gpt-oss-120b', // 🚀 MODELO ORIGINAL RESTAURADO!
             temperature: 0.7,
         });
 
@@ -1639,7 +1669,7 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
             ],
-            model: 'openai/gpt-oss-120b', 
+            model: 'openai/gpt-oss-120b', // 🚀 MODELO ORIGINAL RESTAURADO!
             temperature: 0.3,
             response_format: { type: 'json_object' } 
         });
@@ -1650,6 +1680,429 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
 
         res.json({ success: true, ...resultado });
     } catch (e) { res.status(500).json({ success: false, error: 'Falha na IA do jogo' }); }
+});
+
+// ============================================================================
+// 🚀 LOUSA DIGITAL - ROTAS FINAIS v3
+// ============================================================================
+router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
+    try {
+        const { turmaId, ativa, recursos, escolaId } = req.body;
+        if (!turmaId) return res.status(400).json({ success: false, error: 'turmaId é obrigatório' });
+        
+        const database = await connectDB();
+        const idLimpo = String(turmaId).trim();
+        const escolaFinal = escolaId || req.query.escolaId || req.body.escolaId || req.usuario?.escolaId || 'DEFAULT';
+        
+        let turmaDoc = null;
+        try { turmaDoc = await database.collection('turmas').findOne({ $or: [{ id: idLimpo }, { nome: idLimpo }] }); } catch(e){}
+        const nomeTurma = turmaDoc?.nome || null;
+
+        await database.collection('workspace_lousa_status').updateOne(
+            { id: idLimpo },
+            { $set: { id: idLimpo, nome: nomeTurma, ativa: !!ativa, recursos: !!recursos, lousaAtiva: !!ativa, lousaRecursos: !!recursos, atualizadoEm: new Date().toISOString(), escolaId: escolaFinal, professorId: req.usuario?.id || null } },
+            { upsert: true }
+        );
+
+        if(nomeTurma && nomeTurma !== idLimpo){
+            await database.collection('workspace_lousa_status').updateOne(
+                { id: nomeTurma },
+                { $set: { id: nomeTurma, idOriginal: idLimpo, nome: nomeTurma, ativa: !!ativa, recursos: !!recursos, lousaAtiva: !!ativa, lousaRecursos: !!recursos, atualizadoEm: new Date().toISOString(), escolaId: escolaFinal } },
+                { upsert: true }
+            );
+        }
+
+        if(!ativa){
+            try{
+                await database.collection('workspace_lousa_status').deleteOne({ id: idLimpo });
+                if(nomeTurma && nomeTurma !== idLimpo) await database.collection('workspace_lousa_status').deleteOne({ id: nomeTurma });
+                await database.collection('workspace_lousa_dados').deleteOne({ id: idLimpo });
+                if(nomeTurma && nomeTurma !== idLimpo) await database.collection('workspace_lousa_dados').deleteOne({ id: nomeTurma });
+                const restantes = await database.collection('workspace_lousa_status').countDocuments({ ativa: true });
+                if(restantes === 0) await database.collection('workspace_lousa_status').deleteOne({ id: 'global' });
+            }catch(e){}
+        }
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', { type: 'LOUSA_STATUS_CHANGED', turmaId: idLimpo, turmaNome: nomeTurma, ativa: !!ativa, recursos: !!recursos, escolaId: escolaFinal });
+        }
+
+        res.json({ success: true, turmaId: idLimpo, turmaNome: nomeTurma, ativa: !!ativa, recursos: !!recursos });
+    } catch (e) { res.status(500).json({ success: false, error: 'Erro ao sincronizar lousa.' }); }
+});
+
+router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const turmaIdReq = String(req.params.turmaId || 'global').trim();
+
+        let status = await database.collection('workspace_lousa_status').findOne({ id: turmaIdReq });
+        if(!status) status = await database.collection('workspace_lousa_status').findOne({ $or: [{ nome: turmaIdReq }, { idOriginal: turmaIdReq }] });
+
+        if(!status){
+            const turmaDoc = await database.collection('turmas').findOne({ $or: [{ id: turmaIdReq }, { nome: turmaIdReq }] });
+            if(turmaDoc) status = await database.collection('workspace_lousa_status').findOne({ $or: [{ id: turmaDoc.id }, { id: turmaDoc.nome }, { idOriginal: turmaDoc.id }] });
+        }
+
+        if(!status && turmaIdReq === 'global') status = await database.collection('workspace_lousa_status').findOne({ id: 'global' });
+
+        const ativa = !!(status?.ativa || status?.lousaAtiva);
+        const recursos = !!(status?.recursos || status?.lousaRecursos);
+
+        res.json({ success: true, ativa, recursos, turmaId: turmaIdReq, statusId: status?.id || null });
+    } catch (e) { res.status(500).json({ success: false, ativa: false, recursos: false }); }
+});
+
+router.delete('/sala/workspace-lousa/status/tudo', verificarToken, async (req, res) => {
+    try{
+        const db = await connectDB();
+        const r1 = await db.collection('workspace_lousa_status').deleteMany({});
+        const r2 = await db.collection('workspace_lousa_dados').deleteMany({});
+        res.json({ success:true, deletedStatus: r1.deletedCount, deletedDados: r2.deletedCount });
+    }catch(e){ res.status(500).json({ success:false }); }
+});
+
+router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const turmaId = String(req.params.turmaId).trim();
+        const { records } = req.body;
+        if(!turmaId) return res.status(400).json({ success:false });
+        
+        const status = await db.collection('workspace_lousa_status').findOne({ $or: [{ id: turmaId }, { nome: turmaId }, { idOriginal: turmaId }] });
+        if(!status?.ativa) return res.json({ success:false, error:'Lousa não está ativa' });
+
+        await db.collection('workspace_lousa_dados').updateOne(
+            { id: turmaId },
+            { $set: { id: turmaId, records: records || [], atualizadoEm: new Date().toISOString() } },
+            { upsert: true }
+        );
+        res.json({ success:true, count: (records||[]).length });
+    } catch(e){ res.status(500).json({ success:false }); }
+});
+
+router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const turmaId = String(req.params.turmaId).trim();
+        const doc = await db.collection('workspace_lousa_dados').findOne({ id: turmaId });
+        res.json({ success:true, turmaId, records: doc?.records || [] });
+    } catch(e){ res.status(500).json({ success:false, records:[] }); }
+});
+
+// ============================================================================
+// 🧠 HUB DE ESTUDO: IMERSÃO ESPECÍFICA (Curadoria Aguçada, Quiz e Recursos)
+// ============================================================================
+router.post('/posts/imersao', verificarToken, async (req, res) => {
+    try {
+        const { termoBusca, alunoRefId, escolaId } = req.body;
+        const database = await connectDB();
+        
+        let filtro = { escolaId: escolaId || 'DEFAULT' };
+        if (alunoRefId && alunoRefId !== 'undefined') {
+            const aluno = await database.collection('alunos').findOne({ id: alunoRefId });
+            if (aluno) {
+                let minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas || aluno.turma];
+                filtro = { 
+                    $and: [
+                        { escolaId: escolaId || 'DEFAULT' },
+                        { $or: [{ destino: 'global' }, { destino: { $in: minhasTurmas } }, { destinoNome: { $in: minhasTurmas } }] }
+                    ]
+                };
+            }
+        }
+
+        const postsBrutos = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(40).toArray();
+        const materiaisBrutos = await database.collection('workspace_materiais').find(filtro).sort({ dataCriacao: -1 }).limit(30).toArray();
+        
+        const conteudoPosts = postsBrutos.map(p => {
+            let infoAnexos = (p.anexos || []).map(a => a.nome + ' (' + a.tipo + ')').join(', ');
+            return `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${p.texto || ''} ${infoAnexos ? '(Anexos: ' + infoAnexos + ')' : ''}`;
+        }).join('\n\n');
+
+        const conteudoMateriais = materiaisBrutos.map(m => {
+            const tagsInfo = m.tags ? ` | Palavras-Chave: ${m.tags}` : '';
+            return `[MATERIAL_ID: ${m.id} \vert{} Título: ${m.titulo || ''}${tagsInfo}]: Descrição: ${m.descricao || ''}`;
+        }).join('\n\n');
+
+        const conteudoParaIA = `--- PUBLICAÇÕES DO FEED ---\n${conteudoPosts}\n\n--- MATERIAIS DA ESCOLA ---\n${conteudoMateriais}`;
+
+        if (!conteudoPosts.trim() && !conteudoMateriais.trim()) {
+            return res.status(400).json({ error: 'Não há conteúdo suficiente na plataforma para criar uma imersão.' });
+        }
+
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+
+        // 🚀 MÁGICA 1: O Prompt Dinâmico Bilingue
+        const instrucaoFoco = termoBusca 
+            ? `O aluno quer focar-se em: "${termoBusca}". Filtra a análise estritamente neste tema. IMPORTANTE: Aja como um professor bilingue. Se o termo de busca estiver em Inglês (ex: "Phrasal verbs"), todo o resumo, explicações e o quiz DEVEM SER EM INGLÊS. Se o termo estiver em Português, use PORTUGUÊS.` 
+            : `Cria uma imersão com base nos temas mais importantes. Responda em Português.`;
+
+        const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
+        Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
+        ${instrucaoFoco}
+        
+        REGRAS ABSOLUTAS E INQUEBRÁVEIS:
+        1. IDIOMA: Respeite rigorosamente a instrução de idioma acima (Inglês ou Português).
+        2. PROFUNDIDADE (GATILHO DE EXAUSTÃO): O seu "resumo" deve ser massivo, aprofundado e digno de uma aula universitária. Dê exemplos e explique detalhes.
+        3. FORMATAÇÃO RICA: Use HTML puro (<strong>, <em>, <ul>, <li>, <table>).
+        
+        A sua missão:
+        1. Crie um "titulo" cativante.
+        2. Escreva o "resumo" ENORME e ricamente detalhado.
+        3. Guarde IDs sugeridos em "postsRelacionados" ou "materiaisRelacionados".
+        4. Crie um "quiz" com 3 perguntas difíceis. (A respostaCorreta deve ser o NÚMERO 1, 2, 3 ou 4).
+        5. Crie o "tituloNota" e "conteudoParaNota".
+        
+        Retorne APENAS JSON válido. NÃO use formatação Markdown como \`\`\`json no início ou no fim. Apenas o objeto puro.`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: conteudoParaIA }
+            ],
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.4, 
+            max_tokens: 6000, 
+            response_format: { type: 'json_object' } 
+        });
+
+        // 🚀 MÁGICA 2: A "Lavandaria" do JSON (Filtro Anti-Erro 500)
+        let conteudoLimpo = completion.choices[0].message.content.trim();
+        
+        // Arranca o código Markdown se a IA teimar em enviá-lo
+        if (conteudoLimpo.startsWith('```')) {
+            conteudoLimpo = conteudoLimpo.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+        }
+        
+        const imersaoGerada = JSON.parse(conteudoLimpo);
+        
+        let materiaisDetalhados = [];
+        if (imersaoGerada.materiaisRelacionados && imersaoGerada.materiaisRelacionados.length > 0) {
+            materiaisDetalhados = materiaisBrutos.filter(m => imersaoGerada.materiaisRelacionados.includes(m.id));
+        }
+
+        res.status(200).json({ success: true, imersao: imersaoGerada, materiaisExtras: materiaisDetalhados });
+
+    } catch (error) {
+        console.error("🚨 Erro na Imersão Específica:", error);
+        res.status(500).json({ error: 'O motor de imersão falhou. A IA enviou dados incompreensíveis. Tente de novo.' });
+    }
+});
+
+// ============================================================================
+// 🧠 HUB DE ESTUDO: GERAR MAIS QUIZ (Imersão Específica)
+// ============================================================================
+router.post('/posts/imersao/mais-quiz', verificarToken, async (req, res) => {
+    try {
+        const { titulo, resumo } = req.body;
+        
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+
+       const systemPrompt = `Você é a Inteligência Artificial curadora da 'Imersão Específica' de uma escola de INGLÊS.
+        O aluno está a testar os seus conhecimentos sobre o tema: "${titulo}".
+        O resumo estudado foi: "${resumo}".
+        
+        REGRAS ABSOLUTAS:
+        1. IDIOMA: O foco é EXCLUSIVAMENTE INGLÊS. Se o tema parecer de outro idioma (ex: francês), assuma que foi um erro de digitação e crie perguntas focadas no Inglês.
+        2. FORMATAÇÃO: Use APENAS HTML puro (<strong>, <em>, <u>). NUNCA use atributos como style ou class.
+        
+        A sua missão é criar 3 NOVAS perguntas de múltipla escolha para testar o aluno com base nesse tema. As perguntas não devem repetir o que já foi perguntado e devem puxar pelo pensamento crítico.
+        
+        Retorne APENAS JSON válido com a estrutura exata:
+        {
+            "quiz": [
+                {
+                    "pergunta": "...",
+                    "opcoes": ["A", "B", "C", "D"],
+                    "respostaCorreta": 1, 
+                    "explicacao": "..."
+                }
+            ]
+        }`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'system', content: systemPrompt }],
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.5, 
+            response_format: { type: 'json_object' } 
+        });
+
+        const novasPerguntas = JSON.parse(completion.choices[0].message.content);
+        res.status(200).json({ success: true, novasPerguntas: novasPerguntas.quiz });
+
+    } catch (error) {
+        console.error("🚨 Erro ao gerar mais quiz:", error);
+        res.status(500).json({ error: 'A IA falhou ao gerar as perguntas. Tente de novo.' });
+    }
+});
+
+// ============================================================================
+// 🎶 HUB DE ESTUDO LMS: IMERSÃO MUSICAL (Montra, Histórico e Treino Ativo)
+// ============================================================================
+
+// 1. Verificar o Estado Musical do Aluno
+router.get('/ingles/musica/status', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const userId = req.query.userId;
+        const escolaId = req.query.escolaId || 'DEFAULT';
+
+        if (!userId) return res.status(400).json({ error: 'ID de utilizador ausente.' });
+        
+        const data = await db.collection('workspace_ingles_data').findOne({ userId: userId }) || {};
+        
+        // 🚀 O SEGREDO DO CATÁLOGO: Puxamos TODAS as músicas da escola, ignorando o limite de 50 do Feed!
+        const catalogo = await db.collection('workspace_posts')
+            .find({ escolaId: escolaId, categoria: 'musica' })
+            .sort({ dataCriacao: -1 })
+            .toArray();
+
+        res.json({ 
+            success: true, 
+            musicaAtiva: data.musicaAtiva || null, 
+            historicoMusicas: data.historicoMusicas || [],
+            catalogo: catalogo // Envia a biblioteca inteira para o Frontend
+        });
+    } catch (error) { res.status(500).json({ error: 'Erro ao buscar o seu estúdio musical.' }); }
+});
+
+// 2. Concluir um Treino Musical e Enviar para o Histórico
+router.post('/ingles/musica/concluir', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { userId, postId } = req.body;
+        
+        // Remove a música ativa e atira o ID para o array de histórico
+        await db.collection('workspace_ingles_data').updateOne(
+            { userId: userId },
+            { 
+                $push: { historicoMusicas: postId },$unset: { musicaAtiva: "" }
+            },
+            { upsert: true }
+        );
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: 'Erro ao concluir o treino.' }); }
+});
+
+// 3. Iniciar um Treino Específico (Selecionado da Montra)
+router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
+    try {
+        const { postId, userId } = req.body;
+        const database = await connectDB();
+        
+        // Puxa exatamente o post que o aluno clicou
+        const postOriginal = await database.collection('workspace_posts').findOne({ id: postId });
+        if (!postOriginal) return res.status(404).json({ error: 'A música desapareceu dos arquivos da escola.' });
+
+        const conteudoParaIA = `[POST_ID: ${postOriginal.id} | Autor: ${postOriginal.autorNome}]: ${postOriginal.texto || ''}`;
+
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+
+        const systemPrompt = `Você é um professor de INGLÊS especialista em fluência através da música.
+        Abaixo está uma publicação do Feed da plataforma contendo a letra de uma música.
+        
+        REGRAS ABSOLUTAS:
+        1. IDIOMA: Ensine EXCLUSIVAMENTE Inglês (explicando em Português).
+        2. ESTRUTURA MÁXIMA: Extraia EXATAMENTE 14 frases vitais dessa música. É OBRIGATÓRIO GERAR O PLANO DO DIA 1 ATÉ AO DIA 14. NÃO PARE A MEIO.
+        3. MINIJOGO: Para CADA frase, escolha UMA palavra vital e esconda-a na "fraseOculta" substituindo-a por "____". Coloque a palavra correta em "palavraEscondida".
+        4. CONCISÃO: Seja muito direto e breve nas explicações e desafios para poupar memória.
+        
+        Retorne APENAS JSON válido com a estrutura exata:
+        {
+            "tituloMusica": "Nome da Música e Artista",
+            "planoEstudos": [
+                {
+                    "dia": 1,
+                    "fraseOriginal": "Frase exata e completa da música",
+                    "fraseOculta": "Frase com a palavra substituída por ____",
+                    "palavraEscondida": "A palavra exata",
+                    "traducao": "Tradução curta",
+                    "explicacao": "Explicação muito breve (use HTML <strong> se precisar)",
+                    "desafio": "Desafio muito curto"
+                }
+            ]
+        }`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: conteudoParaIA }],
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.3,
+            max_tokens: 4500, 
+            response_format: { type: 'json_object' } 
+        });
+
+        const imersaoGerada = JSON.parse(completion.choices[0].message.content);
+
+        // 🚀 O SEGREDO DO LMS: Guarda o plano gerado na Base de Dados atrelado ao aluno!
+        await database.collection('workspace_ingles_data').updateOne(
+            { userId: userId },
+            { $set: { musicaAtiva: { plano: imersaoGerada, postOriginal: postOriginal } } },
+            { upsert: true }
+        );
+
+        res.status(200).json({ success: true, plano: imersaoGerada, postOriginal: postOriginal });
+
+    } catch (error) {
+        console.error("🚨 Erro na Imersão Musical:", error);
+        res.status(500).json({ error: 'O motor musical falhou. A IA precisa de uma afinação.' });
+    }
+});
+
+// 4. Gerar Mais Dias (e atualizar a BD)
+router.post('/posts/imersao-musical/mais-dias', verificarToken, async (req, res) => {
+    try {
+        const { userId, postId, ultimoDia } = req.body;
+        const database = await connectDB();
+        
+        const post = await database.collection('workspace_posts').findOne({ id: postId });
+        if (!post) return res.status(404).json({ error: 'A publicação com a música original já não existe.' });
+
+        const maxDiasGeracao = Math.min(7, 30 - ultimoDia); 
+        if (maxDiasGeracao <= 0) return res.status(400).json({ error: 'Já atingiu o limite de 30 dias!' });
+
+        const conteudoParaIA = `[LETRA DA MÚSICA]: ${post.texto || ''}`;
+
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY.trim() });
+
+        const systemPrompt = `Você é um professor de INGLÊS especialista em música.
+        O aluno já completou os primeiros ${ultimoDia} dias desta música.
+        Extraia ${maxDiasGeracao} NOVAS frases da letra. O plano deve iniciar no dia ${ultimoDia + 1} e ir até o dia ${ultimoDia + maxDiasGeracao}.
+        
+        Retorne APENAS JSON: {"planoEstudos": [{"dia": ${ultimoDia + 1}, "fraseOriginal": "...", "fraseOculta": "...", "palavraEscondida": "...", "traducao": "...", "explicacao": "...", "desafio": "..."}]}`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: conteudoParaIA }],
+            model: 'openai/gpt-oss-120b', 
+            temperature: 0.5, 
+            max_tokens: 4500,
+            response_format: { type: 'json_object' } 
+        });
+
+        const planoGerado = JSON.parse(completion.choices[0].message.content);
+
+        // 🚀 Atualiza a Base de Dados do Aluno juntando as novas lições!
+        await database.collection('workspace_ingles_data').updateOne(
+            { userId: userId },
+            { $push: { "musicaAtiva.plano.planoEstudos": { $each: planoGerado.planoEstudos } } }
+        );
+
+        res.status(200).json({ success: true, plano: planoGerado.planoEstudos });
+
+    } catch (error) {
+        console.error("🚨 Erro ao gerar mais dias:", error);
+        res.status(500).json({ error: 'A IA falhou ao gerar as novas frases.' });
+    }
 });
 
 // ============================================================================
@@ -1681,7 +2134,7 @@ router.post('/ingles/transcricao/corrigir', verificarToken, async (req, res) => 
                 { role: 'user', content: textoCru }
             ],
             model: 'openai/gpt-oss-120b', 
-            temperature: 0.1, 
+            temperature: 0.1, // Temperatura muito baixa para ser um revisor estrito que não inventa texto
             max_tokens: 150
         });
 
@@ -1689,9 +2142,11 @@ router.post('/ingles/transcricao/corrigir', verificarToken, async (req, res) => 
         res.status(200).json({ success: true, textoCorrigido });
     } catch (error) {
         console.error("🚨 Erro no Revisor de Transcrição:", error);
+        // Fallback rápido: Se a IA falhar por limite de taxa, devolvemos o texto original com a primeira letra maiúscula para a UX não quebrar
         const textoFallback = textoCru.charAt(0).toUpperCase() + textoCru.slice(1) + '.';
         res.status(200).json({ success: true, textoCorrigido: textoFallback });
     }
 });
+
 
 module.exports = router;
