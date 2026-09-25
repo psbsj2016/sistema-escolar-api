@@ -626,6 +626,7 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
                 await db.collection('usuarios').updateMany({ $or: [ { id: { $in: idsParaAtualizar } }, { alunoRefId: {$in: idsParaAtualizar } } ] }, updateQuery);
                 await db.collection('alunos').updateMany({ id: { $in: idsParaAtualizar } }, updateQuery);
             }
+        } // <--- 🚨 A CHAVETA MÁGICA QUE SALVA O SERVIDOR ESTÁ AQUI! Fecha o loop "for (const jogadorReal of jogadoresReais)"
 
         resultadoAvaliacao.jogadores = jogadoresCorrigidosParaFrontend;
         await db.collection('workspace_arenas').updateOne({ id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } });
@@ -653,12 +654,12 @@ router.get('/historico/:alunoId', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🎭 FASE 4: ÁRBITRO DE PERSONAGENS (APERTO DE MÃO DUPLO)
+// 🎭 FASE 4: ÁRBITRO DE PERSONAGENS (APERTO DE MÃO DUPLO E INTELIGÊNCIA ARTIFICIAL)
 // ============================================================================
 router.post('/:salaId/escolher-papel', verificarToken, async (req, res) => {
     try {
         const salaId = req.params.salaId;
-        const { alunoId, papelEscolhido } = req.body;
+        const { alunoId, papelEscolhido, papelRestante } = req.body;
         const db = await connectDB();
         
         const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
@@ -666,9 +667,16 @@ router.post('/:salaId/escolher-papel', verificarToken, async (req, res) => {
 
         const isJogador1 = sala.jogador1.id === alunoId;
 
-        // 1. Grava a escolha na base de dados para o jogador específico
-        const updateField = isJogador1 ? 'jogador1.papel' : 'jogador2.papel';
-        await db.collection('workspace_arenas').updateOne({ id: salaId }, { $set: { [updateField]: papelEscolhido } });
+        // 1. Grava a escolha do aluno
+        let updateDoc = { $set: {} };
+        updateDoc.$set[isJogador1 ? 'jogador1.papel' : 'jogador2.papel'] = papelEscolhido;
+
+        // 🚀 MODO SOLO: Se o oponente for a IA, atribui-lhe imediatamente o papel que sobrou!
+        if (sala.tipo === 'solo') {
+            updateDoc.$set[isJogador1 ? 'jogador2.papel' : 'jogador1.papel'] = papelRestante;
+        }
+
+        await db.collection('workspace_arenas').updateOne({ id: salaId }, updateDoc);
 
         // 2. Verifica se agora AMBOS os jogadores já têm papel
         const salaAtualizada = await db.collection('workspace_arenas').findOne({ id: salaId });
@@ -676,7 +684,7 @@ router.post('/:salaId/escolher-papel', verificarToken, async (req, res) => {
         const j2Pronto = !!salaAtualizada.jogador2.papel;
 
         if (j1Pronto && j2Pronto) {
-            // 🎯 TIRO DE PARTIDA! Ambos escolheram.
+            // 🎯 TIRO DE PARTIDA! Ambos escolheram (ou o aluno escolheu e a IA assumiu o resto).
             if (global.workspaceStream) {
                 global.workspaceStream.emit('evento_realtime', {
                     type: 'ARENA_TODOS_PRONTOS',
