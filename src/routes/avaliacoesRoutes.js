@@ -74,8 +74,8 @@ router.post('/', async (req, res) => {
         }
         // ====================================================================
 
-        res.json({ success: true, avaliacao: novaAvaliacao });
-    } catch (error) { res.status(500).json({ success: false }); }
+       res.json({ success: true, entrega });
+    } catch (error) { res.status(500).json({ success: false, error: "Erro no acesso." }); }
 });
 
 // 2. LISTAR AVALIAÇÕES DISPONÍVEIS
