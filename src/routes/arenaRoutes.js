@@ -275,7 +275,7 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
         const db = await connectDB();
 
         const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
-        if (!sala) return res.status(404).json({ error: 'Sala não encontrada.' });
+        const isSolo = sala.tipo === 'solo'; // 🚀 Deteta se é modo Treino
 
         const cenarioSorteado = sortearCenario();
 
