@@ -458,16 +458,20 @@ async function responderComoIA(sala, escolaId) {
             dialogo += `[${fala.autorNome}]: ${fala.texto}\n`; 
         });
 
+        // 🚀 O SEGREDO DOS PAPÉIS NO MODO SOLO: A IA lê o que sobrou!
+        const papelIA = sala.jogador2.papel || "a OUTRA pessoa na cena";
+        const papelAluno = sala.jogador1.papel || "o protagonista";
+
         const promptIA = `
         Aja estritamente como um personagem num Roleplay em inglês com um aluno.
-        Cenário da cena: "${sala.cenario}".
-        Você é a OUTRA pessoa na cena (ex: o empregado de mesa, o amigo, o chefe, etc).
-        O aluno (${sala.jogador1.nome}) é o protagonista com quem você está a falar.
+        Cenário da cena: "${sala.cenario || 'Conversa livre'}".
+        Você é: ${papelIA}.
+        O aluno (${sala.jogador1.nome}) é: ${papelAluno}.
         
         Diálogo até ao momento:
         ${dialogo}
         
-        Como VOCÊ (o personagem da cena) responde agora à última mensagem?
+        Como VOCÊ (${papelIA}) responde agora à última mensagem?
         Regras de ouro:
         1. Escreva apenas a sua fala, sem o seu nome, sem aspas e sem explicações.
         2. Seja muito natural, direto e conversacional. Use vocabulário nativo.
@@ -537,6 +541,8 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
         }
 
         const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
+        const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
+        const isSolo = sala.tipo === 'solo'; // 🚀 Deteta se é modo Treino
 
         let dialogo = '';
         if (sala.historico && sala.historico.length > 0) {
@@ -610,14 +616,16 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             avaliacaoIA.id = jogadorReal.id;
             jogadoresCorrigidosParaFrontend.push(avaliacaoIA);
 
-            const idsParaAtualizar = [jogadorReal.id];
-            if (alunoRef) idsParaAtualizar.push(alunoRef);
+            // 🚀 PROTEÇÃO DE CRISTAIS: Se for um treino Solo ou se for a IA, NÃO atualiza a Base de Dados!
+            if (!isSolo && jogadorReal.id !== 'ia_groq') {
+                const idsParaAtualizar = [jogadorReal.id];
+                if (alunoRef) idsParaAtualizar.push(alunoRef);
 
-            const updateQuery = { $inc: { 'arenaStats.duelosConcluidos': 1 },$set: { 'arenaStats.cristalAtual': cristalCalculado, 'arenaStats.tituloAtual': tituloCalculado } };
-            
-            await db.collection('usuarios').updateMany({ $or: [ { id: { $in: idsParaAtualizar } }, { alunoRefId: {$in: idsParaAtualizar } } ] }, updateQuery);
-            await db.collection('alunos').updateMany({ id: { $in: idsParaAtualizar } }, updateQuery);
-        }
+                const updateQuery = { $inc: { 'arenaStats.duelosConcluidos': 1 },$set: { 'arenaStats.cristalAtual': cristalCalculado, 'arenaStats.tituloAtual': tituloCalculado } };
+                
+                await db.collection('usuarios').updateMany({ $or: [ { id: { $in: idsParaAtualizar } }, { alunoRefId: {$in: idsParaAtualizar } } ] }, updateQuery);
+                await db.collection('alunos').updateMany({ id: { $in: idsParaAtualizar } }, updateQuery);
+            }
 
         resultadoAvaliacao.jogadores = jogadoresCorrigidosParaFrontend;
         await db.collection('workspace_arenas').updateOne({ id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } });
