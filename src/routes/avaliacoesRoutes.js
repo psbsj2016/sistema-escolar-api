@@ -369,14 +369,17 @@ router.post('/:id/entregar', async (req, res) => {
                 const nomeDoAluno = req.body.alunoNome || 'Um aluno';
 
                 const novaNotificacao = {
-                        id: 'notif_conv_' + crypto.randomUUID(),
+                    id: 'notif_conv_' + crypto.randomUUID(),
                     escolaId: escola,
                     destinatarioNome: autorDaProva,
                     remetenteNome: nomeDoAluno,
                     mensagem: `acessou o link da sessão: <strong>"${provaOriginal.titulo}"</strong>.`,
-                    origem: 'tarefa', 
+                    // 🚀 A CORREÇÃO CIRÚRGICA: 
+                    // Mudámos de 'tarefa' para 'avaliacao'. 
+                    // Isto avisa o Frontend para abrir o Painel do Professor: Sala de Acessos!
+                    origem: 'avaliacao', 
                     origemId: provaOriginal.id,
-                    destinoNome: 'Avaliação',
+                    destinoNome: 'Sala de Acessos', // Atualizei também o nome visual para ficar mais bonito
                     lida: false,
                     data: new Date().toISOString()
                 };
@@ -396,7 +399,9 @@ router.post('/:id/entregar', async (req, res) => {
         // ====================================================================
 
         res.json({ success: true, entrega });
-    } catch (error) { res.status(500).json({ success: false, error: "Erro no acesso." }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, error: "Erro no acesso." }); 
+    }
 });
 
 // 8. PROFESSOR BUSCA TODAS AS ENTREGAS
