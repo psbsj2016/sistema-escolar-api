@@ -374,7 +374,7 @@ router.post('/:id/entregar', async (req, res) => {
                     destinatarioNome: autorDaProva,
                     remetenteNome: nomeDoAluno,
                     mensagem: `acessou o link da sessão: <strong>"${provaOriginal.titulo}"</strong>.`,
-                    origem: 'tarefa', 
+                    origem: 'acesso_online', 
                     origemId: provaOriginal.id,
                     destinoNome: 'Avaliação',
                     lida: false,
