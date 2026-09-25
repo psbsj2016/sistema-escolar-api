@@ -32,77 +32,52 @@ router.post('/', async (req, res) => {
         };
         await db.collection('workspace_avaliacoes').insertOne(novaAvaliacao);
 
-        // ====================================================================
-        // 🚀 O GATILHO DE NOTIFICAÇÕES (PROFESSOR -> ALUNOS)
+      // ====================================================================
+        // 🚀 O GATILHO DE NOTIFICAÇÕES (ALUNO -> PROFESSOR CRIADOR DA PROVA)
         // ====================================================================
         try {
-            const escola = novaAvaliacao.escolaId || 'DEFAULT';
+            const provaOriginal = await db.collection('workspace_avaliacoes').findOne({ id: id });
             
-            // Descobre o Roteiro exato para a cápsula (para o 'lerEIr')
-            let origemNoti = 'tarefa';
-            if (tipo === 'escrita') origemNoti = 'avaliacao_escrita';
-            if (tipo === 'oral') origemNoti = 'avaliacao_oral';
-            if (tipo === 'online' || tipo === 'sessao_ao_vivo' || tipo === 'sessao') origemNoti = 'online';
+            if (provaOriginal && provaOriginal.autorNome) {
+                const escola = provaOriginal.escolaId || 'DEFAULT';
+                const autorDaProva = provaOriginal.autorNome; 
+                const nomeDoAluno = req.body.alunoNome || 'Um aluno';
 
-            const alunos = await db.collection('alunos').find({ escolaId: escola }).toArray();
-            
-            let alunosAlvo = [];
-            if (novaAvaliacao.destino === 'global') {
-                alunosAlvo = alunos;
-            } else {
-                alunosAlvo = alunos.filter(a => {
-                    const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
-                    return minhasTurmas.some(t => String(t).toLowerCase() === String(novaAvaliacao.destino).toLowerCase() || String(t).toLowerCase() === String(novaAvaliacao.destinoNome).toLowerCase());
-                });
-            }
-
-            if (alunosAlvo.length > 0) {
-                const nomesDestinatarios = [];
-                const notificacoesArray = alunosAlvo.map(aluno => {
-                    const nomeAluno = aluno.nome || aluno.login;
-                    if (nomeAluno) nomesDestinatarios.push(nomeAluno);
-                    // 🚀 MAGIA DA DISTINÇÃO: Texto dinâmico conforme o tipo!
-                    let textoAviso = '';
-                    if (tipo === 'escrita' || tipo === 'oral') {
-                        textoAviso = `publicou uma nova avaliação ${tipo === 'escrita' ? 'escrita' : 'oral'}: "${titulo}"`;
-                    } else {
-                        textoAviso = `agendou o link da aula online: "${titulo}"`;
-                    }
-
-                    return {
-                           id: 'notif_' + crypto.randomUUID(),
-                        escolaId: escola,
-                        destinatarioNome: nomeAluno,
-                        remetenteNome: autorNome,
-                        mensagem: textoAviso, // 🚀 Texto aplicado aqui!
-                        origem: origemNoti,
-                        origemId: novaAvaliacao.id,
-                        destinoNome: novaAvaliacao.destinoNome || 'Geral',
-                        dataEvento: novaAvaliacao.dataAgendada || novaAvaliacao.tempo,
-                        lida: false,
-                        data: new Date().toISOString()
-                    };
-                }).filter(n => n.destinatarioNome);
-
-                if (notificacoesArray.length > 0) {
-                    await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                const novaNotificacao = {
+                    id: 'notif_conv_' + crypto.randomUUID(),
+                    escolaId: escola,
+                    destinatarioNome: autorDaProva,
+                    remetenteNome: nomeDoAluno,
+                    mensagem: `acessou o link da sessão: <strong>"${provaOriginal.titulo}"</strong>.`,
                     
-                    // 🚀 O GRITO GLOBAL DE TEMPO REAL
-                    if (global.workspaceStream) {
-                        global.workspaceStream.emit('evento_realtime', { 
-                            type: 'NOVA_NOTIFICACAO', destinatarios: nomesDestinatarios, escolaId: escola 
-                        });
-                    }
+                    // 🚀 A ETIQUETA MÁGICA CORRIGIDA: 
+                    // O 'alertas.js' lê 'acesso_online' e redireciona o professor para 'encontros_prof' (Sala de Acessos)
+                    origem: 'acesso_online', 
+                    
+                    origemId: provaOriginal.id,
+                    destinoNome: 'Sala de Acessos', 
+                    lida: false,
+                    data: new Date().toISOString()
+                };
+
+                await db.collection('workspace_notificacoes').insertOne(novaNotificacao);
+
+                // 🚀 Grito em Tempo Real apenas para o Professor!
+                if (global.workspaceStream) {
+                    global.workspaceStream.emit('evento_realtime', { 
+                        type: 'NOVA_NOTIFICACAO', destinatarios: [autorDaProva], escolaId: escola 
+                    });
                 }
             }
-        } catch (erroNotificacao) {
-            console.error("Aviso: Avaliação salva, mas falha ao gerar notificações.", erroNotificacao);
+        } catch (erroNoti) {
+            console.error("Falha ao notificar professor sobre a entrada na sessão ao vivo.", erroNoti);
         }
         // ====================================================================
 
         res.json({ success: true, avaliacao: novaAvaliacao });
     } catch (error) { res.status(500).json({ success: false }); }
 });
+
 // 2. LISTAR AVALIAÇÕES DISPONÍVEIS
 router.get('/', async (req, res) => {
     try {
