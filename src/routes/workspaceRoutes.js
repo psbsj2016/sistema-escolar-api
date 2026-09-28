@@ -1926,24 +1926,29 @@ router.post('/posts/imersao/mais-quiz', verificarToken, async (req, res) => {
         if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
-       const systemPrompt = `Você é a Inteligência Artificial curadora da 'Imersão Específica' de uma escola de INGLÊS.
-        O aluno está a testar os seus conhecimentos sobre o tema: "${titulo}".
-        O resumo estudado foi: "${resumo}".
+      const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
+        Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
+        ${instrucaoFoco}
         
-        REGRAS ABSOLUTAS:
-        1. IDIOMA: O foco é EXCLUSIVAMENTE INGLÊS. Se o tema parecer de outro idioma (ex: francês), assuma que foi um erro de digitação e crie perguntas focadas no Inglês.
-        2. FORMATAÇÃO: Use APENAS HTML puro (<strong>, <em>, <u>). NUNCA use atributos como style ou class.
+        REGRAS ABSOLUTAS E INQUEBRÁVEIS:
+        1. IDIOMA: Respeite rigorosamente a instrução de idioma acima (Inglês ou Português).
+        2. PROFUNDIDADE (GATILHO DE EXAUSTÃO): O seu "resumo" deve ser massivo, aprofundado e digno de uma aula universitária. Dê exemplos e explique detalhes.
+        3. FORMATAÇÃO RICA: Use HTML puro (<strong>, <em>, <ul>, <li>, <table>).
         
-        A sua missão é criar 3 NOVAS perguntas de múltipla escolha para testar o aluno com base nesse tema. As perguntas não devem repetir o que já foi perguntado e devem puxar pelo pensamento crítico.
-        
-        Retorne APENAS JSON válido com a estrutura exata:
+        A sua missão é retornar APENAS um JSON válido, contendo a estrutura EXATA abaixo, sem formatação Markdown (\`\`\`json):
         {
+            "titulo": "Título cativante da aula",
+            "resumo": "O seu resumo ENORME, ricamente detalhado e em formato HTML",
+            "postsRelacionados": ["id1", "id2"],
+            "materiaisRelacionados": ["mat1"],
+            "tituloNota": "Título cativante para as anotações",
+            "conteudoParaNota": "Resumo super condensado e útil",
             "quiz": [
                 {
-                    "pergunta": "...",
+                    "pergunta": "Sua pergunta difícil aqui?",
                     "opcoes": ["A", "B", "C", "D"],
-                    "respostaCorreta": 1, 
-                    "explicacao": "..."
+                    "respostaCorreta": 1,
+                    "explicacao": "A explicação pedagógica e detalhada do porquê desta resposta estar correta."
                 }
             ]
         }`;
