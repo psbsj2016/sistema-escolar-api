@@ -422,18 +422,8 @@ router.post('/:salaId/falar', verificarToken, async (req, res) => {
         
         const salaAtualizada = await db.collection('workspace_arenas').findOne({ id: salaId });
         
-        if (salaAtualizada && salaAtualizada.historico) {
-            const hist = salaAtualizada.historico;
-            const total = hist.length;
-            
-            // 🚀 MATEMÁTICA ATUALIZADA: O Mestre entra na conversa a cada 10 mensagens trocadas!
-            // Isto garante que intervém de forma mais espaçada, sem interromper o fluxo constante.
-            if (total > 0 && total % 10 === 0 && salaAtualizada.tipo !== 'solo') {
-                intervirComoMestre(salaAtualizada, escolaId);
-            }
-        }
-        
-        // GATILHO DO MODO SOLO
+        // 🚀 GATILHO DO MODO SOLO (Treino contra a IA)
+        // O Mestre da Guilda agora foca-se APENAS em responder no modo Solo. O combate PvP fica 100% limpo!
         if (salaAtualizada && salaAtualizada.tipo === 'solo' && autorId !== 'ia_groq') {
             responderComoIA(salaAtualizada, escolaId);
         }
