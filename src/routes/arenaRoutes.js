@@ -741,6 +741,41 @@ router.post('/traduzir', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🏃💨 SISTEMA DE FUGA (DESISTÊNCIA)
+// ============================================================================
+router.post('/:salaId/abandonar', verificarToken, async (req, res) => {
+    try {
+        const salaId = req.params.salaId;
+        const { alunoNome, escolaId } = req.body;
+        const db = await connectDB();
 
+        const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
+        
+        // Se a sala já não existir ou já estiver terminada, não fazemos nada
+        if (!sala || sala.status === 'finalizado' || sala.status === 'cancelado') {
+            return res.status(200).json({ success: true });
+        }
+
+        // 1. Marca a sala como cancelada na base de dados
+        await db.collection('workspace_arenas').updateOne(
+            { id: salaId },
+            { $set: { status: 'cancelado', motivoFinalizacao: `Fuga de ${alunoNome}` } }
+        );
+
+        // 2. Avisa o jogador que ficou na sala através do WebSocket
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_OPONENTE_FUGIU',
+                salaId: salaId,
+                fugitivoNome: alunoNome,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao processar abandono.' });
+    }
+});
 
 module.exports = router;
