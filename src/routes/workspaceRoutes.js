@@ -1725,15 +1725,22 @@ router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
         }
 
         if(!ativa){
-            try{
-                await database.collection('workspace_lousa_status').deleteOne({ id: idLimpo });
-                if(nomeTurma && nomeTurma !== idLimpo) await database.collection('workspace_lousa_status').deleteOne({ id: nomeTurma });
-                await database.collection('workspace_lousa_dados').deleteOne({ id: idLimpo });
-                if(nomeTurma && nomeTurma !== idLimpo) await database.collection('workspace_lousa_dados').deleteOne({ id: nomeTurma });
-                const restantes = await database.collection('workspace_lousa_status').countDocuments({ ativa: true });
-                if(restantes === 0) await database.collection('workspace_lousa_status').deleteOne({ id: 'global' });
-            }catch(e){}
-        }
+  // Mantém os dados pra quando reativar, só desativa a visualização
+  // Remova os deleteOne de workspace_lousa_dados
+  try{
+    await database.collection('workspace_lousa_status').updateOne(
+      { id: idLimpo },
+      { $set: { ativa: false, lousaAtiva: false, atualizadoEm: new Date().toISOString() } }
+    );
+    if(nomeTurma && nomeTurma !== idLimpo){
+      await database.collection('workspace_lousa_status').updateOne(
+        { id: nomeTurma },
+        { $set: { ativa: false, lousaAtiva: false } }
+      );
+    }
+  }catch(e){}
+}
+// Remova completamente os deleteMany de dados aqui
 
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', { type: 'LOUSA_STATUS_CHANGED', turmaId: idLimpo, turmaNome: nomeTurma, ativa: !!ativa, recursos: !!recursos, escolaId: escolaFinal });
@@ -1782,7 +1789,7 @@ router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
         if(!turmaId) return res.status(400).json({ success:false });
         
         const status = await db.collection('workspace_lousa_status').findOne({ $or: [{ id: turmaId }, { nome: turmaId }, { idOriginal: turmaId }] });
-        if(!status?.ativa) return res.json({ success:false, error:'Lousa não está ativa' });
+        if(!status) return res.json({ success:false, error:'Lousa não está ativa' });
 
         await db.collection('workspace_lousa_dados').updateOne(
             { id: turmaId },

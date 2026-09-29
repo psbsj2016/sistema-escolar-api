@@ -27,11 +27,7 @@ router.get(['/workspace-lousa', '/workspace-lousa.html'], (req, res) => {
     const pathDist = path.join(__dirname, '../dist/workspace-lousa.html');
     const pathFront = path.join(__dirname, '../frontend/workspace-lousa.html');
     
-    if (fs.existsSync(pathDist)) {
-        res.sendFile(pathDist);
-    } else {
-        res.sendFile(pathFront);
-    }
+   res.sendFile(pathFront); // força usar o frontend/workspace-lousa.html corrigido
 });
 
 // ============================================================================
