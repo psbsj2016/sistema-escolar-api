@@ -2027,12 +2027,10 @@ router.post('/posts/imersao-musical', verificarToken, async (req, res) => {
         const postOriginal = await database.collection('workspace_posts').findOne({ id: postId });
         if (!postOriginal) return res.status(404).json({ error: 'A música desapareceu dos arquivos da escola.' });
 
-       // 🚀 OTIMIZAÇÃO DE TOKENS: Enviamos apenas as 8 músicas mais recentes (em vez de 15),
-        // e cortamos letras que ultrapassem os 1200 caracteres.
-        const conteudoParaIA = postsMusicais.slice(0, 8).map(p => {
-            let letraSegura = p.texto ? p.texto.substring(0, 1200) + (p.texto.length > 1200 ? '\n[...Música Cortada por Segurança...]' : '') : '';
-            return `[POST_ID: ${p.id} | Autor: ${p.autorNome}]: ${letraSegura}`;
-        }).join('\n\n');
+      // 🚀 OTIMIZAÇÃO DE TOKENS: Lemos diretamente a música clicada (postOriginal)
+        // e cortamos a letra se ultrapassar os 1200 caracteres de forma segura.
+        let letraSegura = postOriginal.texto ? postOriginal.texto.substring(0, 1200) + (postOriginal.texto.length > 1200 ? '\n[...Música Cortada por Segurança...]' : '') : '';
+        const conteudoParaIA = `[POST_ID: ${postOriginal.id} | Autor: ${postOriginal.autorNome}]: ${letraSegura}`;
 
         const Groq = require('groq-sdk');
         const chaveApi = process.env.GROQ_API_KEY;
