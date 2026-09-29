@@ -778,4 +778,20 @@ router.post('/:salaId/abandonar', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🧰 CAIXA NEGRA: RECUPERAÇÃO DE ESTADO APÓS QUEDA DE REDE OU F5
+// ============================================================================
+router.get('/:salaId/estado', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const sala = await db.collection('workspace_arenas').findOne({ id: req.params.salaId });
+        
+        if (!sala) return res.status(404).json({ error: 'Sala não encontrada.' });
+        
+        res.json({ success: true, sala });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao buscar a Caixa Negra da Arena.' });
+    }
+});
+
 module.exports = router;
