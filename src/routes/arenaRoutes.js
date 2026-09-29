@@ -656,11 +656,11 @@ router.post('/:salaId/escolher-papel', verificarToken, async (req, res) => {
 
         const isJogador1 = sala.jogador1.id === alunoId;
 
-        // 1. Grava a escolha do aluno
-        let updateDoc = { $set: {} };
+        // 1. Grava a escolha do aluno APENAS para ele próprio
+        let updateDoc = { $set: { papeisDefinidos: true } }; 
         updateDoc.$set[isJogador1 ? 'jogador1.papel' : 'jogador2.papel'] = papelEscolhido;
 
-        // 🚀 MODO SOLO: Se o oponente for a IA, atribui-lhe imediatamente o papel que sobrou!
+        // 🚀 MODO SOLO: Apenas se for contra a IA é que o servidor atribui o papel restante imediatamente
         if (sala.tipo === 'solo') {
             updateDoc.$set[isJogador1 ? 'jogador2.papel' : 'jogador1.papel'] = papelRestante;
         }
@@ -673,7 +673,7 @@ router.post('/:salaId/escolher-papel', verificarToken, async (req, res) => {
         const j2Pronto = !!salaAtualizada.jogador2.papel;
 
         if (j1Pronto && j2Pronto) {
-            // 🎯 TIRO DE PARTIDA! Ambos escolheram (ou o aluno escolheu e a IA assumiu o resto).
+            // 🎯 TIRO DE PARTIDA! Ambos escolheram. O Servidor liberta a Arena.
             if (global.workspaceStream) {
                 global.workspaceStream.emit('evento_realtime', {
                     type: 'ARENA_TODOS_PRONTOS',
@@ -682,7 +682,7 @@ router.post('/:salaId/escolher-papel', verificarToken, async (req, res) => {
                 });
             }
         } else {
-            // 🛑 APENAS UM ESCOLHEU! Avisa a rede para bloquear visualmente esse botão no oponente
+            // 🛑 APENAS UM ESCOLHEU! Avisa a rede para pintar de cinzento esse botão no ecrã do oponente
             if (global.workspaceStream) {
                 global.workspaceStream.emit('evento_realtime', {
                     type: 'ARENA_PAPEL_BLOQUEADO',
