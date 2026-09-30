@@ -10,16 +10,47 @@ const verificarToken = async (req, res, next) => {
     next();
 };
 
-// 🚀 LISTA DE CENÁRIOS ÉPICOS DE ROLEPLAY
-const CENARIOS_ARENA = [
-    "You are at a restaurant and the food is cold. One is the unhappy customer, the other is the waiter.",
-    "You are at the airport and lost your luggage. One is the frustrated traveler, the other is the ground staff.",
-    "You are roommates arguing about who should clean the apartment today.",
-    "Job Interview: One is the strict boss, the other is the nervous candidate.",
-    "Planning a trip: Two friends disagree on whether to go to the beach or the mountains."
-];
+// 🚀 LISTA DE CENÁRIOS ÉPICOS DE ROLEPLAY (Classificados por Nível CEFR)
+const CENARIOS_POR_NIVEL = {
+    'A1_A2': [
+        { id: 'a1_1', t: "No restaurante, a comida chegou fria e atrasada.", p1: "Unhappy Customer", p2: "Waiter" },
+        { id: 'a1_2', t: "No aeroporto, você perdeu a sua bagagem.", p1: "Frustrated Traveler", p2: "Ground Staff" },
+        { id: 'a1_3', t: "A comprar um bilhete de comboio para Londres.", p1: "Tourist", p2: "Ticket Agent" },
+        { id: 'a1_4', t: "Perdido na cidade, a pedir direções para o hotel.", p1: "Lost Tourist", p2: "Helpful Local" },
+        { id: 'a1_5', t: "A fazer o check-in num hotel, mas não encontram a reserva.", p1: "Tired Guest", p2: "Receptionist" }
+    ],
+    'B1_B2': [
+        { id: 'b1_1', t: "Entrevista de emprego para uma vaga de tecnologia.", p1: "Nervous Candidate", p2: "Strict Boss" },
+        { id: 'b1_2', t: "Devolução de um produto com defeito na loja.", p1: "Irritated Customer", p2: "Store Manager" },
+        { id: 'b1_3', t: "A planear uma viagem: praia versus montanha.", p1: "Mountain Lover", p2: "Beach Lover" },
+        { id: 'b1_4', t: "Discussão entre colegas de casa sobre as limpezas.", p1: "Tidy Flatmate", p2: "Messy Flatmate" },
+        { id: 'b1_5', t: "A ligar para cancelar o contrato da internet.", p1: "Angry Customer", p2: "Call Center Agent" }
+    ],
+    'C1_C2': [
+        { id: 'c1_1', t: "Debate sobre as implicações éticas da IA na sociedade.", p1: "Tech Optimist", p2: "Cautious Ethicist" },
+        { id: 'c1_2', t: "Negociação empresarial de alto risco para uma fusão.", p1: "Aggressive CEO", p2: "Skeptical Investor" },
+        { id: 'c1_3', t: "Cimeira global sobre políticas de alterações climáticas.", p1: "Environmental Activist", p2: "Industry Representative" },
+        { id: 'c1_4', t: "Discussão filosófica sobre o impacto das redes sociais na mente.", p1: "Digital Minimalist", p2: "Social Media Influencer" },
+        { id: 'c1_5', t: "A defender uma tese de mestrado controversa.", p1: "Confident Student", p2: "Critical Professor" }
+    ]
+};
 
-const sortearCenario = () => CENARIOS_ARENA[Math.floor(Math.random() * CENARIOS_ARENA.length)];
+// 🧠 Função Inteligente que filtra os cenários jogados nos últimos 7 dias
+const sortearCenarioNivelado = (nivelProposto, jogadosIds = []) => {
+    // Se não for passado um nível válido, escolhemos um nível aleatório para PvP
+    const niveisValidos = ['A1_A2', 'B1_B2', 'C1_C2'];
+    const nivel = niveisValidos.includes(nivelProposto) ? nivelProposto : niveisValidos[Math.floor(Math.random() * niveisValidos.length)];
+    
+    let pool = CENARIOS_POR_NIVEL[nivel];
+    
+    // Filtra os cenários que o aluno já jogou
+    let disponiveis = pool.filter(c => !jogadosIds.includes(c.id));
+    
+    // Se o aluno foi tão dedicado que já jogou todos deste nível, recomeçamos a lista!
+    if (disponiveis.length === 0) disponiveis = pool;
+    
+    return disponiveis[Math.floor(Math.random() * disponiveis.length)];
+};
 
 // ============================================================================
 // ⚔️ ARENA: SISTEMA DE DESAFIO ALEATÓRIO RÁPIDO (SINALIZADOR)
@@ -71,12 +102,12 @@ router.post('/desafio-aleatorio/aceitar', verificarToken, async (req, res) => {
         desafio.status = 'aceito';
         desafio.desafiado = desafiadoNome;
 
-        // 🚀 CRIA A SALA OFICIAL NA BASE DE DADOS
         const userDesafiado = await db.collection('usuarios').findOne({ $or: [{nome: desafiadoNome}, {login: desafiadoNome}] });
         const userDesafiante = await db.collection('usuarios').findOne({ $or: [{nome: desafio.desafiante}, {login: desafio.desafiante}] });
 
         const salaId = 'rnd-match-' + Date.now();
-        const cenarioSorteado = sortearCenario();
+        // 🚀 O NOVO SORTEADOR (null significa nível aleatório para PvP)
+        const cenarioSorteado = sortearCenarioNivelado(null);
 
         const novaSala = {
             id: salaId,
@@ -87,14 +118,14 @@ router.post('/desafio-aleatorio/aceitar', verificarToken, async (req, res) => {
             jogador2: { id: userDesafiado?.id || null, nome: desafiadoNome },
             limiteMinutos: desafio.minutos,
             iniciadoEm: new Date().toISOString(),
-            cenario: "⚡ COMBATE ALEATÓRIO RÁPIDO ⚡\n" + cenarioSorteado,
+            cenario: "⚡ COMBATE ALEATÓRIO RÁPIDO ⚡\n" + cenarioSorteado.t, // Puxa o texto (.t)
+            cenarioObj: cenarioSorteado, // 🚀 Guarda o objeto rico
             historico: []
         };
 
         await db.collection('workspace_arenas').insertOne(novaSala);
 
         if (global.workspaceStream) {
-            // 1. Fecha o popup para os restantes alunos da escola
             global.workspaceStream.emit('evento_realtime', {
                 type: 'DESAFIO_ALEATORIO_FECHADO',
                 desafioId: desafioId,
@@ -103,7 +134,6 @@ router.post('/desafio-aleatorio/aceitar', verificarToken, async (req, res) => {
                 escolaId: escolaId || 'DEFAULT'
             });
 
-            // 🚀 2. O RAIO TRATOR: Puxa AMBOS para a Arena instantaneamente!
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ARENA_MATCH_ENCONTRADO',
                 destinatarios: [desafio.desafiante, desafiadoNome],
@@ -111,6 +141,7 @@ router.post('/desafio-aleatorio/aceitar', verificarToken, async (req, res) => {
                 salaId: salaId,
                 limiteMinutos: novaSala.limiteMinutos,
                 cenario: novaSala.cenario,
+                cenarioObj: cenarioSorteado, // 🚀 Envia o objeto rico para o Frontend
                 escolaId: escolaId || 'DEFAULT'
             });
         }
@@ -140,29 +171,31 @@ router.post('/desafio-direto/recusar', verificarToken, async (req, res) => {
 // ============================================================================
 router.post('/solo', verificarToken, async (req, res) => {
     try {
-        const { alunoId, alunoNome, escolaId, limiteMinutos } = req.body;
+        const { alunoId, alunoNome, escolaId, limiteMinutos, nivel, jogados } = req.body;
         const db = await connectDB();
         
         const salaId = 'solo-' + Date.now() + '-' + crypto.randomUUID().substring(0, 8);
-        const cenarioSorteado = sortearCenario();
+        
+        // 🚀 O NOVO MOTOR: Escolhe o cenário baseado no nível e na memória do aluno
+        const cenarioSorteado = sortearCenarioNivelado(nivel, jogados || []);
 
         const novaSala = {
             id: salaId,
             escolaId: escolaId || 'DEFAULT',
             tipo: 'solo',
-            status: 'em_curso', // Começa imediatamente!
+            status: 'em_curso', 
             jogador1: { id: alunoId, nome: alunoNome },
             jogador2: { id: 'ia_groq', nome: 'Mestre da Guilda 🤖' },
             limiteMinutos: parseInt(limiteMinutos) || 15,
             iniciadoEm: new Date().toISOString(),
-            cenario: "🤖 TREINO SOLO \n" + cenarioSorteado,
+            cenario: "🤖 TREINO SOLO \n" + cenarioSorteado.t,
+            cenarioObj: cenarioSorteado, // 🚀 Guardamos o objeto completo para o Frontend
             historico: []
         };
 
         await db.collection('workspace_arenas').insertOne(novaSala);
         
-        // Devolve o sucesso imediatamente para o frontend abrir a tela
-        res.status(200).json({ success: true, salaId: novaSala.id, cenario: novaSala.cenario });
+        res.status(200).json({ success: true, salaId: novaSala.id, cenarioObj: cenarioSorteado });
     } catch (error) { 
         res.status(500).json({ error: 'Erro ao invocar a IA para treino solo.' }); 
     }
@@ -179,7 +212,8 @@ router.post('/procurar', verificarToken, async (req, res) => {
         });
 
         if (salaEspera) {
-            const cenarioSorteado = sortearCenario();
+            // 🚀 O NOVO SORTEADOR
+            const cenarioSorteado = sortearCenarioNivelado(null);
 
             await db.collection('workspace_arenas').updateOne(
                 { id: salaEspera.id },
@@ -187,7 +221,8 @@ router.post('/procurar', verificarToken, async (req, res) => {
                     status: 'em_curso', 
                     jogador2: { id: alunoId, nome: alunoNome },
                     iniciadoEm: new Date().toISOString(),
-                    cenario: cenarioSorteado
+                    cenario: cenarioSorteado.t, // Puxa o texto (.t)
+                    cenarioObj: cenarioSorteado // 🚀 Guarda o objeto rico
                 }}
             );
 
@@ -196,10 +231,11 @@ router.post('/procurar', verificarToken, async (req, res) => {
                     type: 'ARENA_MATCH_ENCONTRADO',
                     salaId: salaEspera.id,
                     destinatarios: [salaEspera.jogador1.nome, alunoNome],
-                    destinatariosIds: [salaEspera.jogador1.id, alunoId], // BLINDAGEM
+                    destinatariosIds: [salaEspera.jogador1.id, alunoId],
                     escolaId: escolaId,
                     limiteMinutos: salaEspera.limiteMinutos,
-                    cenario: cenarioSorteado 
+                    cenario: cenarioSorteado.t,
+                    cenarioObj: cenarioSorteado // 🚀 Envia o objeto rico para o Frontend
                 });
             }
             return res.status(200).json({ success: true, salaId: salaEspera.id, mensagem: 'Oponente encontrado!' });
@@ -277,13 +313,16 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
         const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
         if (!sala) return res.status(404).json({ error: 'Sala não encontrada.' });
 
-        const cenarioSorteado = sortearCenario();
+        // 🚀 O NOVO SORTEADOR
+        const cenarioSorteado = sortearCenarioNivelado(null);
 
         await db.collection('workspace_arenas').updateOne(
             { id: salaId },
             { $set: { 
                 status: 'em_curso', 'jogador2.id': alunoId, 'jogador2.nome': alunoNome, 
-                iniciadoEm: new Date().toISOString(), cenario: cenarioSorteado
+                iniciadoEm: new Date().toISOString(), 
+                cenario: cenarioSorteado.t, // Puxa o texto (.t)
+                cenarioObj: cenarioSorteado // 🚀 Guarda o objeto rico
             } }
         );
 
@@ -292,10 +331,11 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
                 type: 'ARENA_MATCH_ENCONTRADO',
                 salaId: salaId,
                 destinatarios: [sala.jogador1.nome, alunoNome],
-                destinatariosIds: [sala.jogador1.id, alunoId], // A CURA DOS EVENTOS FANTASMAS!
+                destinatariosIds: [sala.jogador1.id, alunoId], 
                 escolaId: escolaId,
                 limiteMinutos: sala.limiteMinutos,
-                cenario: cenarioSorteado
+                cenario: cenarioSorteado.t,
+                cenarioObj: cenarioSorteado // 🚀 Envia o objeto rico para o Frontend
             });
         }
         res.status(200).json({ success: true });
