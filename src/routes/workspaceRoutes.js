@@ -1869,7 +1869,7 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
             ? `O aluno quer focar-se em: "${termoBusca}". Filtra a análise estritamente neste tema. IMPORTANTE: Aja como um professor bilingue. Se o termo de busca estiver em Inglês (ex: "Phrasal verbs"), todo o resumo, explicações e o quiz DEVEM SER EM INGLÊS. Se o termo estiver em Português, use PORTUGUÊS.` 
             : `Cria uma imersão com base nos temas mais importantes. Responda em Português.`;
 
-        const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
+       const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
         Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
         ${instrucaoFoco}
         
@@ -1882,7 +1882,7 @@ router.post('/posts/imersao', verificarToken, async (req, res) => {
         1. Crie um "titulo" cativante.
         2. Escreva o "resumo" ENORME e ricamente detalhado.
         3. Guarde IDs sugeridos em "postsRelacionados" ou "materiaisRelacionados".
-        4. Crie um "quiz" com 3 perguntas difíceis. (A respostaCorreta deve ser o NÚMERO 1, 2, 3 ou 4).
+        4. Crie um "quiz" com 3 perguntas difíceis. A "respostaCorreta" deve ser o NÚMERO 1, 2, 3 ou 4. É OBRIGATÓRIO incluir o campo "explicacao" detalhando o motivo da resposta certa.
         5. Crie o "tituloNota" e "conteudoParaNota".
         
         Retorne APENAS JSON válido. NÃO use formatação Markdown como \`\`\`json no início ou no fim. Apenas o objeto puro.`;
