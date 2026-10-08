@@ -728,11 +728,11 @@ router.put('/perfil/bio', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// ✏️ PERFIL: ALTERAR NOME DO UTILIZADOR
+// ✏️ PERFIL: ALTERAR NOME DO UTILIZADOR (NOME SOCIAL NO WORKSPACE)
 // ============================================================================
 router.put('/perfil/nome', verificarToken, async (req, res) => {
     try {
-        const { id, alunoRefId, novoNome } = req.body;
+        const { id, novoNome } = req.body;
         
         if (!id || !novoNome) {
             return res.status(400).json({ error: 'Faltam dados obrigatórios para atualizar o nome.' });
@@ -745,19 +745,12 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
         const userAntigo = await database.collection('usuarios').findOne({ id: id });
         const nomeAntigo = userAntigo ? (userAntigo.nome || userAntigo.login) : null;
 
-        // 2. Atualiza o nome na coleção principal de Acessos (Usuários)
+        // 2. Atualiza o nome APENAS na coleção principal de Acessos (Usuários do Workspace)
+        // 🛡️ BLINDAGEM: A coleção 'alunos' (Secretaria) não é tocada para manter a integridade oficial!
         await database.collection('usuarios').updateOne(
             { id: id },
             { $set: { nome: novoNome } }
         );
-
-        // 3. Atualiza o nome na coleção da Secretaria (Alunos), se o aluno existir lá
-        if (alunoRefId) {
-            await database.collection('alunos').updateOne(
-                { id: alunoRefId },
-                { $set: { nome: novoNome } }
-            );
-        }
 
         // Devolve o sucesso e o nome antigo para o Front-end fazer a magia invisível na Arena!
         res.status(200).json({ success: true, nomeAntigo: nomeAntigo });
