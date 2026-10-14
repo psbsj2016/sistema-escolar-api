@@ -87,7 +87,7 @@ router.post('/teste', verificarToken, async (req, res) => {
     }
 });
 
-// 🎓 ROTA 4 (NOVA): Enviar Aviso Direto para 1 Aluno ou Todos os Alunos do Workspace
+// 🎓 ROTA 4: Enviar Aviso Direto para o Sininho/Tela do Workspace do Aluno + Web Push
 router.post('/enviar-aviso-aluno', verificarToken, async (req, res) => {
     try {
         const { alvoUserId, alunoRefId, nomeDestino, titulo, mensagem } = req.body;
@@ -96,36 +96,97 @@ router.post('/enviar-aviso-aluno', verificarToken, async (req, res) => {
         }
 
         const database = await connectDB();
-        const escolaId = req.usuario.escolaId;
+        const escolaId = req.usuario.escolaId || 'DEFAULT';
+        const remetenteNome = req.usuario.nome || req.usuario.login || 'Coordenação';
+        const tituloLimpo = titulo.trim();
+        const mensagemLimpa = mensagem.trim();
 
-        // 1. Grava o aviso na coleção de notificações para histórico e leitura no portal
-        await database.collection('notificacoes').insertOne({
-            id: "NOTI_WS_" + crypto.randomUUID(),
+        // 1. Descobrir exatamente os nomes de utilizador no Workspace (coleção 'usuarios')
+        const nomesDestinatarios = new Set();
+
+        if (alvoUserId && alvoUserId !== 'TODOS') {
+            // Busca a conta específica do aluno no Workspace
+            const contaUser = await database.collection('usuarios').findOne({
+                $or: [
+                    { id: String(alvoUserId) },
+                    ...(alunoRefId ? [{ alunoRefId: String(alunoRefId) }] : [])
+                ]
+            });
+
+            if (contaUser) {
+                const nomeExatoNoWS = (contaUser.nome || contaUser.login || '').trim();
+                if (nomeExatoNoWS) nomesDestinatarios.add(nomeExatoNoWS);
+            }
+            // Fallback de segurança caso o nome passado já seja o nome de login
+            if (nomesDestinatarios.size === 0 && nomeDestino) {
+                nomesDestinatarios.add(nomeDestino.trim());
+            }
+        } else {
+            // Se for "TODOS", busca todas as contas de alunos da escola no Workspace
+            const filtroEscola = escolaId !== 'DEFAULT' ? { escolaId: escolaId } : {};
+            const usuarios = await database.collection('usuarios').find(filtroEscola).toArray();
+            
+            usuarios.forEach(u => {
+                if (u.tipo === 'Aluno' || u.alunoRefId) {
+                    const nomeWS = (u.nome || u.login || '').trim();
+                    if (nomeWS) nomesDestinatarios.add(nomeWS);
+                }
+            });
+        }
+
+        const listaNomes = Array.from(nomesDestinatarios);
+        if (listaNomes.length === 0) {
+            return res.status(404).json({ error: 'Nenhum aluno com conta ativa no Workspace foi encontrado.' });
+        }
+
+        // 2. Grava na coleção oficial 'workspace_notificacoes' que o alertas.js do aluno lê!
+        const agoraIso = new Date().toISOString();
+        const notificacoesWorkspace = listaNomes.map(destNome => ({
+            id: 'notif_coord_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8),
             escolaId: escolaId,
-            tipo: "aviso_workspace_aluno",
-            destinatarioUserId: alvoUserId || 'TODOS_ALUNOS',
-            alunoRefId: alunoRefId || null,
-            nomeDestino: nomeDestino || 'Todos os Alunos',
-            titulo: titulo.trim(),
-            mensagem: mensagem.trim(),
-            enviadoPor: req.usuario.nome || req.usuario.login || 'Coordenação',
+            destinatarioNome: destNome,
+            remetenteNome: remetenteNome,
+            tituloAviso: tituloLimpo,
+            mensagem: `enviou um comunicado: <strong>"${tituloLimpo}"</strong> — ${mensagemLimpa}`,
+            origem: 'aviso_coordenacao',
+            origemId: 'feed',
+            destinoNome: tituloLimpo,
             lida: false,
-            dataCriacao: new Date().toISOString()
-        });
+            data: agoraIso
+        }));
 
-        // 2. Procura os aparelhos registados do(s) aluno(s) para disparar o Push no telemóvel
+        await database.collection('workspace_notificacoes').insertMany(notificacoesWorkspace);
+
+        // 3. Dispara o evento em TEMPO REAL no túnel SSE do Workspace!
+        // Como o alertas.js às vezes liga com 'DEFAULT' e às vezes com o ID da escola, emitimos para ambos se necessário
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'NOVA_NOTIFICACAO',
+                destinatarios: listaNomes,
+                escolaId: escolaId
+            });
+            if (escolaId !== 'DEFAULT') {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'NOVA_NOTIFICACAO',
+                    destinatarios: listaNomes,
+                    escolaId: 'DEFAULT'
+                });
+            }
+        }
+
+        // 4. Também dispara o Web Push caso o aluno tenha ativado notificações no telemóvel
         const filtroPush = (alvoUserId && alvoUserId !== 'TODOS')
-            ? { escolaId: escolaId, userId: String(alvoUserId) }
+            ? { userId: String(alvoUserId) }
             : { escolaId: escolaId, tipo: 'Aluno' };
 
         const aparelhosAlunos = await database.collection('push_subscriptions').find(filtroPush).toArray();
-
         let enviadosPush = 0;
+
         if (aparelhosAlunos.length > 0) {
             const payload = JSON.stringify({
-                title: titulo.trim(),
-                body: mensagem.trim(),
-                url: '/'
+                title: tituloLimpo,
+                body: mensagemLimpa,
+                url: '/workspace.html'
             });
 
             for (const ap of aparelhosAlunos) {
@@ -142,10 +203,9 @@ router.post('/enviar-aviso-aluno', verificarToken, async (req, res) => {
 
         res.status(200).json({
             success: true,
-            enviadosPush,
-            message: enviadosPush > 0
-                ? `Aviso registado e enviado via Push para ${enviadosPush} aparelho(s)!`
-                : `Aviso gravado no Workspace do aluno! (O aluno ainda não ativou o Push no telemóvel).`
+            enviadosWorkspace: listaNomes.length,
+            enviadosPush: enviadosPush,
+            message: `🚀 Aviso entregue ao vivo no Workspace para ${listaNomes.length} aluno(s)!`
         });
     } catch (error) {
         console.error('Erro ao enviar aviso para aluno:', error);
