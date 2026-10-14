@@ -346,7 +346,11 @@ router.post('/receber-matricula', async (req, res) => {
         // ====================================================================
         try {
             console.log("A disparar notificação push instantânea para a escola...");
-            const aparelhos = await database.collection('push_subscriptions').find({ escolaId: escolaId }).toArray();
+            // Filtra apenas aparelhos da equipa (exclui contas do tipo 'Aluno')
+            const aparelhos = await database.collection('push_subscriptions').find({ 
+                escolaId: escolaId, 
+                tipo: { $ne: 'Aluno' } 
+            }).toArray();
             
             if (aparelhos.length > 0) {
                 const payloadPush = JSON.stringify({

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const webpush = require('web-push');
+const crypto = require('crypto');
 const connectDB = require('../config/db');
 const jwt = require('jsonwebtoken');
 
@@ -11,7 +12,7 @@ webpush.setVapidDetails(
     process.env.VAPID_PRIVATE_KEY
 );
 
-// 🛡️ Middleware para identificar QUEM está a pedir a notificação
+// 🛡️ Middleware para identificar QUEM está a fazer o pedido
 const verificarToken = (req, res, next) => {
     const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Acesso negado.' });
@@ -40,7 +41,7 @@ router.post('/subscribe', verificarToken, async (req, res) => {
                 $set: { 
                     userId: req.usuario.id,
                     escolaId: req.usuario.escolaId,
-                    tipo: req.usuario.tipo || 'Gestor', // Guarda o cargo para filtrar avisos financeiros
+                    tipo: req.usuario.tipo || 'Gestor',
                     subscription: subscription,
                     dataRegistro: new Date().toISOString()
                 } 
@@ -62,7 +63,7 @@ router.post('/teste', verificarToken, async (req, res) => {
         const inscricoes = await database.collection('push_subscriptions').find({ userId: req.usuario.id }).toArray();
 
         if (inscricoes.length === 0) {
-            return res.status(404).json({ error: 'Nenhum aparelho registado. Clique em "Ativar Notificações" no menu.' });
+            return res.status(404).json({ error: 'Nenhum aparelho registado. Ative as notificações primeiro.' });
         }
 
         const payload = JSON.stringify({
@@ -83,6 +84,72 @@ router.post('/teste', verificarToken, async (req, res) => {
     } catch (error) {
         console.error('Erro no teste push:', error);
         res.status(500).json({ error: 'Falha ao enviar notificação.' });
+    }
+});
+
+// 🎓 ROTA 4 (NOVA): Enviar Aviso Direto para 1 Aluno ou Todos os Alunos do Workspace
+router.post('/enviar-aviso-aluno', verificarToken, async (req, res) => {
+    try {
+        const { alvoUserId, alunoRefId, nomeDestino, titulo, mensagem } = req.body;
+        if (!titulo || !mensagem) {
+            return res.status(400).json({ error: 'Preencha o título e a mensagem do aviso.' });
+        }
+
+        const database = await connectDB();
+        const escolaId = req.usuario.escolaId;
+
+        // 1. Grava o aviso na coleção de notificações para histórico e leitura no portal
+        await database.collection('notificacoes').insertOne({
+            id: "NOTI_WS_" + crypto.randomUUID(),
+            escolaId: escolaId,
+            tipo: "aviso_workspace_aluno",
+            destinatarioUserId: alvoUserId || 'TODOS_ALUNOS',
+            alunoRefId: alunoRefId || null,
+            nomeDestino: nomeDestino || 'Todos os Alunos',
+            titulo: titulo.trim(),
+            mensagem: mensagem.trim(),
+            enviadoPor: req.usuario.nome || req.usuario.login || 'Coordenação',
+            lida: false,
+            dataCriacao: new Date().toISOString()
+        });
+
+        // 2. Procura os aparelhos registados do(s) aluno(s) para disparar o Push no telemóvel
+        const filtroPush = (alvoUserId && alvoUserId !== 'TODOS')
+            ? { escolaId: escolaId, userId: String(alvoUserId) }
+            : { escolaId: escolaId, tipo: 'Aluno' };
+
+        const aparelhosAlunos = await database.collection('push_subscriptions').find(filtroPush).toArray();
+
+        let enviadosPush = 0;
+        if (aparelhosAlunos.length > 0) {
+            const payload = JSON.stringify({
+                title: titulo.trim(),
+                body: mensagem.trim(),
+                url: '/'
+            });
+
+            for (const ap of aparelhosAlunos) {
+                try {
+                    await webpush.sendNotification(ap.subscription, payload);
+                    enviadosPush++;
+                } catch (err) {
+                    if (err.statusCode === 410 || err.statusCode === 404) {
+                        await database.collection('push_subscriptions').deleteOne({ _id: ap._id });
+                    }
+                }
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            enviadosPush,
+            message: enviadosPush > 0
+                ? `Aviso registado e enviado via Push para ${enviadosPush} aparelho(s)!`
+                : `Aviso gravado no Workspace do aluno! (O aluno ainda não ativou o Push no telemóvel).`
+        });
+    } catch (error) {
+        console.error('Erro ao enviar aviso para aluno:', error);
+        res.status(500).json({ error: 'Erro ao enviar aviso para o aluno.' });
     }
 });
 
