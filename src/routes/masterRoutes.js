@@ -22,7 +22,36 @@ const verifyMaster = (req, res, next) => {
     }
 };
 
-// Função auxiliar para calcular a data de expiração e os dias restantes de cada escola
+// 🔍 Descobre o documento real da escola cruzando email e escolaId do utilizador
+async function localizarEscolaPorEmail(database, targetEmail) {
+    const emailEscapado = targetEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regexEmail = new RegExp(`^${emailEscapado}$`, 'i');
+
+    const usuario = await database.collection('usuarios').findOne({
+        $or: [{ login: regexEmail }, { email: regexEmail }]
+    });
+
+    const escolaId = usuario && usuario.escolaId ? usuario.escolaId : null;
+    const criterios = [{ email: regexEmail }];
+    if (escolaId) criterios.push({ escolaId: escolaId });
+    if (usuario && usuario.id) criterios.push({ donoId: usuario.id });
+
+    const docsEscola = await database.collection('escola').find({ $or: criterios }).toArray();
+    let escolaUnificada = null;
+
+    if (docsEscola.length > 0) {
+        escolaUnificada = {};
+        docsEscola.forEach(d => { escolaUnificada = { ...escolaUnificada, ...d }; });
+    }
+
+    const filtroAtualizacao = escolaId ? { escolaId: escolaId } : { email: targetEmail };
+    return {
+        escola: escolaUnificada,
+        escolaId: escolaId || (escolaUnificada ? escolaUnificada.escolaId : null),
+        filtroAtualizacao
+    };
+}
+
 function calcularEstadoValidade(escola, ativacao) {
     const agora = new Date();
     const planoRef = (escola && escola.plano) ? escola.plano : (ativacao && ativacao.plano ? ativacao.plano : 'Pendente');
@@ -56,7 +85,7 @@ function calcularEstadoValidade(escola, ativacao) {
 }
 
 // ==========================================
-// 1. LOGIN MASTER (À Prova de Falhas)
+// 1. LOGIN MASTER
 // ==========================================
 router.post('/login', async (req, res) => {
     try {
@@ -87,7 +116,7 @@ router.post('/login', async (req, res) => {
 });
 
 // ==========================================
-// 2. LISTAR TODAS AS ESCOLAS (Com Validade e Dias Restantes)
+// 2. LISTAR TODAS AS ESCOLAS
 // ==========================================
 router.get('/ativacoes', verifyMaster, async (req, res) => {
     try {
@@ -95,6 +124,7 @@ router.get('/ativacoes', verifyMaster, async (req, res) => {
         
         const ativacoes = await database.collection('ativacoes').find({}).toArray();
         const escolas = await database.collection('escola').find({}).toArray();
+        const usuarios = await database.collection('usuarios').find({}).toArray();
 
         const listaFinal = [];
         const emailsProcessados = new Set(); 
@@ -103,7 +133,11 @@ router.get('/ativacoes', verifyMaster, async (req, res) => {
             if (!a.email) continue;
             
             const email = String(a.email).toLowerCase().trim();
-            const escola = escolas.find(e => e.email && String(e.email).toLowerCase().trim() === email);
+            const user = usuarios.find(u => (u.login && String(u.login).toLowerCase().trim() === email) || (u.email && String(u.email).toLowerCase().trim() === email));
+            const escola = escolas.find(e => 
+                (e.email && String(e.email).toLowerCase().trim() === email) ||
+                (user && user.escolaId && e.escolaId === user.escolaId)
+            );
             
             let statusFinal = a.status ? a.status : 'Pendente';
             if (statusFinal === 'Ativo') statusFinal = 'Verificado';
@@ -149,7 +183,7 @@ router.get('/ativacoes', verifyMaster, async (req, res) => {
 });
 
 // ==========================================
-// 3. GERAR PIN OU ATIVAR/RENOVAR DIRETAMENTE
+// 3. GERAR PIN OU ATIVAR DIRETAMENTE (SINCRONIZADO COM ESCOLAID)
 // ==========================================
 router.post('/gerar-pin', verifyMaster, async (req, res) => {
     try {
@@ -159,18 +193,21 @@ router.post('/gerar-pin', verifyMaster, async (req, res) => {
         const database = await connectDB();
         const targetEmail = String(email).toLowerCase().trim();
         const dias = parseInt(diasValidade) ? parseInt(diasValidade) : (plano === 'Teste' ? 7 : 30);
-        const modo = modoAtivacao ? modoAtivacao : 'pin'; // 'pin' ou 'direto'
+        const modo = modoAtivacao ? modoAtivacao : 'pin';
 
-        const escolaExistente = await database.collection('escola').findOne({ email: targetEmail });
+        const { escola: escolaExistente, escolaId, filtroAtualizacao } = await localizarEscolaPorEmail(database, targetEmail);
         const agora = new Date();
 
-        // Se o CEO escolheu "Ativar Diretamente" (sem obrigar o cliente a digitar PIN)
+        const prefix = String(plano).substring(0, 3).toUpperCase();
+        const randomCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+        const pin = `${prefix}-${randomCode}`;
+
         if (modo === 'direto') {
             let baseData = agora;
             if (escolaExistente && escolaExistente.dataExpiracao && escolaExistente.plano !== 'Teste' && escolaExistente.plano !== 'Bloqueado') {
                 const expAtual = new Date(escolaExistente.dataExpiracao);
                 if (!isNaN(expAtual.getTime()) && expAtual > agora) {
-                    baseData = expAtual; // Renovação cumulativa!
+                    baseData = expAtual;
                 }
             }
             const novaDataExp = new Date(baseData.getTime() + (dias * 24 * 60 * 60 * 1000)).toISOString();
@@ -184,6 +221,7 @@ router.post('/gerar-pin', verifyMaster, async (req, res) => {
                         plano: plano,
                         diasValidade: dias,
                         pinAtivacao: '',
+                        ultimoPinGerado: pin,
                         status: 'Ativo',
                         dataAtivacao: agoraIso,
                         dataExpiracao: novaDataExp
@@ -191,40 +229,42 @@ router.post('/gerar-pin', verifyMaster, async (req, res) => {
                 },
                 { upsert: true }
             );
+
+            const dadosEscola = {
+                email: targetEmail,
+                plano: plano,
+                status: 'Ativo',
+                dataAtivacao: agoraIso,
+                dataExpiracao: novaDataExp
+            };
+            if (escolaId) dadosEscola.escolaId = escolaId;
 
             await database.collection('escola').updateOne(
-                { email: targetEmail },
-                {
-                    $set: {
-                        email: targetEmail,
-                        plano: plano,
-                        status: 'Ativo',
-                        dataAtivacao: agoraIso,
-                        dataExpiracao: novaDataExp
-                    }
-                },
+                filtroAtualizacao,
+                { $set: dadosEscola },
                 { upsert: true }
             );
 
-            if (escolaExistente && escolaExistente.escolaId && global.escolaEmitter) {
-                global.escolaEmitter.emit('atualizacao-escola', escolaExistente.escolaId);
+            // Remove eventuais duplicados órfãos sem escolaId
+            if (escolaId) {
+                await database.collection('escola').deleteMany({
+                    email: targetEmail,
+                    escolaId: { $ne: escolaId }
+                });
+                if (global.escolaEmitter) global.escolaEmitter.emit('atualizacao-escola', escolaId);
             }
 
             return res.json({
                 success: true,
                 modo: 'direto',
-                pin: '',
+                pin: pin,
                 plano: plano,
                 dias: dias,
                 dataExpiracao: novaDataExp
             });
         }
 
-        // Modo Padrão: Gera o PIN para o cliente ativar no primeiro acesso ou no menu Meu Plano
-        const prefix = String(plano).substring(0, 3).toUpperCase();
-        const randomCode = crypto.randomBytes(3).toString('hex').toUpperCase();
-        const pin = `${prefix}-${randomCode}`;
-
+        // Modo PIN: Gera o PIN e deixa pronto para o cliente validar em "Meu Plano" ou no Cadastro Inicial
         await database.collection('ativacoes').updateOne(
             { email: targetEmail },
             {
@@ -233,6 +273,7 @@ router.post('/gerar-pin', verifyMaster, async (req, res) => {
                     plano: plano,
                     diasValidade: dias,
                     pinAtivacao: pin,
+                    ultimoPinGerado: pin,
                     status: 'Aguardando Ativação'
                 }
             },
@@ -247,7 +288,7 @@ router.post('/gerar-pin', verifyMaster, async (req, res) => {
 });
 
 // ==========================================
-// 4. BLOQUEAR CONTA (Guardando o Plano Anterior)
+// 4. BLOQUEAR CONTA
 // ==========================================
 router.post('/bloquear', verifyMaster, async (req, res) => {
     try {
@@ -256,7 +297,8 @@ router.post('/bloquear', verifyMaster, async (req, res) => {
 
         const database = await connectDB();
         const target = String(email).toLowerCase().trim();
-        const escolaAtual = await database.collection('escola').findOne({ email: target });
+        const { escola: escolaAtual, escolaId, filtroAtualizacao } = await localizarEscolaPorEmail(database, target);
+
         const planoAnterior = (escolaAtual && escolaAtual.plano && escolaAtual.plano !== 'Bloqueado')
             ? escolaAtual.plano
             : 'Profissional';
@@ -265,13 +307,14 @@ router.post('/bloquear', verifyMaster, async (req, res) => {
             { email: target },
             { $set: { status: 'Bloqueado', planoAnterior: planoAnterior } }
         );
-        await database.collection('escola').updateOne(
-            { email: target },
-            { $set: { plano: 'Bloqueado', status: 'Bloqueado', planoAnterior: planoAnterior } }
-        );
 
-        if (escolaAtual && escolaAtual.escolaId && global.escolaEmitter) {
-            global.escolaEmitter.emit('atualizacao-escola', escolaAtual.escolaId);
+        const dadosBloqueio = { email: target, plano: 'Bloqueado', status: 'Bloqueado', planoAnterior: planoAnterior };
+        if (escolaId) dadosBloqueio.escolaId = escolaId;
+
+        await database.collection('escola').updateOne(filtroAtualizacao, { $set: dadosBloqueio });
+
+        if (escolaId && global.escolaEmitter) {
+            global.escolaEmitter.emit('atualizacao-escola', escolaId);
         }
 
         res.json({ success: true });
@@ -291,7 +334,7 @@ router.post('/desbloquear', verifyMaster, async (req, res) => {
 
         const database = await connectDB();
         const target = String(email).toLowerCase().trim();
-        const escola = await database.collection('escola').findOne({ email: target });
+        const { escola, escolaId, filtroAtualizacao } = await localizarEscolaPorEmail(database, target);
         const ativacao = await database.collection('ativacoes').findOne({ email: target });
 
         const planoRestaurado = (escola && escola.planoAnterior)
@@ -302,7 +345,6 @@ router.post('/desbloquear', verifyMaster, async (req, res) => {
         let novaDataExp = (escola && escola.dataExpiracao) ? new Date(escola.dataExpiracao) : agora;
         const diasSomar = parseInt(diasExtras) ? parseInt(diasExtras) : 30;
 
-        // Se a validade já estava vencida, concede novos dias a partir de hoje para não bloquear novamente no login
         if (isNaN(novaDataExp.getTime()) || novaDataExp <= agora) {
             novaDataExp = new Date(agora.getTime() + (diasSomar * 24 * 60 * 60 * 1000));
         }
@@ -322,20 +364,26 @@ router.post('/desbloquear', verifyMaster, async (req, res) => {
             { upsert: true }
         );
 
+        const dadosDesbloqueio = {
+            email: target,
+            plano: planoRestaurado,
+            status: 'Ativo',
+            dataExpiracao: novaDataExpIso
+        };
+        if (escolaId) dadosDesbloqueio.escolaId = escolaId;
+
         await database.collection('escola').updateOne(
-            { email: target },
-            {
-                $set: {
-                    plano: planoRestaurado,
-                    status: 'Ativo',
-                    dataExpiracao: novaDataExpIso
-                }
-            },
+            filtroAtualizacao,
+            { $set: dadosDesbloqueio },
             { upsert: true }
         );
 
-        if (escola && escola.escolaId && global.escolaEmitter) {
-            global.escolaEmitter.emit('atualizacao-escola', escola.escolaId);
+        if (escolaId) {
+            await database.collection('escola').deleteMany({
+                email: target,
+                escolaId: { $ne: escolaId }
+            });
+            if (global.escolaEmitter) global.escolaEmitter.emit('atualizacao-escola', escolaId);
         }
 
         res.json({ success: true, plano: planoRestaurado, dataExpiracao: novaDataExpIso });
@@ -355,10 +403,9 @@ router.post('/excluir-conta', verifyMaster, async (req, res) => {
 
         const target = String(email).toLowerCase().trim();
         const database = await connectDB();
-        const escola = await database.collection('escola').findOne({ email: target });
-        const id = escola ? escola.escolaId : null;
+        const { escolaId } = await localizarEscolaPorEmail(database, target);
 
-        if (id) {
+        if (escolaId) {
             const colecoes = [
                 'alunos', 'turmas', 'cursos', 'financeiro', 'eventos',
                 'chamadas', 'avaliacoes', 'planejamentos', 'usuarios',
@@ -366,10 +413,11 @@ router.post('/excluir-conta', verifyMaster, async (req, res) => {
                 'workspace_notificacoes', 'workspace_entregas', 'workspace_materiais'
             ];
             for (const col of colecoes) {
-                await database.collection(col).deleteMany({ escolaId: id });
+                await database.collection(col).deleteMany({ escolaId: escolaId });
             }
+            await database.collection('escola').deleteMany({ escolaId: escolaId });
         }
-        await database.collection('escola').deleteOne({ email: target });
+        await database.collection('escola').deleteMany({ email: target });
         await database.collection('usuarios').deleteMany({ login: target });
         await database.collection('ativacoes').deleteOne({ email: target });
         res.json({ success: true, message: 'Conta obliterada.' });
@@ -380,7 +428,7 @@ router.post('/excluir-conta', verifyMaster, async (req, res) => {
 });
 
 // ==========================================
-// 6. NOTIFICAÇÕES MASTER (Sincronizadas com dataExpiracao Real)
+// 6. NOTIFICAÇÕES MASTER
 // ==========================================
 router.get('/notificacoes', verifyMaster, async (req, res) => {
     try {

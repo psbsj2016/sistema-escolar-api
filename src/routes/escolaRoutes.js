@@ -11,13 +11,81 @@ if (!global.escolaEmitter) {
     global.escolaEmitter = new EventEmitter();
 }
 
+// 🔍 Função Auxiliar: Encontra e unifica o registo da escola por escolaId, donoId e E-mail
+async function obterEscolaUnificada(db, req) {
+    const usuarioLogado = await db.collection('usuarios').findOne({
+        $or: [{ id: req.userId }, { escolaId: req.escolaId }]
+    });
+
+    const emailUsuario = usuarioLogado && (usuarioLogado.email || usuarioLogado.login)
+        ? String(usuarioLogado.email || usuarioLogado.login).toLowerCase().trim()
+        : '';
+
+    const criterios = [{ escolaId: req.escolaId }];
+    if (req.userId) criterios.push({ donoId: req.userId });
+    if (emailUsuario) {
+        const emailEscapado = emailUsuario.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        criterios.push({ email: new RegExp(`^${emailEscapado}$`, 'i') });
+    }
+
+    const docsEscola = await db.collection('escola').find({ $or: criterios }).toArray();
+    const ativacao = emailUsuario
+        ? await db.collection('ativacoes').findOne({ email: emailUsuario })
+        : null;
+
+    if (docsEscola.length === 0 && !ativacao) {
+        return { escola: null, emailUsuario, ativacao: null };
+    }
+
+    // Junta todos os campos caso existissem 2 documentos separados (um com escolaId e outro com email)
+    let escolaUnificada = {};
+    docsEscola.forEach(doc => {
+        escolaUnificada = { ...escolaUnificada, ...doc };
+    });
+
+    // Dá prioridade ao plano e dataExpiracao mais recentes vindos do documento com email ou da ativação
+    const docPorEmail = docsEscola.find(d => d.email && String(d.email).toLowerCase().trim() === emailUsuario);
+    if (docPorEmail && docPorEmail.plano) {
+        escolaUnificada.plano = docPorEmail.plano;
+        if (docPorEmail.dataExpiracao) escolaUnificada.dataExpiracao = docPorEmail.dataExpiracao;
+    }
+
+    if (ativacao && (ativacao.status === 'Ativo' || ativacao.status === 'Verificado')) {
+        if (ativacao.plano && (!escolaUnificada.plano || escolaUnificada.plano === 'Teste')) {
+            escolaUnificada.plano = ativacao.plano;
+        }
+        if (ativacao.dataExpiracao && !escolaUnificada.dataExpiracao) {
+            escolaUnificada.dataExpiracao = ativacao.dataExpiracao;
+        }
+    }
+
+    escolaUnificada.escolaId = req.escolaId || escolaUnificada.escolaId;
+    if (emailUsuario) escolaUnificada.email = emailUsuario;
+
+    // Se havia mais de 1 documento para a mesma escola, unifica no banco de dados automaticamente
+    if (docsEscola.length > 1) {
+        const idPrincipal = docsEscola[0]._id;
+        const { _id, ...dadosSemId } = escolaUnificada;
+        await db.collection('escola').updateOne({ _id: idPrincipal }, { $set: dadosSemId });
+        const idsDuplicados = docsEscola.slice(1).map(d => d._id);
+        await db.collection('escola').deleteMany({ _id: { $in: idsDuplicados } });
+    }
+
+    return { escola: escolaUnificada, emailUsuario, ativacao };
+}
+
 router.get('/', async (req, res) => {
     try {
         const db = await connectDB();
-        const data = await db.collection('escola').findOne({ $or: [{ escolaId: req.escolaId }, { donoId: req.userId }] });
-        if (data) delete data._id;
-        res.json(data || {});
+        const { escola } = await obterEscolaUnificada(db, req);
+        if (escola) {
+            const copia = { ...escola };
+            delete copia._id;
+            return res.json(copia);
+        }
+        res.json({});
     } catch (error) {
+        console.error('Erro em GET /escola:', error);
         res.status(500).json({ error: 'Erro ao carregar dados da escola.' });
     }
 });
@@ -25,12 +93,15 @@ router.get('/', async (req, res) => {
 router.put('/', async (req, res) => {
     try {
         const db = await connectDB();
-        // 🛡️ BLINDAGEM DE SEGURANÇA: Impede que o navegador altere 'plano' ou 'dataExpiracao' sem validar PIN
+        const { emailUsuario } = await obterEscolaUnificada(db, req);
         const { _id, plano, dataExpiracao, pinUsado, ...dadosPerfilSeguros } = req.body;
-        
+
+        const payload = { ...dadosPerfilSeguros, escolaId: req.escolaId };
+        if (emailUsuario) payload.email = emailUsuario;
+
         await db.collection('escola').updateOne(
             { escolaId: req.escolaId },
-            { $set: { ...dadosPerfilSeguros, escolaId: req.escolaId } },
+            { $set: payload },
             { upsert: true }
         );
         
@@ -44,7 +115,7 @@ router.put('/', async (req, res) => {
     }
 });
 
-// 🔐 VALIDAÇÃO DE PIN 100% NO SERVIDOR (COM RENOVAÇÃO CUMULATIVA)
+// 🔐 VALIDAÇÃO DE PIN BLINDADA (Sem Erro 404 indevido + Renovação Cumulativa)
 router.post('/validar-pin', async (req, res) => {
     try {
         const pinLimpo = String(req.body.pin ? req.body.pin : '').trim().toUpperCase();
@@ -53,45 +124,54 @@ router.post('/validar-pin', async (req, res) => {
         }
 
         const db = await connectDB();
-        const escolaAtual = await db.collection('escola').findOne({ $or: [{ escolaId: req.escolaId }, { donoId: req.userId }] });
+        const { escola: escolaAtual, emailUsuario } = await obterEscolaUnificada(db, req);
 
-        // Aceita tanto 'Pendente' quanto 'Aguardando Ativação' ou 'Aguardando'
-        const ativacao = await db.collection('ativacoes').findOne({
-            pinAtivacao: pinLimpo,
-            status: { $in: ['Pendente', 'Aguardando Ativação', 'Aguardando'] }
+        // 1. Procura o PIN na coleção 'ativacoes' (mesmo que o status já esteja como Ativo/Verificado/Pendente)
+        let ativacao = await db.collection('ativacoes').findOne({
+            $or: [
+                { pinAtivacao: pinLimpo },
+                { ultimoPinGerado: pinLimpo }
+            ]
         });
 
-        if (!ativacao) {
-            return res.status(404).json({ error: 'PIN inválido, expirado ou já utilizado.' });
+        // 2. Fallback: Se o CEO ativou direto pelo Painel Master, encontra pelo e-mail da escola
+        if (!ativacao && emailUsuario) {
+            const ativPorEmail = await db.collection('ativacoes').findOne({ email: emailUsuario });
+            if (ativPorEmail && (ativPorEmail.status === 'Ativo' || ativPorEmail.status === 'Verificado')) {
+                ativacao = ativPorEmail;
+            }
         }
 
-        // Se o PIN foi gerado para um e-mail específico, garante que pertence a esta escola
-        if (escolaAtual && escolaAtual.email && ativacao.email) {
-            const emailEscola = String(escolaAtual.email).toLowerCase().trim();
-            const emailPin = String(ativacao.email).toLowerCase().trim();
-            if (emailEscola !== emailPin) {
-                return res.status(403).json({ error: 'Este PIN pertence a outra instituição.' });
-            }
+        if (!ativacao) {
+            return res.status(400).json({ error: 'PIN inválido, expirado ou já utilizado.' });
         }
 
         const novoPlano = ativacao.plano ? ativacao.plano : 'Profissional';
         const diasAdicionar = parseInt(ativacao.diasValidade) ? parseInt(ativacao.diasValidade) : (novoPlano === 'Teste' ? 7 : 30);
 
-        // 📅 CÁLCULO CUMULATIVO: Se a escola ainda tem dias vigentes (e não era plano Teste), soma a partir do vencimento atual
+        // 📅 CÁLCULO CUMULATIVO: Soma os dias se o plano já não tiver sido somado no modo direto
         const agora = new Date();
-        let baseCalculo = agora;
-        if (escolaAtual && escolaAtual.dataExpiracao && escolaAtual.plano !== 'Teste' && escolaAtual.plano !== 'Bloqueado') {
-            const expAtual = new Date(escolaAtual.dataExpiracao);
-            if (!isNaN(expAtual.getTime()) && expAtual > agora) {
-                baseCalculo = expAtual;
+        let novaDataExpIso = ativacao.dataExpiracao;
+
+        // Se o PIN estava aguardando uso, calcula a nova data de expiração somando os dias
+        if (ativacao.pinAtivacao === pinLimpo) {
+            let baseCalculo = agora;
+            if (escolaAtual && escolaAtual.dataExpiracao && escolaAtual.plano !== 'Teste' && escolaAtual.plano !== 'Bloqueado') {
+                const expAtual = new Date(escolaAtual.dataExpiracao);
+                if (!isNaN(expAtual.getTime()) && expAtual > agora) {
+                    baseCalculo = expAtual;
+                }
             }
+            const novaDataExp = new Date(baseCalculo.getTime() + (diasAdicionar * 24 * 60 * 60 * 1000));
+            novaDataExpIso = novaDataExp.toISOString();
+        } else if (!novaDataExpIso) {
+            novaDataExpIso = new Date(agora.getTime() + (diasAdicionar * 24 * 60 * 60 * 1000)).toISOString();
         }
 
-        const novaDataExp = new Date(baseCalculo.getTime() + (diasAdicionar * 24 * 60 * 60 * 1000));
         const agoraIso = agora.toISOString();
-        const novaDataExpIso = novaDataExp.toISOString();
+        const emailFinal = emailUsuario || ativacao.email || '';
 
-        // 1. Atualiza a coleção 'ativacoes' marcando como Ativo e inutilizando o PIN já usado
+        // Atualiza a coleção 'ativacoes'
         await db.collection('ativacoes').updateOne(
             { _id: ativacao._id },
             {
@@ -106,21 +186,30 @@ router.post('/validar-pin', async (req, res) => {
             }
         );
 
-        // 2. Atualiza a coleção 'escola' com o novo plano e a nova validade
-        const filtroEscola = escolaAtual && escolaAtual.escolaId ? { escolaId: escolaAtual.escolaId } : { escolaId: req.escolaId };
+        // Atualiza a coleção 'escola' vinculando escolaId e email no mesmo documento
+        const dadosAtualizadosEscola = {
+            escolaId: req.escolaId,
+            plano: novoPlano,
+            status: 'Ativo',
+            pinUsado: pinLimpo,
+            dataAtivacao: agoraIso,
+            dataExpiracao: novaDataExpIso
+        };
+        if (emailFinal) dadosAtualizadosEscola.email = emailFinal;
+
         await db.collection('escola').updateOne(
-            filtroEscola,
-            {
-                $set: {
-                    plano: novoPlano,
-                    status: 'Ativo',
-                    pinUsado: pinLimpo,
-                    dataAtivacao: agoraIso,
-                    dataExpiracao: novaDataExpIso
-                }
-            },
+            { escolaId: req.escolaId },
+            { $set: dadosAtualizadosEscola },
             { upsert: true }
         );
+
+        // Limpa eventuais documentos órfãos que tinham apenas email sem escolaId
+        if (emailFinal) {
+            await db.collection('escola').deleteMany({
+                email: emailFinal,
+                escolaId: { $ne: req.escolaId }
+            });
+        }
 
         if (global.escolaEmitter) {
             global.escolaEmitter.emit('atualizacao-escola', req.escolaId);
