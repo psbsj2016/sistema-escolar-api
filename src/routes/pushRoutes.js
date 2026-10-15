@@ -262,7 +262,7 @@ router.post('/enviar-aviso-aluno', verificarToken, async (req, res) => {
             remetenteNome: remetenteNome,
             tituloAviso: tituloLimpo,
             textoAvisoPuro: mensagemLimpa,
-            mensagem: `enviou um comunicado: <strong>"${tituloLimpo}"</strong> — ${mensagemLimpa}`,
+            mensagem: ` enviou um comunicado: <strong>"${tituloLimpo}"</strong> — ${mensagemLimpa}`,
             origem: 'aviso_coordenacao',
             origemId: 'feed',
             destinoNome: tituloLimpo,

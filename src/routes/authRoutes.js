@@ -14,7 +14,7 @@ const {
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const JWT_SECRET = process.env.JWT_SECRET;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://www.sistemaptt.com.br';
+const FRONTEND_URL = process.env.FRONTEND_URL ? process.env.FRONTEND_URL : 'https://www.sistemaptt.com.br';
 const isProduction = process.env.NODE_ENV === 'production';
 
 router.post('/enviar-codigo', async (req, res) => {
@@ -36,47 +36,113 @@ router.post('/enviar-codigo', async (req, res) => {
         if (respostaResend.error) return res.status(500).json({ error: 'Falha no servidor de e-mail. Tente novamente.' });
 
         const database = await connectDB();
-        await database.collection('ativacoes').updateOne({ email }, { $set: { email, codigoValidacao: codigoGerado, expiracaoCodigo: validade, status: 'Pendente' } }, { upsert: true });
+        // Preserva o PIN e o plano caso o CEO já tenha gerado um Cadastro VIP antes para este e-mail
+        await database.collection('ativacoes').updateOne(
+            { email },
+            {
+                $set: { email, codigoValidacao: codigoGerado, expiracaoCodigo: validade },$setOnInsert: { status: 'Pendente' }
+            },
+            { upsert: true }
+        );
         
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: 'Erro interno ao processar envio.' }); }
 });
 
 router.post('/validar-cadastro', async (req, res) => {
-    let { email, codigo, pin } = req.body;
-    email = email.toLowerCase().trim();
-    const database = await connectDB();
-    const ativacao = await database.collection('ativacoes').findOne({ email });
+    try {
+        let { email, codigo, pin } = req.body;
+        if (!email || !codigo || !pin) {
+            return res.status(400).json({ error: 'Preencha todos os campos.' });
+        }
 
-    if (!ativacao || ativacao.pinAtivacao?.toUpperCase() !== pin.toUpperCase() || ativacao.codigoValidacao !== codigo) {
-        return res.status(401).json({ error: 'Dados inválidos ou expirados.' });
+        email = email.toLowerCase().trim();
+        const pinLimpo = String(pin).trim().toUpperCase();
+        const database = await connectDB();
+        const ativacao = await database.collection('ativacoes').findOne({ email });
+
+        const pinGuardado = ativacao && ativacao.pinAtivacao ? String(ativacao.pinAtivacao).trim().toUpperCase() : '';
+        if (!ativacao || !pinGuardado || pinGuardado !== pinLimpo || String(ativacao.codigoValidacao) !== String(codigo).trim()) {
+            return res.status(401).json({ error: 'Código ou PIN inválidos ou expirados.' });
+        }
+
+        // Verifica se a escola já existia para manter o mesmo escolaId, ou gera um novo
+        const escolaExistente = await database.collection('escola').findOne({ email });
+        const escolaId = (escolaExistente && escolaExistente.escolaId)
+            ? escolaExistente.escolaId
+            : 'ESC-' + crypto.randomUUID().split('-')[0].toUpperCase();
+
+        // Define o plano e os dias exatos (7 dias se for Teste, 30 dias padrão ou o período definido pelo CEO)
+        const planoContratado = ativacao.plano ? ativacao.plano : 'Profissional';
+        const diasValidade = parseInt(ativacao.diasValidade)
+            ? parseInt(ativacao.diasValidade)
+            : (planoContratado === 'Teste' ? 7 : 30);
+
+        const agora = new Date();
+        const dataVenc = new Date(agora.getTime() + (diasValidade * 24 * 60 * 60 * 1000));
+        const agoraIso = agora.toISOString();
+        const dataVencIso = dataVenc.toISOString();
+        const senhaHash = await bcrypt.hash("123", 10);
+
+        await database.collection('escola').updateOne(
+            { email },
+            {
+                $set: { escolaId, email, plano: planoContratado, status: 'Ativo', dataAtivacao: agoraIso, dataExpiracao: dataVencIso },$setOnInsert: { dataCriacao: agoraIso }
+            },
+            { upsert: true }
+        );
+
+        // 🛡️ ANTI-DUPLICAÇÃO: Cria o utilizador Gestor apenas se ainda não existir conta para este e-mail
+        const usuarioExistente = await database.collection('usuarios').findOne({ login: email });
+        if (!usuarioExistente) {
+            await database.collection('usuarios').insertOne({
+                id: crypto.randomUUID(),
+                escolaId,
+                login: email,
+                email: email,
+                senha: senhaHash,
+                tipo: "Gestor",
+                isDono: true
+            });
+        } else {
+            await database.collection('usuarios').updateOne(
+                { login: email },
+                { $set: { escolaId } }
+            );
+        }
+
+        await database.collection('ativacoes').updateOne(
+            { email },
+            {
+                $unset: { codigoValidacao: "", expiracaoCodigo: "" },
+                $set: {
+                    status: 'Ativo',
+                    plano: planoContratado,
+                    dataAtivacao: agoraIso,
+                    dataExpiracao: dataVencIso,
+                    pinAtivacao: '',
+                    ultimoPinUsado: pinLimpo
+                }
+            }
+        );
+
+        res.json({ success: true, plano: planoContratado, dataExpiracao: dataVencIso });
+    } catch (error) {
+        console.error('Erro em validar-cadastro:', error);
+        res.status(500).json({ error: 'Erro interno ao validar cadastro.' });
     }
-
-    const escolaId = 'ESC-' + crypto.randomUUID().split('-')[0].toUpperCase();
-    const dataVenc = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    const senhaHash = await bcrypt.hash("123", 10);
-
-    await database.collection('escola').updateOne({ email }, { $set: { escolaId, email, plano: ativacao.plano || 'Profissional', dataExpiracao: dataVenc.toISOString() } }, { upsert: true });
-    await database.collection('usuarios').insertOne({ id: crypto.randomUUID(), escolaId, login: email, senha: senhaHash, tipo: "Gestor", isDono: true });
-    await database.collection('ativacoes').updateOne({ email }, { $unset: { codigoValidacao: "", expiracaoCodigo: "" }, $set: { status: 'Ativo', dataAtivacao: new Date().toISOString() } });
-
-    res.json({ success: true });
 });
 
 router.post('/login', async (req, res) => {
-    // 1. Extraímos o parâmetro 'sistema' para saber de onde vem o pedido
     let { login, senha, sistema } = req.body;
     const database = await connectDB();
     const user = await database.collection('usuarios').findOne({ login: new RegExp(`^${login.replace('*FORCAR','')}$`, 'i') });
     
-    // Verifica se o utilizador existe e a senha está correta
     if (!user || !(await bcrypt.compare(senha, user.senha))) {
         return res.status(401).json({ error: 'Credenciais inválidas.' });
     }
     
-    // ====================================================================
     // 🛑 PROTEÇÃO RBAC: IMPEDE ALUNOS DE ACEDEREM AO PAINEL ADMINISTRATIVO
-    // ====================================================================
     if (user.tipo === 'Aluno' && sistema !== 'workspace') {
         return res.status(403).json({ error: 'Acesso negado. Área restrita. Faça login através do Portal do Aluno.' });
     }
@@ -128,7 +194,7 @@ router.post('/recuperar-senha', async (req, res) => {
     const database = await connectDB();
     const user = await database.collection('usuarios').findOne({ $or: [{ login: email }, { email }] });
 
-    if (!user || user.status?.toLowerCase() === 'inativo') return res.status(200).json({ success: true, message: "Link enviado." });
+    if (!user || (user.status && user.status.toLowerCase() === 'inativo')) return res.status(200).json({ success: true, message: "Link enviado." });
 
     const tokenLimpo = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(tokenLimpo).digest('hex');
@@ -185,12 +251,11 @@ const rpName = 'Sistema PTT';
 const getOriginInfo = (req) => {
     let origin = req.headers.origin;
     if (!origin && req.headers.referer) origin = new URL(req.headers.referer).origin;
-    if (!origin) origin = process.env.FRONTEND_URL || 'https://sistemaptt.com.br';
+    if (!origin) origin = process.env.FRONTEND_URL ? process.env.FRONTEND_URL : 'https://sistemaptt.com.br';
     origin = origin.replace(/\/$/, '');
     return { expectedOrigin: origin, rpID: new URL(origin).hostname };
 };
 
-// 1. Apagar Biometria
 router.post('/biometria/remover', async (req, res) => {
     try {
         const { login } = req.body;
@@ -204,7 +269,6 @@ router.post('/biometria/remover', async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao remover' }); }
 });
 
-// 2. Gerar Registo
 router.post('/biometria/gerar-registo', async (req, res) => {
     try {
         const { login } = req.body;
@@ -219,7 +283,6 @@ router.post('/biometria/gerar-registo', async (req, res) => {
             rpID,
             userID: new Uint8Array(Buffer.from(user.id, 'utf8')), 
             userName: user.login,
-            // Permite substituir biometrias antigas bloqueadas sem crashar
             authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
         });
 
@@ -231,7 +294,6 @@ router.post('/biometria/gerar-registo', async (req, res) => {
     }
 });
 
-// 3. Verificar Registo
 router.post('/biometria/verificar-registo', async (req, res) => {
     try {
         const { login, respostaBio } = req.body;
@@ -250,11 +312,10 @@ router.post('/biometria/verificar-registo', async (req, res) => {
 
         if (verification.verified) {
             const { registrationInfo } = verification;
-            const cred = registrationInfo.credential || registrationInfo;
-            const credID = cred.id || cred.credentialID;
-            const credPublicKey = cred.publicKey || cred.credentialPublicKey;
+            const cred = registrationInfo.credential ? registrationInfo.credential : registrationInfo;
+            const credID = cred.id ? cred.id : cred.credentialID;
+            const credPublicKey = cred.publicKey ? cred.publicKey : cred.credentialPublicKey;
 
-            // Apaga biometrias velhas para evitar duplicação no telemóvel
             await database.collection('biometria').deleteMany({ userId: user.id });
 
             await database.collection('biometria').insertOne({
@@ -262,7 +323,7 @@ router.post('/biometria/verificar-registo', async (req, res) => {
                 credentialID: typeof credID === 'string' ? credID : Buffer.from(credID).toString('base64url'),
                 credentialPublicKey: Buffer.from(credPublicKey).toString('base64url'),
                 counter: cred.counter,
-                deviceType: registrationInfo.credentialDeviceType || 'platform',
+                deviceType: registrationInfo.credentialDeviceType ? registrationInfo.credentialDeviceType : 'platform',
                 dataCriacao: new Date().toISOString()
             });
             await database.collection('usuarios').updateOne({ id: user.id }, { $unset: { currentChallenge: "" } });
@@ -275,7 +336,6 @@ router.post('/biometria/verificar-registo', async (req, res) => {
     }
 });
 
-// 4. Gerar Login
 router.post('/biometria/gerar-login', async (req, res) => {
     try {
         const { login } = req.body;
@@ -305,7 +365,6 @@ router.post('/biometria/gerar-login', async (req, res) => {
     }
 });
 
-// 5. Verificar Login
 router.post('/biometria/verificar-login', async (req, res) => {
     try {
         const { login, respostaBio } = req.body;
@@ -329,7 +388,7 @@ router.post('/biometria/verificar-login', async (req, res) => {
             credential: {
                 id: passkey.credentialID,
                 publicKey: new Uint8Array(Buffer.from(passkey.credentialPublicKey, 'base64url')),
-                counter: passkey.counter || 0,
+                counter: passkey.counter ? passkey.counter : 0,
             },
         });
 
