@@ -7,14 +7,15 @@ const jwt = require('jsonwebtoken');
 
 // ⚙️ 1. Ligar o Motor com as Chaves do Render
 webpush.setVapidDetails(
-    process.env.VAPID_SUBJECT || 'mailto:contato@sistemaptt.com.br',
+    process.env.VAPID_SUBJECT ? process.env.VAPID_SUBJECT : 'mailto:contato@sistemaptt.com.br',
     process.env.VAPID_PUBLIC_KEY,
     process.env.VAPID_PRIVATE_KEY
 );
 
 // 🛡️ Middleware para identificar QUEM está a fazer o pedido
 const verificarToken = (req, res, next) => {
-    const token = req.cookies?.token_acesso || req.headers.authorization?.split(' ')[1];
+    const authHeader = req.headers.authorization ? req.headers.authorization.split(' ')[1] : null;
+    const token = (req.cookies && req.cookies.token_acesso) ? req.cookies.token_acesso : authHeader;
     if (!token) return res.status(401).json({ error: 'Acesso negado.' });
     try {
         req.usuario = jwt.verify(token, process.env.JWT_SECRET);
@@ -41,7 +42,7 @@ router.post('/subscribe', verificarToken, async (req, res) => {
                 $set: { 
                     userId: req.usuario.id,
                     escolaId: req.usuario.escolaId,
-                    tipo: req.usuario.tipo || 'Gestor',
+                    tipo: req.usuario.tipo ? req.usuario.tipo : 'Gestor',
                     subscription: subscription,
                     dataRegistro: new Date().toISOString()
                 } 
@@ -87,59 +88,172 @@ router.post('/teste', verificarToken, async (req, res) => {
     }
 });
 
-// 🎓 ROTA 4: Enviar Aviso Direto para o Sininho/Tela do Workspace do Aluno + Web Push
+// ============================================================================
+// 🗂️ ROTAS DE MENSAGENS SALVAS (PARA REUTILIZAR EM OUTROS MOMENTOS)
+// ============================================================================
+
+// Listar mensagens salvas da escola
+router.get('/avisos-salvos', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const escolaId = req.usuario.escolaId ? req.usuario.escolaId : 'DEFAULT';
+        const filtro = escolaId !== 'DEFAULT' ? { $or: [{ escolaId: escolaId }, { escolaId: 'DEFAULT' }] } : {};
+        
+        const salvos = await database.collection('workspace_avisos_salvos')
+            .find(filtro)
+            .sort({ dataCriacao: -1 })
+            .limit(50)
+            .toArray();
+
+        res.status(200).json(salvos);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao carregar mensagens salvas.' });
+    }
+});
+
+// Guardar manualmente um modelo de mensagem sem precisar de enviar
+router.post('/avisos-salvos', verificarToken, async (req, res) => {
+    try {
+        const { titulo, mensagem } = req.body;
+        if (!titulo || !mensagem) {
+            return res.status(400).json({ error: 'Preencha o título e a mensagem para salvar.' });
+        }
+
+        const database = await connectDB();
+        const escolaId = req.usuario.escolaId ? req.usuario.escolaId : 'DEFAULT';
+        const tituloLimpo = titulo.trim();
+        const msgLimpa = mensagem.trim();
+
+        const existente = await database.collection('workspace_avisos_salvos').findOne({
+            escolaId: escolaId,
+            titulo: tituloLimpo,
+            mensagem: msgLimpa
+        });
+
+        if (existente) {
+            await database.collection('workspace_avisos_salvos').updateOne(
+                { id: existente.id },
+                { $set: { dataCriacao: new Date().toISOString() } }
+            );
+            return res.status(200).json({ success: true, message: 'Mensagem atualizada na sua lista!' });
+        }
+
+        const novoModelo = {
+            id: 'msg_salva_' + crypto.randomUUID(),
+            escolaId: escolaId,
+            titulo: tituloLimpo,
+            mensagem: msgLimpa,
+            dataCriacao: new Date().toISOString()
+        };
+
+        await database.collection('workspace_avisos_salvos').insertOne(novoModelo);
+        res.status(201).json({ success: true, item: novoModelo, message: '💾 Mensagem guardada para uso futuro!' });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao guardar mensagem.' });
+    }
+});
+
+// Excluir uma mensagem salva
+router.delete('/avisos-salvos/:id', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        await database.collection('workspace_avisos_salvos').deleteOne({ id: req.params.id });
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao excluir mensagem salva.' });
+    }
+});
+
+// ============================================================================
+// 🎓 ROTA 4: ENVIAR AVISO EXCLUSIVAMENTE PARA O WORKSPACE DO ALUNO + PUSH
+// ============================================================================
 router.post('/enviar-aviso-aluno', verificarToken, async (req, res) => {
     try {
-        const { alvoUserId, alunoRefId, nomeDestino, titulo, mensagem } = req.body;
+        const { alvoUserId, alunoRefId, nomeDestino, nomesListaFrontend, titulo, mensagem, salvarMensagem } = req.body;
         if (!titulo || !mensagem) {
             return res.status(400).json({ error: 'Preencha o título e a mensagem do aviso.' });
         }
 
         const database = await connectDB();
-        const escolaId = req.usuario.escolaId || 'DEFAULT';
-        const remetenteNome = req.usuario.nome || req.usuario.login || 'Coordenação';
+        const escolaId = req.usuario.escolaId ? req.usuario.escolaId : 'DEFAULT';
+        const remetenteNome = req.usuario.nome ? req.usuario.nome : (req.usuario.login ? req.usuario.login : 'Coordenação');
         const tituloLimpo = titulo.trim();
         const mensagemLimpa = mensagem.trim();
 
-        // 1. Descobrir exatamente os nomes de utilizador no Workspace (coleção 'usuarios')
-        const nomesDestinatarios = new Set();
+        // 🧹 LIMPEZA AUTOMÁTICA: Remove qualquer aviso antigo de aluno que tenha caído no sininho do sistema principal
+        try {
+            await database.collection('notificacoes').deleteMany({ tipo: 'aviso_workspace_aluno' });
+        } catch (e) {}
+
+        // 💾 1. Se a opção "Guardar para uso futuro" estiver marcada, salva na galeria de mensagens
+        if (salvarMensagem !== false) {
+            try {
+                const jaSalva = await database.collection('workspace_avisos_salvos').findOne({
+                    escolaId: escolaId,
+                    titulo: tituloLimpo,
+                    mensagem: mensagemLimpa
+                });
+                if (jaSalva) {
+                    await database.collection('workspace_avisos_salvos').updateOne(
+                        { id: jaSalva.id },
+                        { $set: { dataCriacao: new Date().toISOString() } }
+                    );
+                } else {
+                    await database.collection('workspace_avisos_salvos').insertOne({
+                        id: 'msg_salva_' + crypto.randomUUID(),
+                        escolaId: escolaId,
+                        titulo: tituloLimpo,
+                        mensagem: mensagemLimpa,
+                        dataCriacao: new Date().toISOString()
+                    });
+                }
+            } catch (e) {}
+        }
+
+        // 🎯 2. Descobre TODOS os identificadores (nome e login) do(s) aluno(s) no Workspace
+        const destinatariosParaGravar = new Set();
+
+        // Adiciona nomes enviados diretamente pelo painel de gestão (garantia absoluta)
+        if (Array.isArray(nomesListaFrontend)) {
+            nomesListaFrontend.forEach(n => {
+                if (n && String(n).trim()) destinatariosParaGravar.add(String(n).trim());
+            });
+        }
 
         if (alvoUserId && alvoUserId !== 'TODOS') {
-            // Busca a conta específica do aluno no Workspace
-            const contaUser = await database.collection('usuarios').findOne({
-                $or: [
-                    { id: String(alvoUserId) },
-                    ...(alunoRefId ? [{ alunoRefId: String(alunoRefId) }] : [])
-                ]
-            });
+            const criterios = [{ id: String(alvoUserId) }];
+            if (alunoRefId) criterios.push({ alunoRefId: String(alunoRefId) });
+            const contaUser = await database.collection('usuarios').findOne({ $or: criterios });
 
             if (contaUser) {
-                const nomeExatoNoWS = (contaUser.nome || contaUser.login || '').trim();
-                if (nomeExatoNoWS) nomesDestinatarios.add(nomeExatoNoWS);
+                const nomePrincipal = contaUser.nome ? contaUser.nome.trim() : (contaUser.login ? contaUser.login.trim() : '');
+                if (nomePrincipal) destinatariosParaGravar.add(nomePrincipal);
+                if (contaUser.login && contaUser.login.trim() !== nomePrincipal) {
+                    destinatariosParaGravar.add(contaUser.login.trim());
+                }
             }
-            // Fallback de segurança caso o nome passado já seja o nome de login
-            if (nomesDestinatarios.size === 0 && nomeDestino) {
-                nomesDestinatarios.add(nomeDestino.trim());
+            if (destinatariosParaGravar.size === 0 && nomeDestino) {
+                destinatariosParaGravar.add(String(nomeDestino).trim());
             }
         } else {
-            // Se for "TODOS", busca todas as contas de alunos da escola no Workspace
-            const filtroEscola = escolaId !== 'DEFAULT' ? { escolaId: escolaId } : {};
-            const usuarios = await database.collection('usuarios').find(filtroEscola).toArray();
-            
-            usuarios.forEach(u => {
-                if (u.tipo === 'Aluno' || u.alunoRefId) {
-                    const nomeWS = (u.nome || u.login || '').trim();
-                    if (nomeWS) nomesDestinatarios.add(nomeWS);
+            // Modo TODOS: Busca todas as contas de alunos no Workspace
+            const todosUsuarios = await database.collection('usuarios').find({}).toArray();
+            todosUsuarios.forEach(u => {
+                const pertenceEscola = (escolaId === 'DEFAULT' || !u.escolaId || String(u.escolaId) === String(escolaId));
+                const ehAluno = (u.tipo === 'Aluno' || Boolean(u.alunoRefId));
+                if (pertenceEscola && ehAluno) {
+                    const nomePrincipal = u.nome ? u.nome.trim() : (u.login ? u.login.trim() : '');
+                    if (nomePrincipal) destinatariosParaGravar.add(nomePrincipal);
                 }
             });
         }
 
-        const listaNomes = Array.from(nomesDestinatarios);
+        const listaNomes = Array.from(destinatariosParaGravar);
         if (listaNomes.length === 0) {
-            return res.status(404).json({ error: 'Nenhum aluno com conta ativa no Workspace foi encontrado.' });
+            return res.status(404).json({ error: 'Nenhum aluno com acesso ativo no Workspace foi encontrado.' });
         }
 
-        // 2. Grava na coleção oficial 'workspace_notificacoes' que o alertas.js do aluno lê!
+        // 📥 3. Grava EXCLUSIVAMENTE em 'workspace_notificacoes' (onde o aluno tem acesso no Workspace)
         const agoraIso = new Date().toISOString();
         const notificacoesWorkspace = listaNomes.map(destNome => ({
             id: 'notif_coord_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8),
@@ -147,6 +261,7 @@ router.post('/enviar-aviso-aluno', verificarToken, async (req, res) => {
             destinatarioNome: destNome,
             remetenteNome: remetenteNome,
             tituloAviso: tituloLimpo,
+            textoAvisoPuro: mensagemLimpa,
             mensagem: `enviou um comunicado: <strong>"${tituloLimpo}"</strong> — ${mensagemLimpa}`,
             origem: 'aviso_coordenacao',
             origemId: 'feed',
@@ -157,27 +272,26 @@ router.post('/enviar-aviso-aluno', verificarToken, async (req, res) => {
 
         await database.collection('workspace_notificacoes').insertMany(notificacoesWorkspace);
 
-        // 3. Dispara o evento em TEMPO REAL no túnel SSE do Workspace!
-        // Como o alertas.js às vezes liga com 'DEFAULT' e às vezes com o ID da escola, emitimos para ambos se necessário
+        // 📡 4. Dispara o sinal ao vivo no túnel SSE do Workspace para tocar o sininho do aluno na hora
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'NOVA_NOTIFICACAO',
                 destinatarios: listaNomes,
-                escolaId: escolaId
+                escolaId: 'DEFAULT'
             });
             if (escolaId !== 'DEFAULT') {
                 global.workspaceStream.emit('evento_realtime', {
                     type: 'NOVA_NOTIFICACAO',
                     destinatarios: listaNomes,
-                    escolaId: 'DEFAULT'
+                    escolaId: escolaId
                 });
             }
         }
 
-        // 4. Também dispara o Web Push caso o aluno tenha ativado notificações no telemóvel
+        // 📲 5. Dispara o Web Push apenas para telemóveis de Alunos
         const filtroPush = (alvoUserId && alvoUserId !== 'TODOS')
             ? { userId: String(alvoUserId) }
-            : { escolaId: escolaId, tipo: 'Aluno' };
+            : { tipo: 'Aluno' };
 
         const aparelhosAlunos = await database.collection('push_subscriptions').find(filtroPush).toArray();
         let enviadosPush = 0;
@@ -205,7 +319,7 @@ router.post('/enviar-aviso-aluno', verificarToken, async (req, res) => {
             success: true,
             enviadosWorkspace: listaNomes.length,
             enviadosPush: enviadosPush,
-            message: `🚀 Aviso entregue ao vivo no Workspace para ${listaNomes.length} aluno(s)!`
+            message: `🚀 Aviso entregue no Workspace para ${listaNomes.length} aluno(s)!`
         });
     } catch (error) {
         console.error('Erro ao enviar aviso para aluno:', error);

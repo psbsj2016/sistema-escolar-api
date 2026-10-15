@@ -600,7 +600,15 @@ router.put('/posts/:postId/comentarios/:comentarioId', verificarToken, async (re
 router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        const notificacoes = await database.collection('workspace_notificacoes').find({ destinatarioNome: req.params.nomeDono, lida: false }).sort({ data: -1 }).toArray();
+        const nomeLimpo = String(req.params.nomeDono ? req.params.nomeDono : '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regexNome = new RegExp(`^${nomeLimpo}$`, 'i');
+        const notificacoes = await database.collection('workspace_notificacoes').find({
+            $or: [
+                { destinatarioNome: { $regex: regexNome } },
+                { loginDestino: { $regex: regexNome } }
+            ],
+            lida: false
+        }).sort({ data: -1 }).toArray();
         res.status(200).json(notificacoes);
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
@@ -616,8 +624,16 @@ router.put('/notificacoes/:id/ler', verificarToken, async (req, res) => {
 router.put('/notificacoes/usuario/:nomeDono/ler-todas', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
+        const nomeLimpo = String(req.params.nomeDono ? req.params.nomeDono : '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regexNome = new RegExp(`^${nomeLimpo}$`, 'i');
         await database.collection('workspace_notificacoes').updateMany(
-            { destinatarioNome: req.params.nomeDono, lida: false },
+            {
+                $or: [
+                    { destinatarioNome: { $regex: regexNome } },
+                    { loginDestino: { $regex: regexNome } }
+                ],
+                lida: false
+            },
             { $set: { lida: true } }
         );
         res.status(200).json({ success: true });
