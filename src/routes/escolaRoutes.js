@@ -5,7 +5,6 @@ const { filtroTenant } = require('../middlewares/auth');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 
-// 🚀 1. CRIAMOS O MEGA-FONE GLOBAL SE NÃO EXISTIR
 if (!global.escolaEmitter) {
     const EventEmitter = require('events');
     global.escolaEmitter = new EventEmitter();
@@ -37,17 +36,18 @@ async function obterEscolaUnificada(db, req) {
         return { escola: null, emailUsuario, ativacao: null };
     }
 
-    // Junta todos os campos caso existissem 2 documentos separados (um com escolaId e outro com email)
     let escolaUnificada = {};
     docsEscola.forEach(doc => {
         escolaUnificada = { ...escolaUnificada, ...doc };
     });
 
-    // Dá prioridade ao plano e dataExpiracao mais recentes vindos do documento com email ou da ativação
     const docPorEmail = docsEscola.find(d => d.email && String(d.email).toLowerCase().trim() === emailUsuario);
     if (docPorEmail && docPorEmail.plano) {
         escolaUnificada.plano = docPorEmail.plano;
         if (docPorEmail.dataExpiracao) escolaUnificada.dataExpiracao = docPorEmail.dataExpiracao;
+        if (Array.isArray(docPorEmail.historicoLicencas)) {
+            escolaUnificada.historicoLicencas = docPorEmail.historicoLicencas;
+        }
     }
 
     if (ativacao && (ativacao.status === 'Ativo' || ativacao.status === 'Verificado')) {
@@ -62,7 +62,6 @@ async function obterEscolaUnificada(db, req) {
     escolaUnificada.escolaId = req.escolaId || escolaUnificada.escolaId;
     if (emailUsuario) escolaUnificada.email = emailUsuario;
 
-    // Se havia mais de 1 documento para a mesma escola, unifica no banco de dados automaticamente
     if (docsEscola.length > 1) {
         const idPrincipal = docsEscola[0]._id;
         const { _id, ...dadosSemId } = escolaUnificada;
@@ -94,7 +93,7 @@ router.put('/', async (req, res) => {
     try {
         const db = await connectDB();
         const { emailUsuario } = await obterEscolaUnificada(db, req);
-        const { _id, plano, dataExpiracao, pinUsado, ...dadosPerfilSeguros } = req.body;
+        const { _id, plano, dataExpiracao, pinUsado, historicoLicencas, ...dadosPerfilSeguros } = req.body;
 
         const payload = { ...dadosPerfilSeguros, escolaId: req.escolaId };
         if (emailUsuario) payload.email = emailUsuario;
@@ -115,7 +114,7 @@ router.put('/', async (req, res) => {
     }
 });
 
-// 🔐 VALIDAÇÃO DE PIN BLINDADA (Sem Erro 404 indevido + Renovação Cumulativa)
+// 🔐 VALIDAÇÃO DE PIN BLINDADA (Com Renovação Cumulativa e Registo no Histórico de Licenças)
 router.post('/validar-pin', async (req, res) => {
     try {
         const pinLimpo = String(req.body.pin ? req.body.pin : '').trim().toUpperCase();
@@ -126,7 +125,6 @@ router.post('/validar-pin', async (req, res) => {
         const db = await connectDB();
         const { escola: escolaAtual, emailUsuario } = await obterEscolaUnificada(db, req);
 
-        // 1. Procura o PIN na coleção 'ativacoes' (mesmo que o status já esteja como Ativo/Verificado/Pendente)
         let ativacao = await db.collection('ativacoes').findOne({
             $or: [
                 { pinAtivacao: pinLimpo },
@@ -134,10 +132,9 @@ router.post('/validar-pin', async (req, res) => {
             ]
         });
 
-        // 2. Fallback: Se o CEO ativou direto pelo Painel Master, encontra pelo e-mail da escola
         if (!ativacao && emailUsuario) {
             const ativPorEmail = await db.collection('ativacoes').findOne({ email: emailUsuario });
-            if (ativPorEmail && (ativPorEmail.status === 'Ativo' || ativPorEmail.status === 'Verificado')) {
+            if (ativPorEmail && (ativPorEmail.status === 'Ativo' || ativPorEmail.status === 'Verificado') && ativPorEmail.ultimoPinUsado !== pinLimpo) {
                 ativacao = ativPorEmail;
             }
         }
@@ -149,11 +146,9 @@ router.post('/validar-pin', async (req, res) => {
         const novoPlano = ativacao.plano ? ativacao.plano : 'Profissional';
         const diasAdicionar = parseInt(ativacao.diasValidade) ? parseInt(ativacao.diasValidade) : (novoPlano === 'Teste' ? 7 : 30);
 
-        // 📅 CÁLCULO CUMULATIVO: Soma os dias se o plano já não tiver sido somado no modo direto
         const agora = new Date();
         let novaDataExpIso = ativacao.dataExpiracao;
 
-        // Se o PIN estava aguardando uso, calcula a nova data de expiração somando os dias
         if (ativacao.pinAtivacao === pinLimpo) {
             let baseCalculo = agora;
             if (escolaAtual && escolaAtual.dataExpiracao && escolaAtual.plano !== 'Teste' && escolaAtual.plano !== 'Bloqueado') {
@@ -171,7 +166,19 @@ router.post('/validar-pin', async (req, res) => {
         const agoraIso = agora.toISOString();
         const emailFinal = emailUsuario || ativacao.email || '';
 
-        // Atualiza a coleção 'ativacoes'
+        // Cria o recibo no Histórico de Licenças da escola
+        const historicoExistente = (escolaAtual && Array.isArray(escolaAtual.historicoLicencas)) ? escolaAtual.historicoLicencas : [];
+        const novoRegistoHistorico = {
+            id: 'LIC-' + Date.now().toString().slice(-6),
+            data: agoraIso,
+            plano: novoPlano,
+            diasAdicionados: diasAdicionar,
+            pin: pinLimpo,
+            novaExpiracao: novaDataExpIso,
+            origem: 'Validação via PIN'
+        };
+        const historicoAtualizado = [novoRegistoHistorico, ...historicoExistente].slice(0, 20);
+
         await db.collection('ativacoes').updateOne(
             { _id: ativacao._id },
             {
@@ -186,14 +193,14 @@ router.post('/validar-pin', async (req, res) => {
             }
         );
 
-        // Atualiza a coleção 'escola' vinculando escolaId e email no mesmo documento
         const dadosAtualizadosEscola = {
             escolaId: req.escolaId,
             plano: novoPlano,
             status: 'Ativo',
             pinUsado: pinLimpo,
             dataAtivacao: agoraIso,
-            dataExpiracao: novaDataExpIso
+            dataExpiracao: novaDataExpIso,
+            historicoLicencas: historicoAtualizado
         };
         if (emailFinal) dadosAtualizadosEscola.email = emailFinal;
 
@@ -203,7 +210,6 @@ router.post('/validar-pin', async (req, res) => {
             { upsert: true }
         );
 
-        // Limpa eventuais documentos órfãos que tinham apenas email sem escolaId
         if (emailFinal) {
             await db.collection('escola').deleteMany({
                 email: emailFinal,
@@ -219,7 +225,8 @@ router.post('/validar-pin', async (req, res) => {
             success: true,
             plano: novoPlano,
             dataExpiracao: novaDataExpIso,
-            diasAdicionados: diasAdicionar
+            diasAdicionados: diasAdicionar,
+            historicoLicencas: historicoAtualizado
         });
     } catch (error) {
         console.error('Erro ao validar PIN:', error);

@@ -6,20 +6,43 @@ const crypto = require('crypto');
 const { filtroTenant } = require('../middlewares/auth');
 
 router.put('/atualizar-conta', async (req, res) => {
-    const { novoLogin, novoEmail, senhaAtual, novaSenha } = req.body;
-    const database = await connectDB();
-    const user = await database.collection('usuarios').findOne({ id: req.userId, escolaId: req.escolaId });
-    if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
-    
-    const senhaValida = await bcrypt.compare(senhaAtual, user.senha);
-    if (!senhaValida) return res.status(401).json({ error: 'Senha atual incorreta.' });
-    
-    const updateData = { login: novoLogin };
-    if (novoEmail) updateData.email = novoEmail;
-    if (novaSenha) updateData.senha = await bcrypt.hash(novaSenha, 10);
-    
-    await database.collection('usuarios').updateOne({ id: req.userId }, { $set: updateData });
-    res.json({ success: true });
+    try {
+        const { novoLogin, novoEmail, senhaAtual, novaSenha } = req.body;
+        const database = await connectDB();
+        const user = await database.collection('usuarios').findOne({ id: req.userId, escolaId: req.escolaId });
+        if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
+        
+        const senhaValida = await bcrypt.compare(senhaAtual, user.senha);
+        if (!senhaValida) return res.status(401).json({ error: 'Senha atual incorreta.' });
+        
+        const emailAntigo = String(user.email || user.login || '').toLowerCase().trim();
+        const loginLimpo = String(novoLogin || user.login).trim();
+        const emailFinal = String(novoEmail || novoLogin || user.email || user.login).toLowerCase().trim();
+
+        const updateData = { login: loginLimpo, email: emailFinal };
+        if (novaSenha) updateData.senha = await bcrypt.hash(novaSenha, 10);
+        
+        await database.collection('usuarios').updateOne({ id: req.userId }, { $set: updateData });
+
+        // 🔄 SINCRONIA COM O PAINEL MASTER: Se for o Gestor/Dono, atualiza o e-mail na escola e nas ativações
+        if (user.isDono || user.tipo === 'Gestor' || !user.tipo) {
+            await database.collection('escola').updateOne(
+                { escolaId: req.escolaId },
+                { $set: { email: emailFinal } }
+            );
+            if (emailAntigo) {
+                await database.collection('ativacoes').updateOne(
+                    { email: emailAntigo },
+                    { $set: { email: emailFinal } }
+                );
+            }
+        }
+
+        res.json({ success: true, novoLogin: loginLimpo, novoEmail: emailFinal });
+    } catch (error) {
+        console.error('Erro ao atualizar conta:', error);
+        res.status(500).json({ error: 'Erro interno ao atualizar conta.' });
+    }
 });
 
 router.get('/', async (req, res) => {

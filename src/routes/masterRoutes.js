@@ -4,6 +4,9 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const bcrypt = require('bcrypt'); 
 const connectDB = require('../config/db');
+const { Resend } = require('resend');
+
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 // 🛡️ Middleware de Segurança do Master
 const verifyMaster = (req, res, next) => {
@@ -77,7 +80,7 @@ function calcularEstadoValidade(escola, ativacao) {
     if (dataExpStr) {
         const dExp = new Date(dataExpStr);
         if (!isNaN(dExp.getTime())) {
-            diasRestantes = Math.ceil((dExp.getTime() - agora.getTime()) / (1000 * 60 * 60 * 24));
+            diasRestantes = Math.ceil((dExp.getTime() - agora.getTime()) / (1000 * 60 * 60 * 1000 * 24));
         }
     }
 
@@ -116,15 +119,37 @@ router.post('/login', async (req, res) => {
 });
 
 // ==========================================
-// 2. LISTAR TODAS AS ESCOLAS
+// 2. LISTAR TODAS AS ESCOLAS (COM RAIO-X DE ALUNOS E EQUIPA)
 // ==========================================
 router.get('/ativacoes', verifyMaster, async (req, res) => {
     try {
         const database = await connectDB();
         
-        const ativacoes = await database.collection('ativacoes').find({}).toArray();
-        const escolas = await database.collection('escola').find({}).toArray();
-        const usuarios = await database.collection('usuarios').find({}).toArray();
+        const [ativacoes, escolas, usuarios, alunos] = await Promise.all([
+            database.collection('ativacoes').find({}).toArray(),
+            database.collection('escola').find({}).toArray(),
+            database.collection('usuarios').find({}).toArray(),
+            database.collection('alunos').find({}).toArray()
+        ]);
+
+        // Pré-calcula a quantidade de alunos ativos e membros da equipa por escolaId
+        const contagemAlunosPorEscola = {};
+        alunos.forEach(al => {
+            if (!al.escolaId) return;
+            const st = al.status ? al.status : 'Ativo';
+            if (st === 'Ativo') {
+                contagemAlunosPorEscola[al.escolaId] = (contagemAlunosPorEscola[al.escolaId] || 0) + 1;
+            }
+        });
+
+        const contagemEquipaPorEscola = {};
+        usuarios.forEach(u => {
+            if (!u.escolaId) return;
+            const ehAlunoWS = u.tipo === 'Aluno' || Boolean(u.alunoRefId);
+            if (!ehAlunoWS) {
+                contagemEquipaPorEscola[u.escolaId] = (contagemEquipaPorEscola[u.escolaId] || 0) + 1;
+            }
+        });
 
         const listaFinal = [];
         const emailsProcessados = new Set(); 
@@ -145,9 +170,14 @@ router.get('/ativacoes', verifyMaster, async (req, res) => {
 
             const planoAtual = (escola && escola.plano) ? escola.plano : (a.plano ? a.plano : 'Pendente');
             const { dataExpiracao, diasRestantes } = calcularEstadoValidade(escola, a);
+            const escId = (escola && escola.escolaId) ? escola.escolaId : (user ? user.escolaId : null);
 
             listaFinal.push({
                 email: email,
+                nomeEscola: (escola && escola.nome && escola.nome !== 'Escola') ? escola.nome : '',
+                escolaId: escId || '',
+                alunosAtivos: escId ? (contagemAlunosPorEscola[escId] || 0) : 0,
+                equipaAtiva: escId ? (contagemEquipaPorEscola[escId] || 1) : 1,
                 status: statusFinal,
                 pinAtivacao: a.pinAtivacao ? a.pinAtivacao : '',
                 plano: planoAtual,
@@ -163,8 +193,13 @@ router.get('/ativacoes', verifyMaster, async (req, res) => {
             
             if (!emailsProcessados.has(email)) {
                 const { dataExpiracao, diasRestantes } = calcularEstadoValidade(e, null);
+                const escId = e.escolaId || null;
                 listaFinal.push({
                     email: email,
+                    nomeEscola: (e.nome && e.nome !== 'Escola') ? e.nome : '',
+                    escolaId: escId || '',
+                    alunosAtivos: escId ? (contagemAlunosPorEscola[escId] || 0) : 0,
+                    equipaAtiva: escId ? (contagemEquipaPorEscola[escId] || 1) : 1,
                     status: e.plano === 'Bloqueado' ? 'Bloqueado' : 'Verificado',
                     pinAtivacao: '',
                     plano: e.plano ? e.plano : 'Essencial',
@@ -183,7 +218,7 @@ router.get('/ativacoes', verifyMaster, async (req, res) => {
 });
 
 // ==========================================
-// 3. GERAR PIN OU ATIVAR DIRETAMENTE (SINCRONIZADO COM ESCOLAID)
+// 3. GERAR PIN OU ATIVAR DIRETAMENTE (+ ENVIO DE E-MAIL E HISTÓRICO)
 // ==========================================
 router.post('/gerar-pin', verifyMaster, async (req, res) => {
     try {
@@ -213,6 +248,18 @@ router.post('/gerar-pin', verifyMaster, async (req, res) => {
             const novaDataExp = new Date(baseData.getTime() + (dias * 24 * 60 * 60 * 1000)).toISOString();
             const agoraIso = agora.toISOString();
 
+            const historicoExistente = (escolaExistente && Array.isArray(escolaExistente.historicoLicencas)) ? escolaExistente.historicoLicencas : [];
+            const novoRegistoHistorico = {
+                id: 'LIC-' + Date.now().toString().slice(-6),
+                data: agoraIso,
+                plano: plano,
+                diasAdicionados: dias,
+                pin: 'ATIVAÇÃO DIRETA',
+                novaExpiracao: novaDataExp,
+                origem: 'Ativação Direta (Master)'
+            };
+            const historicoAtualizado = [novoRegistoHistorico, ...historicoExistente].slice(0, 20);
+
             await database.collection('ativacoes').updateOne(
                 { email: targetEmail },
                 {
@@ -235,7 +282,8 @@ router.post('/gerar-pin', verifyMaster, async (req, res) => {
                 plano: plano,
                 status: 'Ativo',
                 dataAtivacao: agoraIso,
-                dataExpiracao: novaDataExp
+                dataExpiracao: novaDataExp,
+                historicoLicencas: historicoAtualizado
             };
             if (escolaId) dadosEscola.escolaId = escolaId;
 
@@ -245,13 +293,30 @@ router.post('/gerar-pin', verifyMaster, async (req, res) => {
                 { upsert: true }
             );
 
-            // Remove eventuais duplicados órfãos sem escolaId
             if (escolaId) {
                 await database.collection('escola').deleteMany({
                     email: targetEmail,
                     escolaId: { $ne: escolaId }
                 });
                 if (global.escolaEmitter) global.escolaEmitter.emit('atualizacao-escola', escolaId);
+            }
+
+            // 📧 Disparo de e-mail informativo automático (não trava se falhar)
+            if (resend) {
+                try {
+                    const dataBr = new Date(novaDataExp).toLocaleDateString('pt-BR');
+                    await resend.emails.send({
+                        from: 'Sistema PTT <contato@sistemaptt.com.br>',
+                        to: targetEmail,
+                        subject: `💎 Plano ${plano} Ativado com Sucesso!`,
+                        html: `<div style="font-family:sans-serif; max-width:500px; margin:0 auto; padding:20px; border:1px solid #e2e8f0; border-radius:12px;">
+                            <h2 style="color:#2563eb; margin-top:0;">🎉 Assinatura Atualizada!</h2>
+                            <p>O plano da sua instituição foi atualizado diretamente para <b>${plano}</b> (+${dias} dias).</p>
+                            <p><b>Nova validade:</b> ${dataBr}</p>
+                            <p style="font-size:12px; color:#64748b;">Não é necessário digitar nenhum código. Basta aceder ao seu painel normalmente!</p>
+                        </div>`
+                    });
+                } catch (eMail) {}
             }
 
             return res.json({
@@ -264,7 +329,7 @@ router.post('/gerar-pin', verifyMaster, async (req, res) => {
             });
         }
 
-        // Modo PIN: Gera o PIN e deixa pronto para o cliente validar em "Meu Plano" ou no Cadastro Inicial
+        // Modo PIN: Gera o PIN e deixa pronto para o cliente validar
         await database.collection('ativacoes').updateOne(
             { email: targetEmail },
             {
@@ -279,6 +344,23 @@ router.post('/gerar-pin', verifyMaster, async (req, res) => {
             },
             { upsert: true }
         );
+
+        // 📧 Envia o PIN gerado automaticamente para o e-mail do cliente
+        if (resend) {
+            try {
+                await resend.emails.send({
+                    from: 'Sistema PTT <contato@sistemaptt.com.br>',
+                    to: targetEmail,
+                    subject: `🔑 Sua Chave PIN do Plano ${plano} Chegou!`,
+                    html: `<div style="font-family:sans-serif; max-width:500px; margin:0 auto; padding:20px; border:1px solid #e2e8f0; border-radius:12px; text-align:center;">
+                        <h2 style="color:#1e293b; margin-top:0;">🔑 Chave de Ativação (${plano})</h2>
+                        <p>Utilize o PIN abaixo no menu <b>"💎 Meu Plano"</b> (ou no cadastro inicial) para liberar <b>+${dias} dias</b> de acesso:</p>
+                        <div style="background:#0f172a; color:#10b981; font-size:28px; font-weight:bold; letter-spacing:3px; padding:15px; border-radius:8px; margin:20px 0;">${pin}</div>
+                        <p style="font-size:12px; color:#64748b;">Os dias são somados automaticamente à sua validade atual.</p>
+                    </div>`
+                });
+            } catch (eMail) {}
+        }
 
         res.json({ success: true, modo: 'pin', pin, plano, dias });
     } catch (error) {
@@ -350,6 +432,19 @@ router.post('/desbloquear', verifyMaster, async (req, res) => {
         }
 
         const novaDataExpIso = novaDataExp.toISOString();
+        const agoraIso = agora.toISOString();
+
+        const historicoExistente = (escola && Array.isArray(escola.historicoLicencas)) ? escola.historicoLicencas : [];
+        const novoRegistoHistorico = {
+            id: 'LIC-' + Date.now().toString().slice(-6),
+            data: agoraIso,
+            plano: planoRestaurado,
+            diasAdicionados: diasSomar,
+            pin: 'REATIVAÇÃO',
+            novaExpiracao: novaDataExpIso,
+            origem: 'Reativação (Master)'
+        };
+        const historicoAtualizado = [novoRegistoHistorico, ...historicoExistente].slice(0, 20);
 
         await database.collection('ativacoes').updateOne(
             { email: target },
@@ -357,7 +452,7 @@ router.post('/desbloquear', verifyMaster, async (req, res) => {
                 $set: {
                     status: 'Ativo',
                     plano: planoRestaurado,
-                    dataAtivacao: agora.toISOString(),
+                    dataAtivacao: agoraIso,
                     dataExpiracao: novaDataExpIso
                 }
             },
@@ -368,7 +463,8 @@ router.post('/desbloquear', verifyMaster, async (req, res) => {
             email: target,
             plano: planoRestaurado,
             status: 'Ativo',
-            dataExpiracao: novaDataExpIso
+            dataExpiracao: novaDataExpIso,
+            historicoLicencas: historicoAtualizado
         };
         if (escolaId) dadosDesbloqueio.escolaId = escolaId;
 
