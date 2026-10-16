@@ -307,21 +307,38 @@ router.post('/:id/iniciar', async (req, res) => {
     try {
         const db = await connectDB();
         const { id } = req.params;
-        const { alunoId, alunoNome } = req.body;
+        const { alunoId, alunoRefId, alunoNome } = req.body;
         
         const prova = await db.collection('workspace_avaliacoes').findOne({ id: id });
         if (!prova) return res.status(404).json({ success: false, error: "Prova não encontrada." });
 
-        const tentativasFeitas = await db.collection('workspace_entregas_provas').countDocuments({ avaliacaoId: id, alunoId: alunoId });
+        // Se já existir uma tentativa 'em_curso' para este aluno, reaproveita-a sem bloquear!
+        const tentativaEmCurso = await db.collection('workspace_entregas_provas').findOne({
+            avaliacaoId: id,
+            $or: [{ alunoId: String(alunoId) }, ...(alunoRefId ? [{ alunoRefId: String(alunoRefId) }] : [])],
+            status: 'em_curso'
+        });
+
+        if (tentativaEmCurso) {
+            return res.json({ success: true, entregaId: tentativaEmCurso.id });
+        }
+
+        // Conta apenas as entregas realmente CONCLUÍDAS
+        const tentativasFeitas = await db.collection('workspace_entregas_provas').countDocuments({
+            avaliacaoId: id,
+            $or: [{ alunoId: String(alunoId) }, ...(alunoRefId ? [{ alunoRefId: String(alunoRefId) }] : [])],
+            status: 'concluida'
+        });
         
-        if (tentativasFeitas >= (prova.tentativas || 1)) {
+        if (prova.tipo !== 'online' && tentativasFeitas >= (prova.tentativas || 1)) {
             return res.json({ success: false, error: "Limite de tentativas esgotado." });
         }
 
         const novaEntrega = {
-            id: 'ent_' + Date.now(),
+            id: 'ent_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
             avaliacaoId: id,
-            alunoId,
+            alunoId: String(alunoId),
+            alunoRefId: alunoRefId ? String(alunoRefId) : null,
             alunoNome,
             status: 'em_curso', 
             dataInicio: new Date().toISOString()
@@ -332,33 +349,58 @@ router.post('/:id/iniciar', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 7. ALUNO ENTREGA AVALIAÇÃO (E AVISA O PROFESSOR)
+// 7. ALUNO ENTREGA AVALIAÇÃO OU REGISTA ACESSO ONLINE (E AVISA O PROFESSOR)
 router.post('/:id/entregar', async (req, res) => {
     try {
         const db = await connectDB();
         const { id } = req.params;
-        const { respostas, audioUrl, alunoId, relatorioFraude, entregaId } = req.body;
-        
-        let entrega = await db.collection('workspace_entregas_provas').findOne({ id: entregaId, alunoId: alunoId });
+        const { respostas, audioUrl, alunoId, alunoRefId, alunoNome, relatorioFraude, entregaId } = req.body;
+
+        // Descobre o alunoRefId oficial na coleção 'usuarios' caso não tenha vindo no pedido
+        let refIdFinal = alunoRefId ? String(alunoRefId) : null;
+        if (!refIdFinal && alunoId) {
+            const contaUser = await db.collection('usuarios').findOne({ id: String(alunoId) });
+            if (contaUser && contaUser.alunoRefId) {
+                refIdFinal = String(contaUser.alunoRefId);
+            }
+        }
+
+        let filtroBusca = entregaId 
+            ? { id: entregaId } 
+            : { avaliacaoId: id, $or: [{ alunoId: String(alunoId) }, ...(refIdFinal ? [{ alunoId: refIdFinal }, { alunoRefId: refIdFinal }] : [])] };
+
+        let entrega = await db.collection('workspace_entregas_provas').findOne(filtroBusca);
         
         if (!entrega) {
-            entrega = { id: 'ent_' + Date.now(), avaliacaoId: id, alunoId, alunoNome: req.body.alunoNome };
+            entrega = {
+                id: 'ent_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+                avaliacaoId: id,
+                alunoId: String(alunoId),
+                alunoRefId: refIdFinal,
+                alunoNome: alunoNome || 'Aluno'
+            };
             await db.collection('workspace_entregas_provas').insertOne(entrega);
         }
 
+        const agoraIso = new Date().toISOString();
         await db.collection('workspace_entregas_provas').updateOne(
             { id: entrega.id },
-            { $set: { 
-                respostas: respostas || null,
-                audioUrl: audioUrl || null,
-                relatorioFraude: relatorioFraude || { fugas: 0, tempoFora: 0 },
-                status: 'concluida',
-                dataEntrega: new Date().toISOString()
-            }}
+            { 
+                $set: { 
+                    alunoId: String(alunoId),
+                    alunoRefId: refIdFinal,
+                    alunoNome: alunoNome || entrega.alunoNome,
+                    respostas: respostas || null,
+                    audioUrl: audioUrl || null,
+                    relatorioFraude: relatorioFraude || { fugas: 0, tempoFora: 0 },
+                    status: 'concluida',
+                    dataEntrega: agoraIso
+                }
+            }
         );
 
         // ====================================================================
-        // 🚀 O GATILHO DE NOTIFICAÇÕES (ALUNO -> PROFESSOR CRIADOR DA PROVA)
+        // 🚀 O GATILHO DE NOTIFICAÇÕES (ALUNO -> PROFESSOR CRIADOR DA SESSÃO/PROVA)
         // ====================================================================
         try {
             const provaOriginal = await db.collection('workspace_avaliacoes').findOne({ id: id });
@@ -366,34 +408,41 @@ router.post('/:id/entregar', async (req, res) => {
             if (provaOriginal && provaOriginal.autorNome) {
                 const escola = provaOriginal.escolaId || 'DEFAULT';
                 const autorDaProva = provaOriginal.autorNome; 
-                const nomeDoAluno = req.body.alunoNome || 'Um aluno';
+                const nomeDoAluno = alunoNome || 'Um aluno';
+
+                const ehOnline = provaOriginal.tipo === 'online';
+                const msgNoti = ehOnline
+                    ? `acessou o link da sessão: <strong>"${provaOriginal.titulo}"</strong>.`
+                    : `concluiu e entregou a avaliação: <strong>"${provaOriginal.titulo}"</strong>.`;
 
                 const novaNotificacao = {
-                        id: 'notif_conv_' + crypto.randomUUID(),
+                    id: 'notif_conv_' + crypto.randomUUID(),
                     escolaId: escola,
                     destinatarioNome: autorDaProva,
                     remetenteNome: nomeDoAluno,
-                    mensagem: `acessou o link da sessão: <strong>"${provaOriginal.titulo}"</strong>.`,
-                    origem: 'acesso_online', 
+                    mensagem: msgNoti,
+                    origem: ehOnline ? 'acesso_online' : (provaOriginal.tipo === 'oral' ? 'avaliacao_oral' : 'avaliacao_escrita'), 
                     origemId: provaOriginal.id,
                     destinoNome: 'Avaliação',
                     lida: false,
-                    data: new Date().toISOString()
+                    data: agoraIso
                 };
 
                 await db.collection('workspace_notificacoes').insertOne(novaNotificacao);
 
-                // 🚀 Grito em Tempo Real apenas para o Professor!
+                // 🚀 Grito em Tempo Real para o Sininho e para o Painel de Acessos do Professor!
                 if (global.workspaceStream) {
                     global.workspaceStream.emit('evento_realtime', { 
                         type: 'NOVA_NOTIFICACAO', destinatarios: [autorDaProva], escolaId: escola 
+                    });
+                    global.workspaceStream.emit('evento_realtime', { 
+                        type: 'SALA_UPDATE', turmaId: provaOriginal.id, escolaId: escola 
                     });
                 }
             }
         } catch (erroNoti) {
             console.error("Falha ao notificar professor sobre a entrada na sessão ao vivo.", erroNoti);
         }
-        // ====================================================================
 
         res.json({ success: true, entrega });
     } catch (error) { res.status(500).json({ success: false, error: "Erro no acesso." }); }
