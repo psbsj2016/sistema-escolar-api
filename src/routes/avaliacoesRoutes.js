@@ -349,19 +349,33 @@ router.post('/:id/iniciar', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 7. ALUNO ENTREGA AVALIAÇÃO OU REGISTA ACESSO ONLINE (E AVISA O PROFESSOR)
+// 7. ALUNO ENTREGA AVALIAÇÃO OU REGISTA ACESSO ONLINE (COM NOME OFICIAL + APELIDO)
 router.post('/:id/entregar', async (req, res) => {
     try {
         const db = await connectDB();
         const { id } = req.params;
         const { respostas, audioUrl, alunoId, alunoRefId, alunoNome, relatorioFraude, entregaId } = req.body;
 
-        // Descobre o alunoRefId oficial na coleção 'usuarios' caso não tenha vindo no pedido
+        // 1. Descobre o alunoRefId oficial na coleção 'usuarios' caso não tenha vindo no pedido
         let refIdFinal = alunoRefId ? String(alunoRefId) : null;
         if (!refIdFinal && alunoId) {
             const contaUser = await db.collection('usuarios').findOne({ id: String(alunoId) });
             if (contaUser && contaUser.alunoRefId) {
                 refIdFinal = String(contaUser.alunoRefId);
+            }
+        }
+
+        // 2. PROPOSTA A: Cruza com a ficha oficial da secretaria ('alunos') para juntar Nome Oficial + Apelido
+        let nomeFormatado = String(alunoNome || 'Aluno').trim();
+        if (refIdFinal) {
+            const fichaAluno = await db.collection('alunos').findOne({ id: refIdFinal });
+            if (fichaAluno && fichaAluno.nome) {
+                const nomeOficial = String(fichaAluno.nome).trim();
+                if (nomeOficial.toLowerCase() !== nomeFormatado.toLowerCase()) {
+                    nomeFormatado = `${nomeOficial} (@${nomeFormatado})`;
+                } else {
+                    nomeFormatado = nomeOficial;
+                }
             }
         }
 
@@ -377,7 +391,7 @@ router.post('/:id/entregar', async (req, res) => {
                 avaliacaoId: id,
                 alunoId: String(alunoId),
                 alunoRefId: refIdFinal,
-                alunoNome: alunoNome || 'Aluno'
+                alunoNome: nomeFormatado
             };
             await db.collection('workspace_entregas_provas').insertOne(entrega);
         }
@@ -389,7 +403,7 @@ router.post('/:id/entregar', async (req, res) => {
                 $set: { 
                     alunoId: String(alunoId),
                     alunoRefId: refIdFinal,
-                    alunoNome: alunoNome || entrega.alunoNome,
+                    alunoNome: nomeFormatado,
                     respostas: respostas || null,
                     audioUrl: audioUrl || null,
                     relatorioFraude: relatorioFraude || { fugas: 0, tempoFora: 0 },
@@ -399,16 +413,13 @@ router.post('/:id/entregar', async (req, res) => {
             }
         );
 
-        // ====================================================================
-        // 🚀 O GATILHO DE NOTIFICAÇÕES (ALUNO -> PROFESSOR CRIADOR DA SESSÃO/PROVA)
-        // ====================================================================
+        // 3. Gatilho de Notificações para o Professor com o Nome Formatado
         try {
             const provaOriginal = await db.collection('workspace_avaliacoes').findOne({ id: id });
             
             if (provaOriginal && provaOriginal.autorNome) {
                 const escola = provaOriginal.escolaId || 'DEFAULT';
                 const autorDaProva = provaOriginal.autorNome; 
-                const nomeDoAluno = alunoNome || 'Um aluno';
 
                 const ehOnline = provaOriginal.tipo === 'online';
                 const msgNoti = ehOnline
@@ -419,7 +430,7 @@ router.post('/:id/entregar', async (req, res) => {
                     id: 'notif_conv_' + crypto.randomUUID(),
                     escolaId: escola,
                     destinatarioNome: autorDaProva,
-                    remetenteNome: nomeDoAluno,
+                    remetenteNome: nomeFormatado,
                     mensagem: msgNoti,
                     origem: ehOnline ? 'acesso_online' : (provaOriginal.tipo === 'oral' ? 'avaliacao_oral' : 'avaliacao_escrita'), 
                     origemId: provaOriginal.id,
@@ -430,7 +441,6 @@ router.post('/:id/entregar', async (req, res) => {
 
                 await db.collection('workspace_notificacoes').insertOne(novaNotificacao);
 
-                // 🚀 Grito em Tempo Real para o Sininho e para o Painel de Acessos do Professor!
                 if (global.workspaceStream) {
                     global.workspaceStream.emit('evento_realtime', { 
                         type: 'NOVA_NOTIFICACAO', destinatarios: [autorDaProva], escolaId: escola 
@@ -505,10 +515,24 @@ router.post('/:id/convidados', async (req, res) => {
         const prova = await db.collection('workspace_avaliacoes').findOne({ id: req.params.id });
         if (!prova) return res.status(404).json({ error: 'Sessão não encontrada.' });
 
-        // 1. Adiciona o aluno à lista de convidados autorizados da sessão
+        // Descobre se o aluno tem conta no Workspace com nome social diferente para garantir que o sininho dele toca
+        const contaUser = await db.collection('usuarios').findOne({
+            $or: [{ alunoRefId: String(alunoId) }, { id: String(alunoId) }]
+        });
+        const nomeDestinoWorkspace = (contaUser && (contaUser.nome || contaUser.login)) ? (contaUser.nome || contaUser.login) : alunoNome;
+
+        // 1. Adiciona o aluno à lista de convidados guardando tanto o ID da matrícula quanto o ID do login
         await db.collection('workspace_avaliacoes').updateOne(
             { id: req.params.id },
-            { $addToSet: { convidados: { id: alunoId, nome: alunoNome } } }
+            { 
+                $addToSet: { 
+                    convidados: { 
+                        id: String(alunoId), 
+                        userId: contaUser ? String(contaUser.id) : String(alunoId),
+                        nome: alunoNome 
+                    } 
+                } 
+            }
         );
 
         // 2. Dispara a notificação para o telemóvel/computador do aluno convidado
@@ -516,7 +540,8 @@ router.post('/:id/convidados', async (req, res) => {
         const novaNoti = {
             id: 'notif_conv_' + Date.now(),
             escolaId: escolaId,
-            destinatarioNome: alunoNome,
+            destinatarioNome: nomeDestinoWorkspace,
+            loginDestino: contaUser ? contaUser.login : alunoNome,
             remetenteNome: prova.autorNome || 'Professor',
             mensagem: `convidou você para a sessão ao vivo: "${prova.titulo}".`,
             origem: 'online',
@@ -528,15 +553,82 @@ router.post('/:id/convidados', async (req, res) => {
         };
         await db.collection('workspace_notificacoes').insertOne(novaNoti);
 
-        // 3. Grito em Tempo Real (Atualiza o Sininho e o ecrã do aluno instantaneamente)
+        // 3. Grito em Tempo Real
         if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: [alunoNome], escolaId: escolaId });
+            global.workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: [nomeDestinoWorkspace, alunoNome], escolaId: escolaId });
             global.workspaceStream.emit('evento_realtime', { type: 'SALA_UPDATE', turmaId: req.params.id, escolaId: escolaId });
         }
 
         res.json({ success: true });
     } catch(e) { 
         res.status(500).json({ error: 'Erro ao adicionar convidado.' }); 
+    }
+});
+
+// 🔔 PROPOSTA B: CHAMAR ALUNOS ATRASADOS QUE AINDA NÃO ENTRARAM NA SESSÃO
+router.post('/:id/chamar-atrasados', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { alunosPendentes, professorNome } = req.body;
+        if (!Array.isArray(alunosPendentes) || alunosPendentes.length === 0) {
+            return res.status(400).json({ error: 'Nenhum aluno pendente para chamar.' });
+        }
+
+        const prova = await db.collection('workspace_avaliacoes').findOne({ id: req.params.id });
+        if (!prova) return res.status(404).json({ error: 'Sessão não encontrada.' });
+
+        const escolaId = prova.escolaId || 'DEFAULT';
+        const usuariosEscola = await db.collection('usuarios').find({ escolaId: escolaId }).toArray();
+
+        const notificacoesParaInserir = [];
+        const destinatariosSSE = [];
+        const agoraIso = new Date().toISOString();
+
+        alunosPendentes.forEach((al, idx) => {
+            // Procura a conta de login do aluno pelo alunoRefId para entregar mesmo que ele tenha mudado o nome no Workspace
+            const conta = usuariosEscola.find(u => 
+                (u.alunoRefId && String(u.alunoRefId) === String(al.id)) ||
+                (u.id && String(u.id) === String(al.id)) ||
+                (u.nome && al.nome && String(u.nome).toLowerCase().trim() === String(al.nome).toLowerCase().trim())
+            );
+
+            const nomeAlvo = (conta && (conta.nome || conta.login)) ? (conta.nome || conta.login) : al.nome;
+            if (!nomeAlvo) return;
+
+            destinatariosSSE.push(nomeAlvo);
+            if (al.nome && al.nome !== nomeAlvo) destinatariosSSE.push(al.nome);
+
+            notificacoesParaInserir.push({
+                id: `notif_atraso_${Date.now()}_${idx}`,
+                escolaId: escolaId,
+                destinatarioNome: nomeAlvo,
+                loginDestino: conta ? conta.login : '',
+                remetenteNome: professorNome || prova.autorNome || 'Professor',
+                mensagem: `está aguardando você agora na aula ao vivo: "${prova.titulo}"! Clique para entrar.`,
+                origem: 'online',
+                origemId: prova.id,
+                destinoNome: prova.destinoNome || 'Sala de Acessos',
+                dataEvento: prova.dataAgendada,
+                lida: false,
+                data: agoraIso
+            });
+        });
+
+        if (notificacoesParaInserir.length > 0) {
+            await db.collection('workspace_notificacoes').insertMany(notificacoesParaInserir);
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'NOVA_NOTIFICACAO',
+                    destinatarios: destinatariosSSE,
+                    escolaId: escolaId
+                });
+            }
+        }
+
+        res.json({ success: true, enviados: notificacoesParaInserir.length });
+    } catch (error) {
+        console.error('Erro ao chamar atrasados:', error);
+        res.status(500).json({ error: 'Erro interno ao enviar alerta aos alunos.' });
     }
 });
 
