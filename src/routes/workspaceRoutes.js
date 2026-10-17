@@ -688,9 +688,33 @@ router.put('/perfil', verificarToken, async (req, res) => {
 
 router.put('/perfil/avatar', verificarToken, async (req, res) => {
     try {
-        const { id, avatarUrl } = req.body; 
+        const { id, alunoRefId, avatarUrl } = req.body; 
         const database = await connectDB();
+
+        const user = await database.collection('usuarios').findOne({ id: id });
         await database.collection('usuarios').updateOne({ id: id }, { $set: { avatar: avatarUrl } });
+
+        const refId = alunoRefId || (user && user.alunoRefId ? user.alunoRefId : null);
+        if (refId) {
+            await database.collection('alunos').updateOne({ id: String(refId) }, { $set: { avatar: avatarUrl } });
+        }
+
+        const nomeAtual = user ? (user.nome || user.login) : null;
+        const escolaId = user ? (user.escolaId || 'DEFAULT') : 'DEFAULT';
+
+        // Dispara atualização em tempo real para todos os ecrãs abertos
+        if (global.workspaceStream && nomeAtual) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'PERFIL_ATUALIZADO',
+                userId: id,
+                nomeAntigo: nomeAtual,
+                novoNome: nomeAtual,
+                login: user ? user.login : '',
+                avatar: avatarUrl,
+                escolaId: escolaId
+            });
+        }
+
         res.status(200).json({ success: true, avatar: avatarUrl });
     } catch (error) { res.status(500).json({ error: 'Erro ao guardar a foto de perfil.' }); }
 });
@@ -703,24 +727,24 @@ router.get('/perfil/info/:identificador', verificarToken, async (req, res) => {
         const database = await connectDB();
         const idBusca = req.params.identificador;
         
-        // 🚀 O DETETIVE ABSOLUTO: Procura pelo ID ou Nome em ambas as coleções
         const user = await database.collection('usuarios').findOne({ $or: [{ id: idBusca }, { nome: idBusca }, { login: idBusca }] });
-        const aluno = await database.collection('alunos').findOne({ $or: [{ id: idBusca }, { nome: idBusca }, { login: idBusca }] });
+        const aluno = await database.collection('alunos').findOne({ $or: [{ id: idBusca }, { nome: idBusca }, { login: idBusca }, ...(user && user.alunoRefId ? [{ id: String(user.alunoRefId) }] : [])] });
         
         let perfilFinal = user || aluno;
         
         if (perfilFinal) {
-            // Se as estatísticas de batalha acabaram na coleção 'alunos', nós puxamo-las à força!
             let stats = perfilFinal.arenaStats;
             if (!stats && user && user.arenaStats) stats = user.arenaStats;
             if (!stats && aluno && aluno.arenaStats) stats = aluno.arenaStats;
+
+            const avatarReal = (user && user.avatar) ? user.avatar : (aluno && aluno.avatar ? aluno.avatar : null);
 
             res.status(200).json({ 
                 success: true, 
                 bio: perfilFinal.bio || "A evoluir e a participar ativamente na nossa comunidade de aprendizagem.",
                 tipo: perfilFinal.tipo || "Aluno",
-                avatar: perfilFinal.avatar || null,
-                arenaStats: stats || null // 🚀 AGORA NUNCA MAIS SE PERDE!
+                avatar: avatarReal,
+                arenaStats: stats || null
             });
         } else {
             res.status(404).json({ error: 'Usuário não encontrado.' });
@@ -734,12 +758,89 @@ router.put('/perfil/bio', verificarToken, async (req, res) => {
     try {
         const { id, bio } = req.body;
         const database = await connectDB();
-        const bioSegura = String(bio).substring(0, 150); // Limita a 150 caracteres para manter o design limpo
+        const bioSegura = String(bio).substring(0, 150);
         
         await database.collection('usuarios').updateOne({ id: id }, { $set: { bio: bioSegura } });
         res.status(200).json({ success: true, bio: bioSegura });
     } catch (error) { 
         res.status(500).json({ error: 'Erro ao atualizar a frase de perfil.' }); 
+    }
+});
+
+// ============================================================================
+// ✏️ PERFIL: ALTERAR NOME DO UTILIZADOR E SINCRONIZAR FEED/COMENTÁRIOS
+// ============================================================================
+router.put('/perfil/nome', verificarToken, async (req, res) => {
+    try {
+        const { id, novoNome } = req.body;
+        
+        if (!id || !novoNome) {
+            return res.status(400).json({ error: 'Faltam dados obrigatórios para atualizar o nome.' });
+        }
+
+        const database = await connectDB();
+        const nomeLimpo = String(novoNome).trim();
+        
+        const userAntigo = await database.collection('usuarios').findOne({ id: id });
+        const nomeAntigo = userAntigo ? (userAntigo.nome || userAntigo.login) : null;
+        const loginUsuario = userAntigo ? userAntigo.login : null;
+        const escolaId = userAntigo ? (userAntigo.escolaId || 'DEFAULT') : 'DEFAULT';
+
+        // 1. Atualiza o nome na coleção 'usuarios' (preservando a coleção 'alunos' da secretaria)
+        await database.collection('usuarios').updateOne(
+            { id: id },
+            { $set: { nome: nomeLimpo } }
+        );
+
+        // 2. Atualiza o nome do autor nos Posts, Comentários, Chats e Ranking para não perder o vínculo com a foto no Feed!
+        const nomesAnteriores = [nomeAntigo, loginUsuario].filter(Boolean);
+        if (nomesAnteriores.length > 0) {
+            await database.collection('workspace_posts').updateMany(
+                { autorNome: { $in: nomesAnteriores } },
+                { $set: { autorNome: nomeLimpo } }
+            );
+
+            await database.collection('workspace_posts').updateMany(
+                { "comentarios.autorNome": { $in: nomesAnteriores } },
+                { $set: { "comentarios.$[elem].autorNome": nomeLimpo } },
+                { arrayFilters: [{ "elem.autorNome": { $in: nomesAnteriores } }] }
+            );
+
+            await database.collection('workspace_chats').updateMany(
+                { autorNome: { $in: nomesAnteriores } },
+                { $set: { autorNome: nomeLimpo } }
+            );
+        }
+
+        await database.collection('workspace_ingles_stats').updateMany(
+            { userId: id },
+            { $set: { nome: nomeLimpo } }
+        );
+
+        // 3. Descobre o avatar atual (seja de 'usuarios' ou de 'alunos') para enviá-lo já garantido
+        let avatarAtual = userAntigo ? userAntigo.avatar : null;
+        if (!avatarAtual && userAntigo && userAntigo.alunoRefId) {
+            const fichaAluno = await database.collection('alunos').findOne({ id: String(userAntigo.alunoRefId) });
+            if (fichaAluno && fichaAluno.avatar) avatarAtual = fichaAluno.avatar;
+        }
+
+        // 4. Emite evento em tempo real para atualizar todos os ecrãs instantaneamente
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'PERFIL_ATUALIZADO',
+                userId: id,
+                nomeAntigo: nomeAntigo,
+                novoNome: nomeLimpo,
+                login: loginUsuario || '',
+                avatar: avatarAtual || null,
+                escolaId: escolaId
+            });
+        }
+
+        res.status(200).json({ success: true, nomeAntigo: nomeAntigo, novoNome: nomeLimpo, avatar: avatarAtual || null });
+    } catch (error) { 
+        console.error("Erro ao atualizar o nome:", error);
+        res.status(500).json({ error: 'Erro interno ao atualizar o nome na Base de Dados.' }); 
     }
 });
 
@@ -917,30 +1018,31 @@ router.get('/avatars', verificarToken, async (req, res) => {
         const database = await connectDB();
         const mapaAvatars = {};
         
-        // 1. Vai buscar TODOS os alunos e TODOS os utilizadores (logins)
         const alunos = await database.collection('alunos').find({}).toArray();
         const usuarios = await database.collection('usuarios').find({}).toArray();
         
-        // 2. Filtra quem é realmente um "Aluno Ativo" (ignora Cancelados/Trancados)
         const alunosAtivos = alunos.filter(a => !a.status || a.status === 'Ativo');
 
-        // 3. O CRUZAMENTO DE DADOS (A Inteligência Matemática)
+        // 1. Mapeia alunos ativos cruzando com a conta de utilizador (guarda no nome oficial E no nome social do Workspace)
         alunosAtivos.forEach(aluno => {
-            // Verifica se este aluno ativo tem uma conta de acesso criada
             const temLogin = usuarios.find(u => String(u.alunoRefId) === String(aluno.id) || String(u.nome) === String(aluno.nome));
-            
-            if (temLogin && aluno.nome) {
-                // Se está ativo E tem login, entra para o radar da Arena!
-                // Dá prioridade à foto do login, se não houver, tenta a do cadastro.
-                mapaAvatars[aluno.nome] = temLogin.avatar || aluno.avatar || null;
+            const fotoFinal = (temLogin && temLogin.avatar) ? temLogin.avatar : (aluno.avatar || null);
+
+            if (temLogin) {
+                if (aluno.nome) mapaAvatars[aluno.nome.trim()] = fotoFinal;
+                if (temLogin.nome) mapaAvatars[temLogin.nome.trim()] = fotoFinal;
+                if (temLogin.login) mapaAvatars[temLogin.login.trim()] = fotoFinal;
             }
         });
 
-        // 4. Adiciona os Professores e Gestores ao radar (eles não estão na coleção de alunos)
+        // 2. Garante que TODAS as contas de utilizadores (Alunos que mudaram de nome, Professores e Gestores) tenham a sua foto mapeada
         usuarios.forEach(u => {
-            if (u.tipo === 'Professor' || u.tipo === 'Gestor') {
-                const nome = u.nome || u.login;
-                if (nome) mapaAvatars[nome] = u.avatar || null;
+            const fotoUser = u.avatar || null;
+            if (u.nome && (fotoUser || mapaAvatars[u.nome.trim()] === undefined)) {
+                mapaAvatars[u.nome.trim()] = fotoUser || mapaAvatars[u.nome.trim()] || null;
+            }
+            if (u.login && (fotoUser || mapaAvatars[u.login.trim()] === undefined)) {
+                mapaAvatars[u.login.trim()] = fotoUser || mapaAvatars[u.login.trim()] || null;
             }
         });
         
@@ -1942,23 +2044,13 @@ router.post('/posts/imersao/mais-quiz', verificarToken, async (req, res) => {
         if (!chaveApi) return res.status(500).json({ error: 'Chave API da Groq em falta.' });
         const groq = new Groq({ apiKey: chaveApi.trim() });
 
-      const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
-        Abaixo estão as publicações recentes do Feed e os Materiais Oficiais do Professor.
+        const instrucaoFoco = `Baseie-se na aula "${titulo || 'Inglês'}" e no seguinte resumo: ${String(resumo || '').substring(0, 1500)}. Crie 3 novas perguntas inéditas no mesmo idioma do resumo.`;
+
+        const systemPrompt = `Você é a Inteligência Artificial de elite da área 'Imersão Específica' de uma escola de INGLÊS.
         ${instrucaoFoco}
         
-        REGRAS ABSOLUTAS E INQUEBRÁVEIS:
-        1. IDIOMA: Respeite rigorosamente a instrução de idioma acima (Inglês ou Português).
-        2. PROFUNDIDADE (GATILHO DE EXAUSTÃO): O seu "resumo" deve ser massivo, aprofundado e digno de uma aula universitária. Dê exemplos e explique detalhes.
-        3. FORMATAÇÃO RICA: Use HTML puro (<strong>, <em>, <ul>, <li>, <table>).
-        
-        A sua missão é retornar APENAS um JSON válido, contendo a estrutura EXATA abaixo, sem formatação Markdown (\`\`\`json):
+        A sua missão é retornar APENAS um JSON válido contendo 3 novas perguntas difíceis no formato abaixo, sem formatação Markdown:
         {
-            "titulo": "Título cativante da aula",
-            "resumo": "O seu resumo ENORME, ricamente detalhado e em formato HTML",
-            "postsRelacionados": ["id1", "id2"],
-            "materiaisRelacionados": ["mat1"],
-            "tituloNota": "Título cativante para as anotações",
-            "conteudoParaNota": "Resumo super condensado e útil",
             "quiz": [
                 {
                     "pergunta": "Sua pergunta difícil aqui?",
@@ -1976,7 +2068,11 @@ router.post('/posts/imersao/mais-quiz', verificarToken, async (req, res) => {
             response_format: { type: 'json_object' } 
         });
 
-        const novasPerguntas = JSON.parse(completion.choices[0].message.content);
+        let conteudoLimpo = completion.choices[0].message.content.trim();
+        if (conteudoLimpo.startsWith('```')) {
+            conteudoLimpo = conteudoLimpo.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+        }
+        const novasPerguntas = JSON.parse(conteudoLimpo);
         res.status(200).json({ success: true, novasPerguntas: novasPerguntas.quiz });
 
     } catch (error) {
