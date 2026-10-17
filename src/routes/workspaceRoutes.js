@@ -2111,22 +2111,29 @@ router.get('/ingles/musica/status', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao buscar o seu estúdio musical.' }); }
 });
 
-// 2. Concluir um Treino Musical e Enviar para o Histórico
+// 2. Concluir um Treino Musical (ou Apenas Trocar de Música)
 router.post('/ingles/musica/concluir', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { userId, postId } = req.body;
-        
-        // Remove a música ativa e atira o ID para o array de histórico
+        const { userId, postId, apenasTrocar } = req.body;
+        if (!userId) return res.status(400).json({ error: 'Utilizador não identificado.' });
+
+        const operacaoUpdate = { $unset: { musicaAtiva: "" } };
+
+        // Se o aluno concluiu o treino (e não está apenas a voltar ao catálogo), guarda no Histórico sem duplicar
+        if (!apenasTrocar && postId) {
+            operacaoUpdate.$addToSet = { historicoMusicas: postId };
+        }
+
         await db.collection('workspace_ingles_data').updateOne(
             { userId: userId },
-            { 
-                $push: { historicoMusicas: postId },$unset: { musicaAtiva: "" }
-            },
+            operacaoUpdate,
             { upsert: true }
         );
         res.json({ success: true });
-    } catch (error) { res.status(500).json({ error: 'Erro ao concluir o treino.' }); }
+    } catch (error) { 
+        res.status(500).json({ error: 'Erro ao atualizar o estado do treino musical.' }); 
+    }
 });
 
 // 3. Iniciar um Treino Específico (Selecionado da Montra)
