@@ -418,7 +418,7 @@ router.get('/posts', verificarToken, async (req, res) => {
                 filtro = { $or: [{ destino: 'global' }, { destino: { $in: minhasTurmas } }, { destinoNome: { $in: minhasTurmas } }] };
             }
         }
-        const posts = await database.collection('workspace_posts').find(filtro).sort({ dataCriacao: -1 }).limit(50).toArray();
+        const posts = await database.collection('workspace_posts').find(filtro).sort({ fixado: -1, dataCriacao: -1 }).limit(50).toArray();
         res.status(200).json(posts);
     } catch (error) { res.status(500).json({ error: 'Erro ao carregar.' }); }
 });
@@ -562,7 +562,6 @@ router.delete('/posts/:id', verificarToken, async (req, res) => {
 router.put('/posts/:id', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        // 🚀 NOVO: Grava o texto E a categoria na base de dados
         await database.collection('workspace_posts').updateOne(
             { id: req.params.id }, 
             { $set: { 
@@ -573,6 +572,32 @@ router.put('/posts/:id', verificarToken, async (req, res) => {
         res.status(200).json({ success: true });
     } catch (error) { 
         res.status(500).json({ error: 'Erro.' }); 
+    }
+});
+
+// 📌 FIXAR OU DESAFIXAR PUBLICAÇÃO NO TOPO DO FEED
+router.put('/posts/:id/fixar', verificarToken, async (req, res) => {
+    try {
+        const database = await connectDB();
+        const novoEstadoFixado = Boolean(req.body.fixado);
+        const post = await database.collection('workspace_posts').findOne({ id: req.params.id });
+        if (!post) return res.status(404).json({ error: 'Publicação não encontrada.' });
+
+        await database.collection('workspace_posts').updateOne(
+            { id: req.params.id },
+            { $set: { fixado: novoEstadoFixado } }
+        );
+
+        workspaceStream.emit('evento_realtime', {
+            type: 'POST_FIXADO',
+            postId: req.params.id,
+            fixado: novoEstadoFixado,
+            escolaId: post.escolaId || 'DEFAULT'
+        });
+
+        res.status(200).json({ success: true, fixado: novoEstadoFixado });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao fixar publicação.' });
     }
 });
 
