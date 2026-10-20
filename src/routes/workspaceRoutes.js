@@ -905,38 +905,6 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
     }
 });
 
-// ============================================================================
-// ✏️ PERFIL: ALTERAR NOME DO UTILIZADOR (NOME SOCIAL NO WORKSPACE)
-// ============================================================================
-router.put('/perfil/nome', verificarToken, async (req, res) => {
-    try {
-        const { id, novoNome } = req.body;
-        
-        if (!id || !novoNome) {
-            return res.status(400).json({ error: 'Faltam dados obrigatórios para atualizar o nome.' });
-        }
-
-        const database = await connectDB();
-        
-        // 1. Puxa o usuário atual para descobrirmos o nome antigo 
-        // (O Front-end precisa disto para não perder a bolinha verde e a foto no cache)
-        const userAntigo = await database.collection('usuarios').findOne({ id: id });
-        const nomeAntigo = userAntigo ? (userAntigo.nome || userAntigo.login) : null;
-
-        // 2. Atualiza o nome APENAS na coleção principal de Acessos (Usuários do Workspace)
-        // 🛡️ BLINDAGEM: A coleção 'alunos' (Secretaria) não é tocada para manter a integridade oficial!
-        await database.collection('usuarios').updateOne(
-            { id: id },
-            { $set: { nome: novoNome } }
-        );
-
-        // Devolve o sucesso e o nome antigo para o Front-end fazer a magia invisível na Arena!
-        res.status(200).json({ success: true, nomeAntigo: nomeAntigo });
-    } catch (error) { 
-        console.error("Erro ao atualizar o nome:", error);
-        res.status(500).json({ error: 'Erro interno ao atualizar o nome na Base de Dados.' }); 
-    }
-});
 
 // ============================================================================
 // 💬 GESTÃO DE FEEDBACKS DO PROFESSOR (EDITAR E APAGAR) E ENTREGAS
@@ -1583,13 +1551,37 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
 router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { userId, escolaId, nome, coins, streak } = req.body;
+        const { userId, escolaId, nome, coins, streak, srs, itensConcluidos } = req.body;
         if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
-        
+
+        // Descobre o nome real do aluno na coleção 'usuarios' caso não tenha vindo no pedido
+        let nomeReal = (nome && nome !== 'Aluno') ? String(nome).trim() : null;
+        if (!nomeReal) {
+            const contaUser = await db.collection('usuarios').findOne({ id: String(userId) });
+            if (contaUser && (contaUser.nome || contaUser.login)) {
+                nomeReal = String(contaUser.nome || contaUser.login).trim();
+            }
+        }
+
+        const camposUpdate = {
+            escolaId: escolaId || 'DEFAULT',
+            coins: coins || { bronze: 0, prata: 0, ouro: 0 },
+            streak: parseInt(streak) || 1,
+            ultimaAtividade: new Date().toISOString()
+        };
+
+        if (nomeReal) camposUpdate.nome = nomeReal;
+        if (srs && typeof srs === 'object') camposUpdate.srs = srs;
+        if (Array.isArray(itensConcluidos)) camposUpdate.itensConcluidos = itensConcluidos;
+
         await db.collection('workspace_ingles_stats').updateOne(
-            { userId }, { $set: { escolaId: escolaId || 'DEFAULT', nome: nome || 'Aluno', coins: coins || { bronze: 0, prata: 0, ouro: 0 }, streak: parseInt(streak) || 1, ultimaAtividade: new Date().toISOString() } }, { upsert: true }
+            { userId: String(userId) },
+            { 
+                $set: camposUpdate,$setOnInsert: { nome: nomeReal || 'Aluno' }
+            },
+            { upsert: true }
         );
-        res.json({ success: true });
+        res.json({ success: true, nome: nomeReal || 'Aluno' });
     } catch (e) { res.status(500).json({ error: 'Erro sync stats' }); }
 });
 
@@ -1605,32 +1597,55 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
             .limit(50)
             .toArray();
         
-        // 2. Busca as fotos de perfil ignorando filtros rígidos para evitar perdas
-        const alunos = await db.collection('alunos').find({ avatar: { $exists: true, $ne: null } }).toArray();
-        const usuarios = await db.collection('usuarios').find({ avatar: { $exists: true, $ne: null } }).toArray();
+        // 2. Busca todos os alunos e utilizadores para cruzar fotos E recuperar nomes reais
+        const alunos = await db.collection('alunos').find({}).toArray();
+        const usuarios = await db.collection('usuarios').find({}).toArray();
         
         const mapaAvatars = {};
-        // 🚀 Mapeia tanto pelo ID oficial quanto pelo nome para garantir precisão absoluta
+        const mapaNomes = {};
+
         alunos.forEach(a => { 
-            if(a.id) mapaAvatars[a.id] = a.avatar; 
-            if(a.nome) mapaAvatars[a.nome] = a.avatar; 
-        });
-        usuarios.forEach(u => { 
-            if(u.id) mapaAvatars[u.id] = u.avatar; 
-            if(u.nome) mapaAvatars[u.nome] = u.avatar; 
-            if(u.login) mapaAvatars[u.login] = u.avatar; 
+            if (a.id && a.nome) mapaNomes[String(a.id)] = a.nome;
+            if (a.avatar) {
+                if (a.id) mapaAvatars[String(a.id)] = a.avatar; 
+                if (a.nome) mapaAvatars[a.nome.trim()] = a.avatar; 
+            }
         });
 
-        // 3. Junta as fotos ao ranking e calcula as Ligas
-        const comLiga = ranking.map((r, i) => ({ 
-            userId: r.userId, 
-            nome: r.nome, 
-            avatar: mapaAvatars[r.userId] || mapaAvatars[r.nome] || null, // 🚀 A foto real entra aqui
-            coins: r.coins || {bronze: 0, prata: 0, ouro: 0}, 
-            streak: r.streak || 1, 
-            posicao: i + 1, 
-            liga: i < 3 ? 'ouro' : i < 10 ? 'prata' : i < 20 ? 'bronze' : 'aprendiz' 
-        }));
+        usuarios.forEach(u => { 
+            const nomeU = u.nome || u.login;
+            if (u.id && nomeU) mapaNomes[String(u.id)] = nomeU;
+            if (u.alunoRefId && nomeU && !mapaNomes[String(u.alunoRefId)]) mapaNomes[String(u.alunoRefId)] = nomeU;
+
+            if (u.avatar) {
+                if (u.id) mapaAvatars[String(u.id)] = u.avatar; 
+                if (u.nome) mapaAvatars[u.nome.trim()] = u.avatar; 
+                if (u.login) mapaAvatars[u.login.trim()] = u.avatar; 
+            }
+        });
+
+        // 3. Junta as fotos e nomes reais ao ranking e calcula as Ligas
+        const comLiga = ranking.map((r, i) => {
+            const nomeExibicao = (!r.nome || r.nome === 'Aluno') 
+                ? (mapaNomes[String(r.userId)] || r.nome || 'Aluno') 
+                : r.nome;
+
+            const totalBronze = r.coins?.bronze || 0;
+            let ligaCalculada = 'bronze';
+            if (totalBronze >= 500000000) ligaCalculada = 'diamante';
+            else if (totalBronze >= 1000000 || i === 0) ligaCalculada = 'ouro';
+            else if (totalBronze >= 100000 || (i >= 1 && i < 3)) ligaCalculada = 'prata';
+
+            return { 
+                userId: r.userId, 
+                nome: nomeExibicao, 
+                avatar: mapaAvatars[String(r.userId)] || mapaAvatars[nomeExibicao.trim()] || null,
+                coins: r.coins || { bronze: 0, prata: 0, ouro: 0 }, 
+                streak: r.streak || 1, 
+                posicao: i + 1, 
+                liga: ligaCalculada 
+            };
+        });
         
         res.json({ success: true, ranking: comLiga });
     } catch (e) { res.status(500).json({ error: 'Erro ranking' }); }
@@ -1639,19 +1654,84 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
 router.get('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        let d = await db.collection('workspace_ingles_data').findOne({ escolaId: req.query.escolaId || 'DEFAULT' }) || {};
-        res.json({ success: true, dados: { ultimaAtualizacao: d.ultimaAtualizacao, words: d.words || [], phrases: d.phrases || [], quizzes: d.quizzes || [], pictures: d.pictures || [], wordPickers: d.wordPickers || [], minimalPairs: d.minimalPairs || [], debates: d.debates || [], roleplays: d.roleplays || [], questions: d.questions || [], submissions: d.submissions || [], pool: d.pool || [], errosRetidos: d.errosRetidos || [], srs: d.srs || {} } });
+        const escolaId = req.query.escolaId || 'DEFAULT';
+        const userId = req.query.userId || null;
+
+        let d = await db.collection('workspace_ingles_data').findOne({ escolaId: escolaId }) || {};
+        let statsAluno = null;
+        if (userId) {
+            statsAluno = await db.collection('workspace_ingles_stats').findOne({ userId: String(userId) });
+        }
+
+        res.json({ 
+            success: true, 
+            dados: { 
+                ultimaAtualizacao: d.ultimaAtualizacao, 
+                words: d.words || [], 
+                phrases: d.phrases || [], 
+                quizzes: d.quizzes || [], 
+                pictures: d.pictures || [], 
+                wordPickers: d.wordPickers || [], 
+                minimalPairs: d.minimalPairs || [], 
+                debates: d.debates || [], 
+                roleplays: d.roleplays || [], 
+                questions: d.questions || [], 
+                answerStatements: d.answerStatements || [],
+                submissions: d.submissions || [], 
+                pool: d.pool || [], 
+                errosRetidos: d.errosRetidos || [], 
+                srs: (statsAluno && statsAluno.srs) ? statsAluno.srs : (d.srs || {}),
+                statsAluno: statsAluno ? {
+                    coins: statsAluno.coins,
+                    streak: statsAluno.streak,
+                    ultimaAtividade: statsAluno.ultimaAtividade,
+                    itensConcluidos: statsAluno.itensConcluidos || []
+                } : null
+            } 
+        });
     } catch (e) { res.status(500).json({ error: 'Erro ler dados' }); }
 });
 
 router.put('/ingles/dados', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { escolaId, ...campos } = req.body;
+        const { escolaId, modoAluno, ...campos } = req.body;
+        const escolaAlvo = escolaId || 'DEFAULT';
+
+        // 🛡️ BLINDAGEM: Se vier de um aluno (modoAluno: true), atualiza apenas envios e erros retidos sem sobrescrever a biblioteca do professor!
+        if (modoAluno) {
+            const updateAluno = {};
+            if (Array.isArray(campos.submissions)) updateAluno.submissions = campos.submissions;
+            if (Array.isArray(campos.errosRetidos)) updateAluno.errosRetidos = campos.errosRetidos;
+            if (Object.keys(updateAluno).length > 0) {
+                await db.collection('workspace_ingles_data').updateOne(
+                    { escolaId: escolaAlvo },
+                    { $set: updateAluno },
+                    { upsert: true }
+                );
+            }
+            return res.json({ success: true });
+        }
+
+        // 👨‍🏫 Salvamento do Professor: Atualiza toda a biblioteca e avisa os alunos em Tempo Real!
         const update = { ultimaAtualizacao: new Date().toISOString() };
-        const permitidos = ['words','phrases','quizzes','pictures','submissions','pool','errosRetidos','srs','wordPickers','minimalPairs','debates','roleplays','questions'];
-        Object.keys(campos).forEach(k => { if(permitidos.includes(k)) update[k] = campos[k]; });
-        await db.collection('workspace_ingles_data').updateOne({ escolaId: escolaId || 'DEFAULT' }, { $set: update }, { upsert: true });
+        const permitidos = ['words','phrases','quizzes','pictures','submissions','pool','errosRetidos','srs','wordPickers','minimalPairs','debates','roleplays','questions','answerStatements'];
+        Object.keys(campos).forEach(k => { if (permitidos.includes(k)) update[k] = campos[k]; });
+        
+        await db.collection('workspace_ingles_data').updateOne(
+            { escolaId: escolaAlvo }, 
+            { $set: update }, 
+            { upsert: true }
+        );
+
+        // 🚀 Emite o grito em tempo real para atualizar o Baú do Inglês nos ecrãs dos alunos!
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'BAU_INGLES_UPDATE',
+                escolaId: escolaAlvo
+            });
+        }
+
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: 'Erro salvar' }); }
 });
@@ -1691,17 +1771,18 @@ router.post('/ingles/debate', verificarToken, async (req, res) => {
 
 router.post('/ingles/ia-teste/falar', verificarToken, async (req, res) => {
     try {
-        // 🚀 Recebe a mensagem e agora também o Histórico do Chat!
         const { mensagem, historico = [] } = req.body;
         if (!mensagem) return res.status(400).json({ error: 'Mensagem vazia.' });
         
-        // 🚀 O 'await' é obrigatório agora que o Cérebro é Híbrido!
         const pensamento = await PttAIEngine.pensar(mensagem, historico);
+        const infoBastidores = pensamento.bastidoresAviso 
+            ? `🛡️ ${pensamento.bastidoresAviso} | Classificação: [${pensamento.intencaoDetetada}]`
+            : `A Ptt AI classificou esta frase como: [${pensamento.intencaoDetetada}]`;
         
         res.json({ 
             success: true, 
             resposta: pensamento.resposta, 
-            bastidores: `A Ptt AI classificou esta frase como: [${pensamento.intencaoDetetada}]` 
+            bastidores: infoBastidores 
         });
     } catch (error) { 
         console.error(error);
