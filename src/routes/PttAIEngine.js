@@ -1,14 +1,16 @@
 // ============================================================================
-// 🧠 PTT AI ENGINE 2.0 - O CÉREBRO HÍBRIDO (LOCAL + GROQ)
+// 🧠 PTT AI ENGINE 2.5 - CÉREBRO HÍBRIDO COM MEMÓRIA ETERNA EM NUVEM (MONGODB)
 // ============================================================================
 const natural = require('natural');
 const fs = require('fs');
 const path = require('path');
-const Groq = require('groq-sdk'); // 🚀 NOVO: Adicionado SDK do Groq
+const Groq = require('groq-sdk');
+const connectDB = require('../config/db');
 
 const BRAIN_PATH = path.join(__dirname, 'ptt_brain.json');
 const RESPONSES_PATH = path.join(__dirname, 'ptt_responses.json');
 const CORRECTIONS_PATH = path.join(__dirname, 'ptt_corrections.json');
+const DOC_MEMORIA_ID = 'PTT_AI_MEMORIA_MESTRA';
 
 class PttAIEngine {
     constructor() {
@@ -16,29 +18,18 @@ class PttAIEngine {
         this.isTrained = false;
         this.respostas = {}; 
         this.correcoes = {}; 
+        this.exemplosTreino = [];
     }
 
-    async init() {
-        // 1. Carrega as Respostas Locais (Camada de Emergência)
-        if (fs.existsSync(RESPONSES_PATH)) {
-            try { this.respostas = JSON.parse(fs.readFileSync(RESPONSES_PATH, 'utf8')); } 
-            catch(e) { this.respostas = {}; }
-        } else {
-            this.respostas = {
+    obterPadroesIniciais() {
+        return {
+            respostas: {
                 'saudacao': ["Greetings! I am the Ptt AI. I am ready to test your English skills. What is on your mind today?"],
                 'concordar': ["It is good that we are in harmony about [TEMA]. But we must always question things. Can you think of an exception?"],
                 'discordar': ["A rebellious mind! I like that you disagree about [TEMA]. Can you give me one solid example to prove your point?"],
                 'pergunta': ["A very wise question about [TEMA]. Seeking knowledge is the first step to fluency. How would you try to answer that yourself first?"]
-            };
-            fs.writeFileSync(RESPONSES_PATH, JSON.stringify(this.respostas, null, 2));
-        }
-
-        // 2. Carrega o Olheiro Ortográfico (Camada de Ferro)
-        if (fs.existsSync(CORRECTIONS_PATH)) {
-            try { this.correcoes = JSON.parse(fs.readFileSync(CORRECTIONS_PATH, 'utf8')); } 
-            catch(e) { this.correcoes = {}; }
-        } else {
-            this.correcoes = {
+            },
+            correcoes: {
                 "teatcher": "teacher",
                 "confortable": "comfortable",
                 "he dont": "he doesn't",
@@ -46,67 +37,132 @@ class PttAIEngine {
                 "i is": "I am",
                 "more better": "better",
                 "informations": "information"
-            };
-            fs.writeFileSync(CORRECTIONS_PATH, JSON.stringify(this.correcoes, null, 2));
-        }
-
-        return new Promise((resolve) => {
-            if (fs.existsSync(BRAIN_PATH)) {
-                natural.BayesClassifier.load(BRAIN_PATH, null, (err, classifier) => {
-                    if (!err && classifier) {
-                        this.classifier = classifier;
-                        this.isTrained = true;
-                        console.log("🧠 Ptt AI 2.0: Cérebro Híbrido inicializado!");
-                    }
-                    resolve();
-                });
-            } else {
-                this.ensinarBasico();
-                this.treinar().then(resolve);
-            }
-        });
+            },
+            exemplosTreino: [
+                { frase: 'hello good morning', categoria: 'saudacao' },
+                { frase: 'hi there how are you', categoria: 'saudacao' },
+                { frase: 'i agree with you', categoria: 'concordar' },
+                { frase: 'yes that is completely true', categoria: 'concordar' },
+                { frase: 'i disagree with that', categoria: 'discordar' },
+                { frase: 'no that is wrong and false', categoria: 'discordar' },
+                { frase: 'why is that happening?', categoria: 'pergunta' },
+                { frase: 'how can i do this?', categoria: 'pergunta' }
+            ]
+        };
     }
 
-    ensinarBasico() {
-        this.classifier.addDocument('hello good morning', 'saudacao');
-        this.classifier.addDocument('hi there how are you', 'saudacao');
-        this.classifier.addDocument('i agree with you', 'concordar');
-        this.classifier.addDocument('yes that is completely true', 'concordar');
-        this.classifier.addDocument('i disagree with that', 'discordar');
-        this.classifier.addDocument('no that is wrong and false', 'discordar');
-        this.classifier.addDocument('why is that happening?', 'pergunta');
-        this.classifier.addDocument('how can i do this?', 'pergunta');
+    async init() {
+        const padroes = this.obterPadroesIniciais();
+        this.respostas = { ...padroes.respostas };
+        this.correcoes = { ...padroes.correcoes };
+        this.exemplosTreino = [...padroes.exemplosTreino];
+
+        // 1. Tenta carregar primeiro dos ficheiros locais (se existirem)
+        if (fs.existsSync(RESPONSES_PATH)) {
+            try { this.respostas = { ...this.respostas, ...JSON.parse(fs.readFileSync(RESPONSES_PATH, 'utf8')) }; } catch(e) {}
+        }
+        if (fs.existsSync(CORRECTIONS_PATH)) {
+            try { this.correcoes = { ...this.correcoes, ...JSON.parse(fs.readFileSync(CORRECTIONS_PATH, 'utf8')) }; } catch(e) {}
+        }
+
+        // 2. Carrega e sincroniza com a Memória Eterna no MongoDB (sobrevive a deploys no Render!)
+        try {
+            const db = await connectDB();
+            const docNuvem = await db.collection('workspace_ingles_data').findOne({ escolaId: DOC_MEMORIA_ID });
+            if (docNuvem) {
+                if (docNuvem.respostas) this.respostas = { ...this.respostas, ...docNuvem.respostas };
+                if (docNuvem.correcoes) this.correcoes = { ...this.correcoes, ...docNuvem.correcoes };
+                if (Array.isArray(docNuvem.exemplosTreino) && docNuvem.exemplosTreino.length > 0) {
+                    this.exemplosTreino = docNuvem.exemplosTreino;
+                }
+            } else {
+                await this.salvarNaNuvem();
+            }
+        } catch (errDB) {
+            console.warn("⚠️ Ptt AI: A usar memória local (MongoDB ainda a conectar).");
+        }
+
+        // 3. Reconstrói e treina o classificador Bayesiano com todos os exemplos
+        this.classifier = new natural.BayesClassifier();
+        this.exemplosTreino.forEach(item => {
+            if (item && item.frase && item.categoria) {
+                this.classifier.addDocument(item.frase.toLowerCase(), item.categoria);
+            }
+        });
+
+        await this.treinar();
+        console.log("🧠 Ptt AI 2.5: Cérebro Híbrido + Memória na Nuvem inicializados!");
+    }
+
+    async salvarNaNuvem() {
+        try {
+            const db = await connectDB();
+            await db.collection('workspace_ingles_data').updateOne(
+                { escolaId: DOC_MEMORIA_ID },
+                { 
+                    $set: { 
+                        respostas: this.respostas, 
+                        correcoes: this.correcoes, 
+                        exemplosTreino: this.exemplosTreino,
+                        ultimaAtualizacao: new Date().toISOString()
+                    } 
+                },
+                { upsert: true }
+            );
+        } catch (e) {
+            console.error("🚨 Erro ao guardar cérebro da Ptt AI no MongoDB:", e);
+        }
     }
 
     async treinar() {
         return new Promise((resolve) => {
-            this.classifier.train();
-            this.isTrained = true;
-            this.classifier.save(BRAIN_PATH, (err) => {
-                if (err) console.error("🚨 Erro ao gravar o cérebro:", err);
-                fs.writeFileSync(RESPONSES_PATH, JSON.stringify(this.respostas, null, 2));
+            try {
+                this.classifier.train();
+                this.isTrained = true;
+                this.classifier.save(BRAIN_PATH, () => {
+                    try {
+                        fs.writeFileSync(RESPONSES_PATH, JSON.stringify(this.respostas, null, 2));
+                        fs.writeFileSync(CORRECTIONS_PATH, JSON.stringify(this.correcoes, null, 2));
+                    } catch (e) {}
+                    resolve();
+                });
+            } catch (e) {
+                this.isTrained = true;
                 resolve();
-            });
+            }
         });
     }
 
     async ensinarNovaFrase(frase, categoria, respostaDesejada) {
-        this.classifier.addDocument(frase.toLowerCase(), categoria);
+        const fraseLimpa = String(frase).toLowerCase().trim();
+        const catLimpa = String(categoria).toLowerCase().trim();
+
+        this.classifier.addDocument(fraseLimpa, catLimpa);
+        const jaExiste = this.exemplosTreino.some(e => e.frase === fraseLimpa && e.categoria === catLimpa);
+        if (!jaExiste) {
+            this.exemplosTreino.push({ frase: fraseLimpa, categoria: catLimpa });
+        }
+
         if (respostaDesejada && respostaDesejada.trim() !== '') {
-            if (!this.respostas[categoria]) this.respostas[categoria] = [];
-            if (!this.respostas[categoria].includes(respostaDesejada)) {
-                this.respostas[categoria].push(respostaDesejada);
+            if (!this.respostas[catLimpa]) this.respostas[catLimpa] = [];
+            if (!this.respostas[catLimpa].includes(respostaDesejada.trim())) {
+                this.respostas[catLimpa].push(respostaDesejada.trim());
             }
         }
+
         await this.treinar();
-        return `A Ptt AI aprendeu que "${frase}" significa "${categoria}".`;
+        await this.salvarNaNuvem();
+        return `A Ptt AI aprendeu permanentemente que "${frase}" significa "${catLimpa}".`;
     }
 
     async ensinarCorrecao(erro, certo) {
-        const erroLimpo = erro.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
-        this.correcoes[erroLimpo] = certo;
-        fs.writeFileSync(CORRECTIONS_PATH, JSON.stringify(this.correcoes, null, 2));
-        return `A Ptt AI agora vai bloquear "${erro}" e exigir "${certo}".`;
+        const erroLimpo = String(erro).toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+        this.correcoes[erroLimpo] = String(certo).trim();
+        try {
+            fs.writeFileSync(CORRECTIONS_PATH, JSON.stringify(this.correcoes, null, 2));
+        } catch (e) {}
+        await this.salvarNaNuvem();
+        return `A Ptt AI agora vai bloquear permanentemente "${erro}" e exigir "${certo}".`;
     }
 
     extrairTema(frase) {
@@ -121,24 +177,21 @@ class PttAIEngine {
         return limpa.length > 2 ? limpa : "this topic";
     }
 
-    // ====================================================================
-    // 🚀 O NOVO PENSAMENTO HÍBRIDO (AGORA É ASSÍNCRONO)
-    // ====================================================================
     async pensar(fraseDoAluno, historico = []) {
         if (!this.isTrained) return { intencaoDetetada: 'unknown', resposta: "I am still learning..." };
 
         const textoNormalizado = fraseDoAluno.toLowerCase();
         const textoSemPontuacao = textoNormalizado.replace(/[^a-z0-9 ]/g, '');
 
-        // 🛡️ CAMADA 1: O OLHEIRO ORTOGRÁFICO (REGRAS LOCAIS)
+        // 🛡️ CAMADA 1: O OLHEIRO ORTOGRÁFICO (REGRAS DO PROFESSOR)
         for (const [erro, certo] of Object.entries(this.correcoes)) {
             const regexErro = new RegExp(`\\b${erro}\\b`, 'i');
             
             if (regexErro.test(textoSemPontuacao)) {
                 return {
                     intencaoDetetada: 'correcao_pedagogica',
-                    bastidoresAviso: `Erro grave detetado e travado: [${erro}]`,
-                    resposta: `Wait a second, wizard! 🧙‍♂️ I noticed a small mistake. You wrote "**${erro}**", but the correct form is "**${certo}**". Please, rewrite your sentence correctly so we can continue!`
+                    bastidoresAviso: `Erro grave detetado e travado: [${erro} -> ${certo}]`,
+                    resposta: `Wait a second, wizard! 🧙‍♂️ I noticed a small mistake. You wrote "${erro}", but the correct form is "${certo}". Please, rewrite your sentence correctly so we can continue!`
                 };
             }
         }
@@ -150,7 +203,6 @@ class PttAIEngine {
 
             const groq = new Groq({ apiKey: chaveApi.trim() });
 
-            // A Personalidade da sua IA ganha vida aqui!
             const systemPrompt = `
             Você é a 'PTT AI', uma professora de inglês hiper-inteligente, paciente e motivadora da Ptt Cursos.
             
@@ -162,7 +214,6 @@ class PttAIEngine {
             5. Termine SEMPRE a sua mensagem com uma pergunta relacionada para manter a conversa ativa.
             `;
 
-            // Junta a personalidade, o que eles conversaram antes, e a nova pergunta!
             const mensagensFormatadas = [
                 { role: 'system', content: systemPrompt },
                 ...historico,
@@ -183,7 +234,7 @@ class PttAIEngine {
         } catch (error) {
             console.error("🚨 Groq falhou ou limitou. Acionando Cérebro Local de Emergência...");
 
-            // ⚙️ CAMADA 3: CÉREBRO DE EMERGÊNCIA (Baseado no seu código antigo)
+            // ⚙️ CAMADA 3: CÉREBRO DE EMERGÊNCIA (BAYESIANO)
             const intencao = this.classifier.classify(textoNormalizado);
             const temaExtraido = this.extrairTema(fraseDoAluno);
 
@@ -192,7 +243,7 @@ class PttAIEngine {
                 const arrayDeRespostas = this.respostas[intencao];
                 respostaGerada = arrayDeRespostas[Math.floor(Math.random() * arrayDeRespostas.length)];
             }
-            respostaGerada = respostaGerada.replace(/\[TEMA\]/g, temaExtraido);
+            respostaGerada = respostaGerada.replace(/[TEMA]/g, temaExtraido);
 
             return { 
                 intencaoDetetada: `emergencia_${intencao}`, 
