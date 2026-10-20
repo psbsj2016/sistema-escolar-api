@@ -601,6 +601,42 @@ router.put('/posts/:id/fixar', verificarToken, async (req, res) => {
     }
 });
 
+// 👥 BUSCAR NOMES E FOTOS DE QUEM CURTIU / REAGIU A UMA PUBLICAÇÃO
+router.post('/posts/reacoes-detalhes', verificarToken, async (req, res) => {
+    try {
+        const { likesIds = [], dislikesIds = [] } = req.body;
+        const todosIds = Array.from(new Set([...likesIds, ...dislikesIds].map(id => String(id))));
+
+        if (todosIds.length === 0) {
+            return res.status(200).json({ success: true, likes: [], dislikes: [] });
+        }
+
+        const database = await connectDB();
+        const usuarios = await database.collection('usuarios').find({
+            $or: [{ id: { $in: todosIds } }, { alunoRefId: { $in: todosIds } }]
+        }).toArray();
+
+        const mapaUsuarios = {};
+        usuarios.forEach(u => {
+            const info = {
+                id: u.id,
+                nome: u.nome || u.login || 'Membro',
+                tipo: u.tipo || 'Aluno',
+                avatar: u.avatar || null
+            };
+            if (u.id) mapaUsuarios[String(u.id)] = info;
+            if (u.alunoRefId) mapaUsuarios[String(u.alunoRefId)] = info;
+        });
+
+        const likesDetalhados = likesIds.map(id => mapaUsuarios[String(id)] || { id, nome: 'Membro da Escola', tipo: 'Aluno', avatar: null });
+        const dislikesDetalhados = dislikesIds.map(id => mapaUsuarios[String(id)] || { id, nome: 'Membro da Escola', tipo: 'Aluno', avatar: null });
+
+        res.status(200).json({ success: true, likes: likesDetalhados, dislikes: dislikesDetalhados });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao carregar detalhes das reações.' });
+    }
+});
+
 router.delete('/posts/:postId/comentarios/:comentarioId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
