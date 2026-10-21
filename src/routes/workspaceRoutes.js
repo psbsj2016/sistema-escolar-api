@@ -1551,10 +1551,9 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
 router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { userId, escolaId, nome, coins, streak, srs, itensConcluidos } = req.body;
+        const { userId, escolaId, nome, coins, streak, streakFreeze, srs, itensConcluidos } = req.body;
         if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
 
-        // Descobre o nome real do aluno na coleção 'usuarios' caso não tenha vindo no pedido
         let nomeReal = (nome && nome !== 'Aluno') ? String(nome).trim() : null;
         if (!nomeReal) {
             const contaUser = await db.collection('usuarios').findOne({ id: String(userId) });
@@ -1567,6 +1566,7 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
             escolaId: escolaId || 'DEFAULT',
             coins: coins || { bronze: 0, prata: 0, ouro: 0 },
             streak: parseInt(streak) || 1,
+            streakFreeze: parseInt(streakFreeze) || 0,
             ultimaAtividade: new Date().toISOString()
         };
 
@@ -1577,7 +1577,8 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
         await db.collection('workspace_ingles_stats').updateOne(
             { userId: String(userId) },
             { 
-                $set: camposUpdate,$setOnInsert: { nome: nomeReal || 'Aluno' }
+                $set: camposUpdate,
+                $setOnInsert: { nome: nomeReal || 'Aluno' }
             },
             { upsert: true }
         );
@@ -1590,14 +1591,12 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
         const db = await connectDB();
         const escolaId = req.query.escolaId || 'DEFAULT';
         
-        // 1. Busca os dados matemáticos do ranking
         const ranking = await db.collection('workspace_ingles_stats')
             .find({ escolaId: escolaId, "coins.bronze": { $gt: 0 } })
             .sort({ "coins.bronze": -1 })
             .limit(50)
             .toArray();
         
-        // 2. Busca todos os alunos e utilizadores para cruzar fotos E recuperar nomes reais
         const alunos = await db.collection('alunos').find({}).toArray();
         const usuarios = await db.collection('usuarios').find({}).toArray();
         
@@ -1624,13 +1623,12 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
             }
         });
 
-        // 3. Junta as fotos e nomes reais ao ranking e calcula as Ligas
         const comLiga = ranking.map((r, i) => {
             const nomeExibicao = (!r.nome || r.nome === 'Aluno') 
                 ? (mapaNomes[String(r.userId)] || r.nome || 'Aluno') 
                 : r.nome;
 
-            const totalBronze = r.coins?.bronze || 0;
+            const totalBronze = Math.max(r.coins?.bronze || 0, r.coins?.maiorSaldo || 0);
             let ligaCalculada = 'bronze';
             if (totalBronze >= 500000000) ligaCalculada = 'diamante';
             else if (totalBronze >= 1000000 || i === 0) ligaCalculada = 'ouro';
@@ -1684,6 +1682,7 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
                 statsAluno: statsAluno ? {
                     coins: statsAluno.coins,
                     streak: statsAluno.streak,
+                    streakFreeze: statsAluno.streakFreeze || 0,
                     ultimaAtividade: statsAluno.ultimaAtividade,
                     itensConcluidos: statsAluno.itensConcluidos || []
                 } : null
