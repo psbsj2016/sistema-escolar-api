@@ -1551,7 +1551,7 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
 router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { userId, escolaId, nome, coins, streak, streakFreeze, srs, itensConcluidos } = req.body;
+        const { userId, escolaId, nome, coins, streak, streakFreeze, srs, itensConcluidos, itensComprados, mascoteAtivo, tituloAtivo } = req.body;
         if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
 
         let nomeReal = (nome && nome !== 'Aluno') ? String(nome).trim() : null;
@@ -1573,6 +1573,9 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
         if (nomeReal) camposUpdate.nome = nomeReal;
         if (srs && typeof srs === 'object') camposUpdate.srs = srs;
         if (Array.isArray(itensConcluidos)) camposUpdate.itensConcluidos = itensConcluidos;
+        if (Array.isArray(itensComprados)) camposUpdate.itensComprados = itensComprados;
+        if (mascoteAtivo !== undefined) camposUpdate.mascoteAtivo = mascoteAtivo;
+        if (tituloAtivo !== undefined) camposUpdate.tituloAtivo = tituloAtivo;
 
         await db.collection('workspace_ingles_stats').updateOne(
             { userId: String(userId) },
@@ -1640,6 +1643,8 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
                 avatar: mapaAvatars[String(r.userId)] || mapaAvatars[nomeExibicao.trim()] || null,
                 coins: r.coins || { bronze: 0, prata: 0, ouro: 0 }, 
                 streak: r.streak || 1, 
+                mascoteAtivo: r.mascoteAtivo || '',
+                tituloAtivo: r.tituloAtivo || '',
                 posicao: i + 1, 
                 liga: ligaCalculada 
             };
@@ -1683,6 +1688,9 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
                     coins: statsAluno.coins,
                     streak: statsAluno.streak,
                     streakFreeze: statsAluno.streakFreeze || 0,
+                    itensComprados: statsAluno.itensComprados || [],
+                    mascoteAtivo: statsAluno.mascoteAtivo || '',
+                    tituloAtivo: statsAluno.tituloAtivo || '',
                     ultimaAtividade: statsAluno.ultimaAtividade,
                     itensConcluidos: statsAluno.itensConcluidos || []
                 } : null
