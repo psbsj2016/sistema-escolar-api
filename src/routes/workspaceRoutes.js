@@ -1680,6 +1680,7 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
                 roleplays: d.roleplays || [], 
                 questions: d.questions || [], 
                 answerStatements: d.answerStatements || [],
+                recompensasProf: d.recompensasProf || [],
                 submissions: d.submissions || [], 
                 pool: d.pool || [], 
                 errosRetidos: d.errosRetidos || [], 
@@ -1697,6 +1698,49 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
             } 
         });
     } catch (e) { res.status(500).json({ error: 'Erro ler dados' }); }
+});
+
+router.put('/ingles/dados', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { escolaId, modoAluno, ...campos } = req.body;
+        const escolaAlvo = escolaId || 'DEFAULT';
+
+        // 🛡️ BLINDAGEM: Se vier de um aluno (modoAluno: true), atualiza apenas envios/resgates e erros retidos
+        if (modoAluno) {
+            const updateAluno = {};
+            if (Array.isArray(campos.submissions)) updateAluno.submissions = campos.submissions;
+            if (Array.isArray(campos.errosRetidos)) updateAluno.errosRetidos = campos.errosRetidos;
+            if (Object.keys(updateAluno).length > 0) {
+                await db.collection('workspace_ingles_data').updateOne(
+                    { escolaId: escolaAlvo },
+                    { $set: updateAluno },
+                    { upsert: true }
+                );
+            }
+            return res.json({ success: true });
+        }
+
+        // 👨‍🏫 Salvamento do Professor: Atualiza toda a biblioteca e cupons e avisa os alunos em Tempo Real!
+        const update = { ultimaAtualizacao: new Date().toISOString() };
+        const permitidos = ['words','phrases','quizzes','pictures','submissions','pool','errosRetidos','srs','wordPickers','minimalPairs','debates','roleplays','questions','answerStatements','recompensasProf'];
+        Object.keys(campos).forEach(k => { if (permitidos.includes(k)) update[k] = campos[k]; });
+        
+        await db.collection('workspace_ingles_data').updateOne(
+            { escolaId: escolaAlvo }, 
+            { $set: update }, 
+            { upsert: true }
+        );
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'BAU_INGLES_UPDATE',
+                escolaId: escolaAlvo
+            });
+        }
+
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Erro salvar' }); }
 });
 
 router.put('/ingles/dados', verificarToken, async (req, res) => {
