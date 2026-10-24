@@ -709,8 +709,12 @@ router.put('/perfil', verificarToken, async (req, res) => {
         const { id, alunoRefId, senhaAtual, novaSenha } = req.body;
         const database = await connectDB();
         
-        const senhaLimpa = String(senhaAtual).trim();
-        const novaSenhaLimpa = String(novaSenha).trim();
+        const senhaLimpa = String(senhaAtual || '').trim();
+        const novaSenhaLimpa = String(novaSenha || '').trim();
+
+        if (!senhaLimpa || !novaSenhaLimpa) {
+            return res.status(400).json({ error: 'Preencha a senha atual e a nova senha.' });
+        }
 
         const user = await database.collection('usuarios').findOne({ id: id });
         if (!user) return res.status(404).json({ error: 'Conta de acesso não encontrada.' });
@@ -726,11 +730,14 @@ router.put('/perfil', verificarToken, async (req, res) => {
             if (senhaCorreta) novaSenhaParaGuardar = await bcrypt.hash(novaSenhaLimpa, 10);
         } else {
             const senhasValidas = [
-                String(user.senha).trim(),
-                String(user.senha_provisoria).trim(),
-                String(user.senhaProvisoria).trim()
-            ];
+                String(user.senha || '').trim(),
+                String(user.senha_provisoria || '').trim(),
+                String(user.senhaProvisoria || '').trim()
+            ].filter(Boolean);
             senhaCorreta = senhasValidas.includes(senhaLimpa) || senhasValidas.includes(String(Number(senhaLimpa)));
+            if (senhaCorreta && bcrypt) {
+                novaSenhaParaGuardar = await bcrypt.hash(novaSenhaLimpa, 10);
+            }
         }
 
         if (!senhaCorreta) return res.status(400).json({ error: 'A senha atual está incorreta. Verifique e tente novamente.' });
@@ -741,7 +748,11 @@ router.put('/perfil', verificarToken, async (req, res) => {
         };
 
         await database.collection('usuarios').updateOne({ id: id }, updateDoc);
-        if (alunoRefId) await database.collection('alunos').updateOne({ id: alunoRefId }, updateDoc);
+        
+        const refIdFinal = alunoRefId || user.alunoRefId;
+        if (refIdFinal) {
+            await database.collection('alunos').updateOne({ id: String(refIdFinal) }, updateDoc);
+        }
 
         res.status(200).json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro interno ao tentar atualizar a senha.' }); }
@@ -1732,50 +1743,6 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
             { upsert: true }
         );
 
-        if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', {
-                type: 'BAU_INGLES_UPDATE',
-                escolaId: escolaAlvo
-            });
-        }
-
-        res.json({ success: true });
-    } catch (e) { res.status(500).json({ error: 'Erro salvar' }); }
-});
-
-router.put('/ingles/dados', verificarToken, async (req, res) => {
-    try {
-        const db = await connectDB();
-        const { escolaId, modoAluno, ...campos } = req.body;
-        const escolaAlvo = escolaId || 'DEFAULT';
-
-        // 🛡️ BLINDAGEM: Se vier de um aluno (modoAluno: true), atualiza apenas envios e erros retidos sem sobrescrever a biblioteca do professor!
-        if (modoAluno) {
-            const updateAluno = {};
-            if (Array.isArray(campos.submissions)) updateAluno.submissions = campos.submissions;
-            if (Array.isArray(campos.errosRetidos)) updateAluno.errosRetidos = campos.errosRetidos;
-            if (Object.keys(updateAluno).length > 0) {
-                await db.collection('workspace_ingles_data').updateOne(
-                    { escolaId: escolaAlvo },
-                    { $set: updateAluno },
-                    { upsert: true }
-                );
-            }
-            return res.json({ success: true });
-        }
-
-        // 👨‍🏫 Salvamento do Professor: Atualiza toda a biblioteca e avisa os alunos em Tempo Real!
-        const update = { ultimaAtualizacao: new Date().toISOString() };
-        const permitidos = ['words','phrases','quizzes','pictures','submissions','pool','errosRetidos','srs','wordPickers','minimalPairs','debates','roleplays','questions','answerStatements'];
-        Object.keys(campos).forEach(k => { if (permitidos.includes(k)) update[k] = campos[k]; });
-        
-        await db.collection('workspace_ingles_data').updateOne(
-            { escolaId: escolaAlvo }, 
-            { $set: update }, 
-            { upsert: true }
-        );
-
-        // 🚀 Emite o grito em tempo real para atualizar o Baú do Inglês nos ecrãs dos alunos!
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'BAU_INGLES_UPDATE',
