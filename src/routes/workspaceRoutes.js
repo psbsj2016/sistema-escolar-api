@@ -656,21 +656,166 @@ router.put('/posts/:postId/comentarios/:comentarioId', verificarToken, async (re
 });
 
 // ============================================================================
-// ⚙️ OUTRAS ROTAS GERAIS E NOTIFICAÇÕES
+// 🔄 MOTOR DE AUTO-CURA RETROATIVA (CURA NOMES E FOTOS ALTERADOS NO PASSADO)
 // ============================================================================
+let _autoCuraExecutada = false;
+async function executarAutoCuraRetroativa(database) {
+    if (_autoCuraExecutada) return;
+    _autoCuraExecutada = true;
+    try {
+        const usuarios = await database.collection('usuarios').find({}).toArray();
+        const alunos = await database.collection('alunos').find({}).toArray();
+
+        for (const u of usuarios) {
+            const fichaAluno = alunos.find(a =>
+                (u.alunoRefId && String(a.id) === String(u.alunoRefId)) ||
+                (u.id && String(a.id) === String(u.id)) ||
+                (u.login && a.login && String(a.login).toLowerCase().trim() === String(u.login).toLowerCase().trim())
+            );
+
+            const nomeAtual = (u.nome || u.login || '').trim();
+            const fotoAtual = u.avatar || (fichaAluno && fichaAluno.avatar) || null;
+
+            // 1. Se a foto existe num lado mas falta no outro, sincroniza ambas as coleções
+            if (fotoAtual) {
+                if (!u.avatar) {
+                    await database.collection('usuarios').updateOne({ id: u.id }, { $set: { avatar: fotoAtual } });
+                }
+                if (fichaAluno && !fichaAluno.avatar) {
+                    await database.collection('alunos').updateOne({ id: fichaAluno.id }, { $set: { avatar: fotoAtual } });
+                }
+            }
+
+            // 2. Se o aluno já mudou de nome no passado (nome em 'usuarios' difere do nome completo em 'alunos')
+            if (fichaAluno && nomeAtual) {
+                const nomesAntigos = [fichaAluno.nome, u.login]
+                    .map(n => String(n || '').trim())
+                    .filter(n => n && n !== nomeAtual);
+
+                if (nomesAntigos.length > 0) {
+                    await database.collection('workspace_notificacoes').updateMany(
+                        { remetenteNome: { $in: nomesAntigos } },
+                        { $set: { remetenteNome: nomeAtual } }
+                    );
+                    await database.collection('workspace_notificacoes').updateMany(
+                        { destinatarioNome: { $in: nomesAntigos } },
+                        { $set: { destinatarioNome: nomeAtual } }
+                    );
+                    await database.collection('workspace_posts').updateMany(
+                        { autorNome: { $in: nomesAntigos } },
+                        { $set: { autorNome: nomeAtual } }
+                    );
+                    await database.collection('workspace_posts').updateMany(
+                        { "comentarios.autorNome": { $in: nomesAntigos } },
+                        { $set: { "comentarios.$[elem].autorNome": nomeAtual } },
+                        { arrayFilters: [{ "elem.autorNome": { $in: nomesAntigos } }] }
+                    );
+                    await database.collection('workspace_chats').updateMany(
+                        { autorNome: { $in: nomesAntigos } },
+                        { $set: { autorNome: nomeAtual } }
+                    );
+                    await database.collection('workspace_entregas').updateMany(
+                        { alunoNome: { $in: nomesAntigos } },
+                        { $set: { alunoNome: nomeAtual } }
+                    );
+                }
+            }
+        }
+        console.log("✅ Auto-Cura Retroativa: Nomes e fotos antigos sincronizados no Sininho e no Feed!");
+    } catch (e) {
+        _autoCuraExecutada = false;
+        console.error("Aviso na Auto-Cura Retroativa:", e);
+    }
+}
+
 router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        const nomeLimpo = String(req.params.nomeDono ? req.params.nomeDono : '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regexNome = new RegExp(`^${nomeLimpo}$`, 'i');
+        await executarAutoCuraRetroativa(database);
+
+        const nomeRecebido = String(req.params.nomeDono ? req.params.nomeDono : '').trim();
+        const usuarios = await database.collection('usuarios').find({}).toArray();
+        const alunos = await database.collection('alunos').find({}).toArray();
+
+        // 1. Constrói um dicionário que traduz qualquer nome antigo/completo ou login para o Nome Atual e Foto Atual!
+        const mapaIdentidade = {};
+        const registarVariacao = (chave, nomeOficialAtual, avatarOficial) => {
+            if (!chave) return;
+            const k = String(chave).trim().toLowerCase();
+            if (!k) return;
+            mapaIdentidade[k] = {
+                nomeAtual: nomeOficialAtual,
+                avatar: avatarOficial || mapaIdentidade[k]?.avatar || null
+            };
+        };
+
+        usuarios.forEach(u => {
+            const fichaAluno = alunos.find(a =>
+                (u.alunoRefId && String(a.id) === String(u.alunoRefId)) ||
+                (u.id && String(a.id) === String(u.id)) ||
+                (u.login && a.login && String(a.login).toLowerCase().trim() === String(u.login).toLowerCase().trim()) ||
+                (u.nome && a.nome && String(a.nome).toLowerCase().trim() === String(u.nome).toLowerCase().trim())
+            );
+            const nomeAtual = (u.nome || (fichaAluno && fichaAluno.nome) || u.login || '').trim();
+            const avatarAtual = u.avatar || (fichaAluno && fichaAluno.avatar) || null;
+
+            registarVariacao(u.nome, nomeAtual, avatarAtual);
+            registarVariacao(u.login, nomeAtual, avatarAtual);
+            if (fichaAluno && fichaAluno.nome) {
+                registarVariacao(fichaAluno.nome, nomeAtual, avatarAtual);
+            }
+        });
+
+        alunos.forEach(a => {
+            const k = String(a.nome || '').trim().toLowerCase();
+            if (k && !mapaIdentidade[k]) {
+                registarVariacao(a.nome, a.nome.trim(), a.avatar || null);
+            }
+        });
+
+        // 2. Descobre todos os nomes possíveis do dono do Sininho (nome novo, login e nome antigo de matrícula)
+        const nomesDoDono = new Set([nomeRecebido]);
+        const userDono = usuarios.find(u =>
+            String(u.nome || '').trim().toLowerCase() === nomeRecebido.toLowerCase() ||
+            String(u.login || '').trim().toLowerCase() === nomeRecebido.toLowerCase()
+        );
+        if (userDono) {
+            if (userDono.nome) nomesDoDono.add(userDono.nome.trim());
+            if (userDono.login) nomesDoDono.add(userDono.login.trim());
+            if (userDono.alunoRefId) {
+                const alunoDono = alunos.find(a => String(a.id) === String(userDono.alunoRefId));
+                if (alunoDono && alunoDono.nome) nomesDoDono.add(alunoDono.nome.trim());
+            }
+        }
+
+        const regexesDono = Array.from(nomesDoDono).map(n => {
+            const limpo = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp(`^${limpo}$`, 'i');
+        });
+
         const notificacoes = await database.collection('workspace_notificacoes').find({
             $or: [
-                { destinatarioNome: { $regex: regexNome } },
-                { loginDestino: { $regex: regexNome } }
+                { destinatarioNome: { $in: regexesDono } },
+                { loginDestino: { $in: regexesDono } }
             ],
             lida: false
         }).sort({ data: -1 }).toArray();
-        res.status(200).json(notificacoes);
+
+        // 3. Traduz instantaneamente qualquer remetente antigo para o Nome Novo e anexa a Foto Atual!
+        const notificacoesCuradas = notificacoes.map(n => {
+            const chaveRem = String(n.remetenteNome || '').trim().toLowerCase();
+            const infoRem = mapaIdentidade[chaveRem];
+            if (infoRem) {
+                return {
+                    ...n,
+                    remetenteNome: infoRem.nomeAtual || n.remetenteNome,
+                    remetenteAvatar: infoRem.avatar || null
+                };
+            }
+            return n;
+        });
+
+        res.status(200).json(notificacoesCuradas);
     } catch (error) { res.status(500).json({ error: 'Erro.' }); }
 });
 
@@ -1066,33 +1211,33 @@ router.post('/entregas/:id/feedback', verificarToken, async (req, res) => {
 router.get('/avatars', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
+        await executarAutoCuraRetroativa(database);
+
         const mapaAvatars = {};
-        
         const alunos = await database.collection('alunos').find({}).toArray();
         const usuarios = await database.collection('usuarios').find({}).toArray();
         
-        const alunosAtivos = alunos.filter(a => !a.status || a.status === 'Ativo');
+        // 1. Cruza cada utilizador com a sua ficha de aluno pelo ID/alunoRefId/login, mesmo que o nome já tenha mudado!
+        usuarios.forEach(u => {
+            const fichaAluno = alunos.find(a =>
+                (u.alunoRefId && String(a.id) === String(u.alunoRefId)) ||
+                (u.id && String(a.id) === String(u.id)) ||
+                (u.login && a.login && String(a.login).toLowerCase().trim() === String(u.login).toLowerCase().trim()) ||
+                (u.nome && a.nome && String(a.nome).toLowerCase().trim() === String(u.nome).toLowerCase().trim())
+            );
 
-        // 1. Mapeia alunos ativos cruzando com a conta de utilizador (guarda no nome oficial E no nome social do Workspace)
-        alunosAtivos.forEach(aluno => {
-            const temLogin = usuarios.find(u => String(u.alunoRefId) === String(aluno.id) || String(u.nome) === String(aluno.nome));
-            const fotoFinal = (temLogin && temLogin.avatar) ? temLogin.avatar : (aluno.avatar || null);
-
-            if (temLogin) {
-                if (aluno.nome) mapaAvatars[aluno.nome.trim()] = fotoFinal;
-                if (temLogin.nome) mapaAvatars[temLogin.nome.trim()] = fotoFinal;
-                if (temLogin.login) mapaAvatars[temLogin.login.trim()] = fotoFinal;
+            const fotoFinal = u.avatar || (fichaAluno && fichaAluno.avatar) || null;
+            if (u.nome) mapaAvatars[u.nome.trim()] = fotoFinal;
+            if (u.login) mapaAvatars[u.login.trim()] = fotoFinal;
+            if (fichaAluno && fichaAluno.nome) {
+                mapaAvatars[fichaAluno.nome.trim()] = fotoFinal;
             }
         });
 
-        // 2. Garante que TODAS as contas de utilizadores (Alunos que mudaram de nome, Professores e Gestores) tenham a sua foto mapeada
-        usuarios.forEach(u => {
-            const fotoUser = u.avatar || null;
-            if (u.nome && (fotoUser || mapaAvatars[u.nome.trim()] === undefined)) {
-                mapaAvatars[u.nome.trim()] = fotoUser || mapaAvatars[u.nome.trim()] || null;
-            }
-            if (u.login && (fotoUser || mapaAvatars[u.login.trim()] === undefined)) {
-                mapaAvatars[u.login.trim()] = fotoUser || mapaAvatars[u.login.trim()] || null;
+        // 2. Garante também qualquer aluno que tenha foto na ficha da secretaria
+        alunos.forEach(aluno => {
+            if (aluno.nome && aluno.avatar && !mapaAvatars[aluno.nome.trim()]) {
+                mapaAvatars[aluno.nome.trim()] = aluno.avatar;
             }
         });
         
