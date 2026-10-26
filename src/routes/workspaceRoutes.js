@@ -864,7 +864,7 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
             { $set: { nome: nomeLimpo } }
         );
 
-        // 2. Atualiza o nome do autor nos Posts, Comentários, Chats e Ranking para não perder o vínculo com a foto no Feed!
+        // 2. Atualiza o nome nos Posts, Comentários, Chats e Notificações do Sininho!
         const nomesAnteriores = [nomeAntigo, loginUsuario].filter(Boolean);
         if (nomesAnteriores.length > 0) {
             await database.collection('workspace_posts').updateMany(
@@ -881,6 +881,17 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
             await database.collection('workspace_chats').updateMany(
                 { autorNome: { $in: nomesAnteriores } },
                 { $set: { autorNome: nomeLimpo } }
+            );
+
+            // 🔔 Sincroniza o nome nas notificações enviadas e recebidas no Sininho
+            await database.collection('workspace_notificacoes').updateMany(
+                { remetenteNome: { $in: nomesAnteriores } },
+                { $set: { remetenteNome: nomeLimpo } }
+            );
+
+            await database.collection('workspace_notificacoes').updateMany(
+                { destinatarioNome: { $in: nomesAnteriores } },
+                { $set: { destinatarioNome: nomeLimpo } }
             );
         }
 
@@ -915,7 +926,6 @@ router.put('/perfil/nome', verificarToken, async (req, res) => {
         res.status(500).json({ error: 'Erro interno ao atualizar o nome na Base de Dados.' }); 
     }
 });
-
 
 // ============================================================================
 // 💬 GESTÃO DE FEEDBACKS DO PROFESSOR (EDITAR E APAGAR) E ENTREGAS
