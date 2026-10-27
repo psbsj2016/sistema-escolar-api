@@ -349,35 +349,40 @@ router.post('/:id/iniciar', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 7. ALUNO ENTREGA AVALIAÇÃO OU REGISTA ACESSO ONLINE (COM NOME OFICIAL + APELIDO)
+// 7. ALUNO ENTREGA AVALIAÇÃO OU REGISTA ACESSO ONLINE (USA O NOME ESCOLHIDO E A FOTO DO PERFIL NO SININHO)
 router.post('/:id/entregar', async (req, res) => {
     try {
         const db = await connectDB();
         const { id } = req.params;
         const { respostas, audioUrl, alunoId, alunoRefId, alunoNome, relatorioFraude, entregaId } = req.body;
 
-        // 1. Descobre o alunoRefId oficial na coleção 'usuarios' caso não tenha vindo no pedido
-        let refIdFinal = alunoRefId ? String(alunoRefId) : null;
-        if (!refIdFinal && alunoId) {
-            const contaUser = await db.collection('usuarios').findOne({ id: String(alunoId) });
-            if (contaUser && contaUser.alunoRefId) {
-                refIdFinal = String(contaUser.alunoRefId);
-            }
+        // 1. Procura a conta do aluno na coleção 'usuarios' para obter o Nome Escolhido no Perfil e a Foto!
+        let contaUser = null;
+        if (alunoId) {
+            contaUser = await db.collection('usuarios').findOne({
+                $or: [{ id: String(alunoId) }, { alunoRefId: String(alunoId) }]
+            });
+        }
+        if (!contaUser && alunoRefId) {
+            contaUser = await db.collection('usuarios').findOne({
+                $or: [{ alunoRefId: String(alunoRefId) }, { id: String(alunoRefId) }]
+            });
         }
 
-        // 2. PROPOSTA A: Cruza com a ficha oficial da secretaria ('alunos') para juntar Nome Oficial + Apelido
-        let nomeFormatado = String(alunoNome || 'Aluno').trim();
+        let refIdFinal = alunoRefId ? String(alunoRefId) : (contaUser && contaUser.alunoRefId ? String(contaUser.alunoRefId) : null);
+        let fichaAluno = null;
         if (refIdFinal) {
-            const fichaAluno = await db.collection('alunos').findOne({ id: refIdFinal });
-            if (fichaAluno && fichaAluno.nome) {
-                const nomeOficial = String(fichaAluno.nome).trim();
-                if (nomeOficial.toLowerCase() !== nomeFormatado.toLowerCase()) {
-                    nomeFormatado = `${nomeOficial} (@${nomeFormatado})`;
-                } else {
-                    nomeFormatado = nomeOficial;
-                }
-            }
+            fichaAluno = await db.collection('alunos').findOne({ id: refIdFinal });
         }
+
+        // Nome escolhido pelo aluno no WorkSpace e a sua fotografia atual
+        const nomeEscolhidoNoPerfil = (contaUser && contaUser.nome)
+            ? String(contaUser.nome).trim()
+            : String(alunoNome || (fichaAluno && fichaAluno.nome) || 'Aluno').trim();
+
+        const fotoDoAluno = (contaUser && contaUser.avatar)
+            ? contaUser.avatar
+            : (fichaAluno && fichaAluno.avatar ? fichaAluno.avatar : null);
 
         let filtroBusca = entregaId 
             ? { id: entregaId } 
@@ -391,7 +396,7 @@ router.post('/:id/entregar', async (req, res) => {
                 avaliacaoId: id,
                 alunoId: String(alunoId),
                 alunoRefId: refIdFinal,
-                alunoNome: nomeFormatado
+                alunoNome: nomeEscolhidoNoPerfil
             };
             await db.collection('workspace_entregas_provas').insertOne(entrega);
         }
@@ -403,7 +408,7 @@ router.post('/:id/entregar', async (req, res) => {
                 $set: { 
                     alunoId: String(alunoId),
                     alunoRefId: refIdFinal,
-                    alunoNome: nomeFormatado,
+                    alunoNome: nomeEscolhidoNoPerfil,
                     respostas: respostas || null,
                     audioUrl: audioUrl || null,
                     relatorioFraude: relatorioFraude || { fugas: 0, tempoFora: 0 },
@@ -413,7 +418,7 @@ router.post('/:id/entregar', async (req, res) => {
             }
         );
 
-        // 3. Gatilho de Notificações para o Professor com o Nome Formatado
+        // 2. Gatilho de Notificações para o Professor com o Nome Escolhido e a Foto do Aluno!
         try {
             const provaOriginal = await db.collection('workspace_avaliacoes').findOne({ id: id });
             
@@ -430,7 +435,9 @@ router.post('/:id/entregar', async (req, res) => {
                     id: 'notif_conv_' + crypto.randomUUID(),
                     escolaId: escola,
                     destinatarioNome: autorDaProva,
-                    remetenteNome: nomeFormatado,
+                    remetenteNome: nomeEscolhidoNoPerfil,
+                    remetenteId: contaUser ? String(contaUser.id) : String(alunoId || ''),
+                    remetenteAvatar: fotoDoAluno,
                     mensagem: msgNoti,
                     origem: ehOnline ? 'acesso_online' : (provaOriginal.tipo === 'oral' ? 'avaliacao_oral' : 'avaliacao_escrita'), 
                     origemId: provaOriginal.id,

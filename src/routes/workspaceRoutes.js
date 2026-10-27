@@ -668,15 +668,15 @@ async function executarAutoCuraRetroativa(database) {
 
         for (const u of usuarios) {
             const fichaAluno = alunos.find(a =>
-                (u.alunoRefId && String(a.id) === String(u.alunoRefId)) ||
+                (u.alunoRefId && (String(a.id) === String(u.alunoRefId) || String(a._id) === String(u.alunoRefId))) ||
                 (u.id && String(a.id) === String(u.id)) ||
                 (u.login && a.login && String(a.login).toLowerCase().trim() === String(u.login).toLowerCase().trim())
             );
 
-            const nomeAtual = (u.nome || u.login || '').trim();
+            const nomeEscolhido = String(u.nome || u.login || '').trim();
             const fotoAtual = u.avatar || (fichaAluno && fichaAluno.avatar) || null;
 
-            // 1. Se a foto existe num lado mas falta no outro, sincroniza ambas as coleções
+            // 1. Garante que a foto está sincronizada em ambas as coleções
             if (fotoAtual) {
                 if (!u.avatar) {
                     await database.collection('usuarios').updateOne({ id: u.id }, { $set: { avatar: fotoAtual } });
@@ -686,42 +686,70 @@ async function executarAutoCuraRetroativa(database) {
                 }
             }
 
-            // 2. Se o aluno já mudou de nome no passado (nome em 'usuarios' difere do nome completo em 'alunos')
-            if (fichaAluno && nomeAtual) {
-                const nomesAntigos = [fichaAluno.nome, u.login]
+            // 2. Atualiza registos antigos (incluindo nomes completos da matrícula ou formatos "Nome Completo (@Apelido)")
+            if (nomeEscolhido) {
+                const variacoesAntigas = [
+                    fichaAluno ? fichaAluno.nome : null,
+                    u.login,
+                    fichaAluno && fichaAluno.nome ? `${fichaAluno.nome.trim()} (@${nomeEscolhido})` : null
+                ]
                     .map(n => String(n || '').trim())
-                    .filter(n => n && n !== nomeAtual);
+                    .filter(n => n && n.toLowerCase() !== nomeEscolhido.toLowerCase());
 
-                if (nomesAntigos.length > 0) {
+                const regexesAntigos = variacoesAntigas.map(n => {
+                    const escapado = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    return new RegExp(`^\\s*${escapado}(?:\\s*\\(@.*\\))?\\s*$`, 'i');
+                });
+
+                // Adiciona também regex para "Nome Escolhido (@...)" caso exista
+                const nomeEscapado = nomeEscolhido.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                regexesAntigos.push(new RegExp(`^\\s*${nomeEscapado}\\s*\\(@.*\\)\\s*$`, 'i'));
+
+                if (regexesAntigos.length > 0) {
+                    const setNotiRemetente = { remetenteNome: nomeEscolhido };
+                    if (fotoAtual) setNotiRemetente.remetenteAvatar = fotoAtual;
+
                     await database.collection('workspace_notificacoes').updateMany(
-                        { remetenteNome: { $in: nomesAntigos } },
-                        { $set: { remetenteNome: nomeAtual } }
+                        { remetenteNome: { $in: regexesAntigos } },
+                        { $set: setNotiRemetente }
                     );
                     await database.collection('workspace_notificacoes').updateMany(
-                        { destinatarioNome: { $in: nomesAntigos } },
-                        { $set: { destinatarioNome: nomeAtual } }
+                        { destinatarioNome: { $in: regexesAntigos } },
+                        { $set: { destinatarioNome: nomeEscolhido } }
                     );
                     await database.collection('workspace_posts').updateMany(
-                        { autorNome: { $in: nomesAntigos } },
-                        { $set: { autorNome: nomeAtual } }
-                    );
-                    await database.collection('workspace_posts').updateMany(
-                        { "comentarios.autorNome": { $in: nomesAntigos } },
-                        { $set: { "comentarios.$[elem].autorNome": nomeAtual } },
-                        { arrayFilters: [{ "elem.autorNome": { $in: nomesAntigos } }] }
+                        { autorNome: { $in: regexesAntigos } },
+                        { $set: { autorNome: nomeEscolhido } }
                     );
                     await database.collection('workspace_chats').updateMany(
-                        { autorNome: { $in: nomesAntigos } },
-                        { $set: { autorNome: nomeAtual } }
+                        { autorNome: { $in: regexesAntigos } },
+                        { $set: { autorNome: nomeEscolhido } }
                     );
                     await database.collection('workspace_entregas').updateMany(
-                        { alunoNome: { $in: nomesAntigos } },
-                        { $set: { alunoNome: nomeAtual } }
+                        { alunoNome: { $in: regexesAntigos } },
+                        { $set: { alunoNome: nomeEscolhido } }
+                    );
+                    await database.collection('workspace_entregas_provas').updateMany(
+                        { alunoNome: { $in: regexesAntigos } },
+                        { $set: { alunoNome: nomeEscolhido } }
                     );
                 }
+
+                // Se a notificação já está com o nome escolhido mas ainda não tinha a foto gravada nela, injeta a foto!
+                if (fotoAtual) {
+                    await database.collection('workspace_notificacoes').updateMany(
+                        { remetenteNome: new RegExp(`^\\s*${nomeEscapado}\\s*$`, 'i') },
+                        { $set: { remetenteNome: nomeEscolhido, remetenteAvatar: fotoAtual } }
+                    );
+                }
+
+                await database.collection('workspace_ingles_stats').updateMany(
+                    { userId: String(u.id) },
+                    { $set: { nome: nomeEscolhido } }
+                );
             }
         }
-        console.log("✅ Auto-Cura Retroativa: Nomes e fotos antigos sincronizados no Sininho e no Feed!");
+        console.log("✅ Auto-Cura Retroativa concluída com sucesso!");
     } catch (e) {
         _autoCuraExecutada = false;
         console.error("Aviso na Auto-Cura Retroativa:", e);
@@ -737,43 +765,59 @@ router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
         const usuarios = await database.collection('usuarios').find({}).toArray();
         const alunos = await database.collection('alunos').find({}).toArray();
 
-        // 1. Constrói um dicionário que traduz qualquer nome antigo/completo ou login para o Nome Atual e Foto Atual!
+        // 1. Dicionário inteligente que mapeia ID, Nome Completo, Login e Nome Escolhido -> { nomeAtual, avatar }
         const mapaIdentidade = {};
-        const registarVariacao = (chave, nomeOficialAtual, avatarOficial) => {
+        const mapaPorId = {};
+
+        const registarVariacao = (chave, nomeEscolhidoAtual, avatarOficial) => {
             if (!chave) return;
             const k = String(chave).trim().toLowerCase();
             if (!k) return;
+            const existente = mapaIdentidade[k];
             mapaIdentidade[k] = {
-                nomeAtual: nomeOficialAtual,
-                avatar: avatarOficial || mapaIdentidade[k]?.avatar || null
+                nomeAtual: nomeEscolhidoAtual || (existente && existente.nomeAtual),
+                avatar: avatarOficial || (existente && existente.avatar) || null
             };
         };
 
+        // Primeiro mapeia a ficha bruta de alunos como base
+        alunos.forEach(a => {
+            const k = String(a.nome || '').trim().toLowerCase();
+            if (k) {
+                registarVariacao(a.nome, a.nome.trim(), a.avatar || null);
+            }
+            if (a.id) {
+                mapaPorId[String(a.id)] = { nomeAtual: String(a.nome || '').trim(), avatar: a.avatar || null };
+            }
+        });
+
+        // Em seguida, 'usuarios' (onde mora o Nome Escolhido pelo aluno no Perfil e a Foto dele) tem PRIORIDADE TOTAL!
         usuarios.forEach(u => {
             const fichaAluno = alunos.find(a =>
-                (u.alunoRefId && String(a.id) === String(u.alunoRefId)) ||
+                (u.alunoRefId && (String(a.id) === String(u.alunoRefId) || String(a._id) === String(u.alunoRefId))) ||
                 (u.id && String(a.id) === String(u.id)) ||
                 (u.login && a.login && String(a.login).toLowerCase().trim() === String(u.login).toLowerCase().trim()) ||
                 (u.nome && a.nome && String(a.nome).toLowerCase().trim() === String(u.nome).toLowerCase().trim())
             );
-            const nomeAtual = (u.nome || (fichaAluno && fichaAluno.nome) || u.login || '').trim();
+
+            const nomeEscolhido = String(u.nome || (fichaAluno && fichaAluno.nome) || u.login || '').trim();
             const avatarAtual = u.avatar || (fichaAluno && fichaAluno.avatar) || null;
 
-            registarVariacao(u.nome, nomeAtual, avatarAtual);
-            registarVariacao(u.login, nomeAtual, avatarAtual);
+            if (u.id) mapaPorId[String(u.id)] = { nomeAtual: nomeEscolhido, avatar: avatarAtual };
+            if (u.alunoRefId) mapaPorId[String(u.alunoRefId)] = { nomeAtual: nomeEscolhido, avatar: avatarAtual };
+
+            registarVariacao(u.nome, nomeEscolhido, avatarAtual);
+            registarVariacao(u.login, nomeEscolhido, avatarAtual);
             if (fichaAluno && fichaAluno.nome) {
-                registarVariacao(fichaAluno.nome, nomeAtual, avatarAtual);
+                // Mapeia o Nome Completo da matrícula para apontar SEMPRE para o Nome Escolhido no Perfil!
+                mapaIdentidade[String(fichaAluno.nome).trim().toLowerCase()] = {
+                    nomeAtual: nomeEscolhido,
+                    avatar: avatarAtual || mapaIdentidade[String(fichaAluno.nome).trim().toLowerCase()]?.avatar || null
+                };
             }
         });
 
-        alunos.forEach(a => {
-            const k = String(a.nome || '').trim().toLowerCase();
-            if (k && !mapaIdentidade[k]) {
-                registarVariacao(a.nome, a.nome.trim(), a.avatar || null);
-            }
-        });
-
-        // 2. Descobre todos os nomes possíveis do dono do Sininho (nome novo, login e nome antigo de matrícula)
+        // 2. Descobre todos os nomes possíveis do dono do Sininho (nome escolhido, login e nome completo de matrícula)
         const nomesDoDono = new Set([nomeRecebido]);
         const userDono = usuarios.find(u =>
             String(u.nome || '').trim().toLowerCase() === nomeRecebido.toLowerCase() ||
@@ -783,14 +827,14 @@ router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
             if (userDono.nome) nomesDoDono.add(userDono.nome.trim());
             if (userDono.login) nomesDoDono.add(userDono.login.trim());
             if (userDono.alunoRefId) {
-                const alunoDono = alunos.find(a => String(a.id) === String(userDono.alunoRefId));
+                const alunoDono = alunos.find(a => String(a.id) === String(userDono.alunoRefId) || String(a._id) === String(userDono.alunoRefId));
                 if (alunoDono && alunoDono.nome) nomesDoDono.add(alunoDono.nome.trim());
             }
         }
 
         const regexesDono = Array.from(nomesDoDono).map(n => {
             const limpo = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            return new RegExp(`^${limpo}$`, 'i');
+            return new RegExp(`^\\s*${limpo}\\s*$`, 'i');
         });
 
         const notificacoes = await database.collection('workspace_notificacoes').find({
@@ -801,15 +845,30 @@ router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
             lida: false
         }).sort({ data: -1 }).toArray();
 
-        // 3. Traduz instantaneamente qualquer remetente antigo para o Nome Novo e anexa a Foto Atual!
+        // 3. Traduz qualquer remetente (mesmo "Nome Completo" ou "Nome Completo (@Apelido)") para o Nome Escolhido e Foto Atual!
         const notificacoesCuradas = notificacoes.map(n => {
-            const chaveRem = String(n.remetenteNome || '').trim().toLowerCase();
-            const infoRem = mapaIdentidade[chaveRem];
+            const remBruto = String(n.remetenteNome || '').trim();
+            const matchApelido = remBruto.match(/^(.*?)\s*\(@([^)]+)\)\s*$/);
+            const parteNomeCompleto = matchApelido ? matchApelido[1].trim().toLowerCase() : remBruto.toLowerCase();
+            const parteApelido = matchApelido ? matchApelido[2].trim().toLowerCase() : null;
+
+            const infoRem = (n.remetenteId && mapaPorId[String(n.remetenteId)])
+                || (parteApelido && mapaIdentidade[parteApelido])
+                || mapaIdentidade[parteNomeCompleto]
+                || mapaIdentidade[remBruto.toLowerCase()]
+                || null;
+
             if (infoRem) {
                 return {
                     ...n,
-                    remetenteNome: infoRem.nomeAtual || n.remetenteNome,
-                    remetenteAvatar: infoRem.avatar || null
+                    remetenteNome: infoRem.nomeAtual || (matchApelido ? matchApelido[2].trim() : n.remetenteNome),
+                    remetenteAvatar: infoRem.avatar || n.remetenteAvatar || null
+                };
+            }
+            if (matchApelido) {
+                return {
+                    ...n,
+                    remetenteNome: matchApelido[2].trim()
                 };
             }
             return n;
@@ -1217,27 +1276,39 @@ router.get('/avatars', verificarToken, async (req, res) => {
         const alunos = await database.collection('alunos').find({}).toArray();
         const usuarios = await database.collection('usuarios').find({}).toArray();
         
-        // 1. Cruza cada utilizador com a sua ficha de aluno pelo ID/alunoRefId/login, mesmo que o nome já tenha mudado!
+        const guardarFotoSegura = (chave, urlFoto) => {
+            if (!chave || !urlFoto) return;
+            const k = String(chave).trim();
+            if (k) mapaAvatars[k] = urlFoto;
+        };
+
+        // 1. Mapeia fotos da ficha de alunos
+        alunos.forEach(aluno => {
+            if (aluno.avatar) {
+                guardarFotoSegura(aluno.nome, aluno.avatar);
+                guardarFotoSegura(aluno.login, aluno.avatar);
+            }
+        });
+
+        // 2. Mapeia fotos da coleção 'usuarios' (associando ao Nome Escolhido, ao Login e ao Nome Completo da matrícula)
         usuarios.forEach(u => {
             const fichaAluno = alunos.find(a =>
-                (u.alunoRefId && String(a.id) === String(u.alunoRefId)) ||
+                (u.alunoRefId && (String(a.id) === String(u.alunoRefId) || String(a._id) === String(u.alunoRefId))) ||
                 (u.id && String(a.id) === String(u.id)) ||
                 (u.login && a.login && String(a.login).toLowerCase().trim() === String(u.login).toLowerCase().trim()) ||
                 (u.nome && a.nome && String(a.nome).toLowerCase().trim() === String(u.nome).toLowerCase().trim())
             );
 
             const fotoFinal = u.avatar || (fichaAluno && fichaAluno.avatar) || null;
-            if (u.nome) mapaAvatars[u.nome.trim()] = fotoFinal;
-            if (u.login) mapaAvatars[u.login.trim()] = fotoFinal;
-            if (fichaAluno && fichaAluno.nome) {
-                mapaAvatars[fichaAluno.nome.trim()] = fotoFinal;
-            }
-        });
-
-        // 2. Garante também qualquer aluno que tenha foto na ficha da secretaria
-        alunos.forEach(aluno => {
-            if (aluno.nome && aluno.avatar && !mapaAvatars[aluno.nome.trim()]) {
-                mapaAvatars[aluno.nome.trim()] = aluno.avatar;
+            if (fotoFinal) {
+                guardarFotoSegura(u.nome, fotoFinal);
+                guardarFotoSegura(u.login, fotoFinal);
+                if (fichaAluno && fichaAluno.nome) {
+                    guardarFotoSegura(fichaAluno.nome, fotoFinal);
+                    if (u.nome) {
+                        guardarFotoSegura(`${fichaAluno.nome.trim()} (@${u.nome.trim()})`, fotoFinal);
+                    }
+                }
             }
         });
         
@@ -1773,29 +1844,33 @@ router.get('/ingles/ranking', verificarToken, async (req, res) => {
         const mapaNomes = {};
 
         alunos.forEach(a => { 
-            if (a.id && a.nome) mapaNomes[String(a.id)] = a.nome;
+            if (a.id && a.nome) mapaNomes[String(a.id)] = a.nome.trim();
             if (a.avatar) {
                 if (a.id) mapaAvatars[String(a.id)] = a.avatar; 
                 if (a.nome) mapaAvatars[a.nome.trim()] = a.avatar; 
             }
         });
 
+        // A coleção 'usuarios' sobrescreve com prioridade total para usar o Nome Escolhido pelo aluno no WorkSpace!
         usuarios.forEach(u => { 
-            const nomeU = u.nome || u.login;
-            if (u.id && nomeU) mapaNomes[String(u.id)] = nomeU;
-            if (u.alunoRefId && nomeU && !mapaNomes[String(u.alunoRefId)]) mapaNomes[String(u.alunoRefId)] = nomeU;
+            const fichaAluno = alunos.find(a => u.alunoRefId && String(a.id) === String(u.alunoRefId));
+            const nomeU = (u.nome || (fichaAluno && fichaAluno.nome) || u.login || '').trim();
+            const fotoU = u.avatar || (fichaAluno && fichaAluno.avatar) || null;
 
-            if (u.avatar) {
-                if (u.id) mapaAvatars[String(u.id)] = u.avatar; 
-                if (u.nome) mapaAvatars[u.nome.trim()] = u.avatar; 
-                if (u.login) mapaAvatars[u.login.trim()] = u.avatar; 
+            if (u.id && nomeU) mapaNomes[String(u.id)] = nomeU;
+            if (u.alunoRefId && nomeU) mapaNomes[String(u.alunoRefId)] = nomeU;
+
+            if (fotoU) {
+                if (u.id) mapaAvatars[String(u.id)] = fotoU; 
+                if (u.alunoRefId) mapaAvatars[String(u.alunoRefId)] = fotoU;
+                if (nomeU) mapaAvatars[nomeU] = fotoU; 
+                if (u.login) mapaAvatars[u.login.trim()] = fotoU; 
             }
         });
 
         const comLiga = ranking.map((r, i) => {
-            const nomeExibicao = (!r.nome || r.nome === 'Aluno') 
-                ? (mapaNomes[String(r.userId)] || r.nome || 'Aluno') 
-                : r.nome;
+            // Prioriza sempre o nome atualizado de 'usuarios' mapeado pelo userId!
+            const nomeExibicao = mapaNomes[String(r.userId)] || r.nome || 'Aluno';
 
             const totalBronze = Math.max(r.coins?.bronze || 0, r.coins?.maiorSaldo || 0);
             let ligaCalculada = 'bronze';
