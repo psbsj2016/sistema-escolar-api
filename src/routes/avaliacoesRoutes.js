@@ -465,12 +465,52 @@ router.post('/:id/entregar', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: "Erro no acesso." }); }
 });
 
-// 8. PROFESSOR BUSCA TODAS AS ENTREGAS
+// 8. PROFESSOR BUSCA TODAS AS ENTREGAS (COM NOME ESCOLHIDO E FOTO DO PERFIL SINCRONIZADOS)
 router.get('/entregas', async (req, res) => {
     try { 
         const db = await connectDB();
-        const entregas = await db.collection('workspace_entregas_provas').find({ status: 'concluida' }).toArray();
-        res.json({ success: true, entregas });
+        const [entregas, usuarios, alunos] = await Promise.all([
+            db.collection('workspace_entregas_provas').find({ status: 'concluida' }).toArray(),
+            db.collection('usuarios').find({}).toArray(),
+            db.collection('alunos').find({}).toArray()
+        ]);
+
+        const mapaPorId = {};
+        const mapaPorNome = {};
+
+        usuarios.forEach(u => {
+            const ficha = alunos.find(a => u.alunoRefId && String(a.id) === String(u.alunoRefId));
+            const nomeEscolhido = String(u.nome || (ficha && ficha.nome) || u.login || '').trim();
+            const foto = u.avatar || (ficha && ficha.avatar) || null;
+            const info = { nome: nomeEscolhido, avatar: foto };
+
+            if (u.id) mapaPorId[String(u.id)] = info;
+            if (u.alunoRefId) mapaPorId[String(u.alunoRefId)] = info;
+            if (u.nome) mapaPorNome[String(u.nome).toLowerCase().trim()] = info;
+            if (u.login) mapaPorNome[String(u.login).toLowerCase().trim()] = info;
+            if (ficha && ficha.nome) mapaPorNome[String(ficha.nome).toLowerCase().trim()] = info;
+        });
+
+        const entregasEnriquecidas = entregas.map(e => {
+            const bruto = String(e.alunoNome || '').trim();
+            const matchAp = bruto.match(/^(.*?)\s*\(@([^)]+)\)\s*$/);
+            const pApelido = matchAp ? matchAp[2].trim().toLowerCase() : bruto.toLowerCase();
+            const pCompleto = matchAp ? matchAp[1].trim().toLowerCase() : bruto.toLowerCase();
+
+            const info = (e.alunoId && mapaPorId[String(e.alunoId)])
+                || (e.alunoRefId && mapaPorId[String(e.alunoRefId)])
+                || mapaPorNome[pApelido]
+                || mapaPorNome[pCompleto]
+                || null;
+
+            return {
+                ...e,
+                alunoNome: info && info.nome ? info.nome : (matchAp ? matchAp[2].trim() : e.alunoNome),
+                alunoAvatar: (info && info.avatar) || e.alunoAvatar || null
+            };
+        });
+
+        res.json({ success: true, entregas: entregasEnriquecidas });
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
