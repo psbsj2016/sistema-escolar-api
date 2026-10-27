@@ -1013,13 +1013,22 @@ router.get('/perfil/info/:identificador', verificarToken, async (req, res) => {
             if (!stats && user && user.arenaStats) stats = user.arenaStats;
             if (!stats && aluno && aluno.arenaStats) stats = aluno.arenaStats;
 
-            const avatarReal = (user && user.avatar) ? user.avatar : (aluno && aluno.avatar ? aluno.avatar : null);
+            const nomeEscolhido = (user && user.nome) ? user.nome : (perfilFinal.nome || perfilFinal.login || 'Utilizador');
+            const avatarReal = (user && user.avatar !== undefined) ? user.avatar : (aluno && aluno.avatar ? aluno.avatar : null);
+            const turmaAtual = (aluno && aluno.turma) ? aluno.turma : (user && user.turma ? user.turma : null);
+            const turmasAtuais = (aluno && aluno.turmas) ? aluno.turmas : (user && user.turmas ? user.turmas : null);
 
             res.status(200).json({ 
                 success: true, 
-                bio: perfilFinal.bio || "A evoluir e a participar ativamente na nossa comunidade de aprendizagem.",
+                id: user ? user.id : perfilFinal.id,
+                alunoRefId: (user && user.alunoRefId) ? user.alunoRefId : (aluno ? aluno.id : null),
+                nome: nomeEscolhido,
+                login: user ? user.login : perfilFinal.login,
+                bio: (user && user.bio !== undefined) ? user.bio : (perfilFinal.bio || "A evoluir e a participar ativamente na nossa comunidade de aprendizagem."),
                 tipo: perfilFinal.tipo || "Aluno",
                 avatar: avatarReal,
+                turma: turmaAtual,
+                turmas: turmasAtuais,
                 arenaStats: stats || null
             });
         } else {
