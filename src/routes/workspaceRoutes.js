@@ -12,6 +12,16 @@ const os = require('os');
 const { enviarParaR2 } = require('../config/cloudflareR2');
 const { filtroTenant } = require('../middlewares/auth');
 
+// 🛡️ FILTRO GLOBAL DE ALUNOS ATIVOS: Ignora alunos Cancelados, Trancados, Excluídos ou Inativos em todo o WorkSpace
+const ehAlunoAtivo = (aluno) => {
+    if (!aluno) return false;
+    const st = String(aluno.status || 'Ativo').trim().toLowerCase();
+    if (st.includes('cancel') || st.includes('tranc') || st.includes('exclu') || st.includes('inativ') || st.includes('desist')) {
+        return false;
+    }
+    return st === 'ativo' || st === '';
+};
+
 // ============================================================================
 // 🧠 INICIALIZAÇÃO DO CÉREBRO DA IA (PTT CURSOS)
 // ============================================================================
@@ -295,9 +305,11 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
             const nomeTurmaLower = String(nomeTurmaOficial).toLowerCase().trim();
             const isGlobal = idTurmaLower === 'global' || idTurmaLower === 'geral';
 
-            // Puxa Utilizadores e Alunos para cruzar os dados
+           // Puxa Utilizadores e Alunos ATIVOS para cruzar os dados
             const usuarios = await database.collection('usuarios').find({}).toArray();
-            const alunos = await database.collection('alunos').find({}).toArray();
+            const alunosBrutos = await database.collection('alunos').find({}).toArray();
+            const alunos = alunosBrutos.filter(ehAlunoAtivo);
+            const idsAlunosInativos = new Set(alunosBrutos.filter(a => !ehAlunoAtivo(a)).map(a => String(a.id)));
             
             const destinatarios = new Set();
             const remetenteLimpo = String(novaMensagem.autorNome).trim();
@@ -305,6 +317,7 @@ router.post('/chat/:turmaId', verificarToken, async (req, res) => {
             usuarios.forEach(user => {
                 const nomeDeLogin = (user.nome || user.login || '').trim();
                 if (!nomeDeLogin || nomeDeLogin === remetenteLimpo) return;
+                if (user.alunoRefId && idsAlunosInativos.has(String(user.alunoRefId))) return;                
 
                 if (user.tipo === 'Professor' || user.tipo === 'Gestor') {
                     destinatarios.add(nomeDeLogin);
@@ -1282,8 +1295,12 @@ router.get('/avatars', verificarToken, async (req, res) => {
         await executarAutoCuraRetroativa(database);
 
         const mapaAvatars = {};
-        const alunos = await database.collection('alunos').find({}).toArray();
-        const usuarios = await database.collection('usuarios').find({}).toArray();
+        const alunosTodos = await database.collection('alunos').find({}).toArray();
+        const alunos = alunosTodos.filter(ehAlunoAtivo);
+        const idsAlunosInativos = new Set(alunosTodos.filter(a => !ehAlunoAtivo(a)).map(a => String(a.id)));
+
+        const usuariosTodos = await database.collection('usuarios').find({}).toArray();
+        const usuarios = usuariosTodos.filter(u => !(u.alunoRefId && idsAlunosInativos.has(String(u.alunoRefId))));
         
         const guardarFotoSegura = (chave, urlFoto) => {
             if (!chave || !urlFoto) return;
@@ -1343,7 +1360,7 @@ router.post('/eventos', verificarToken, async (req, res) => {
             const destinoTarefa = req.body.turma || 'global';
             const destinoNomeTarefa = req.body.turmaNome || 'Geral';
 
-            const alunos = await db.collection('alunos').find({ escolaId: escola }).toArray();
+            const alunos = (await db.collection('alunos').find({ escolaId: escola }).toArray()).filter(ehAlunoAtivo);
             let alunosAlvo = [];
             if (destinoTarefa === 'global') {
                 alunosAlvo = alunos;
@@ -1411,7 +1428,8 @@ router.put('/eventos/:id', verificarToken, async (req, res) => {
             const tituloNovo = req.body.titulo || eventoOriginal.titulo || 'Exercício Atualizado';
             const turmaAlvo = req.body.turma || eventoOriginal.turma || 'global';
             
-            const todosAlunos = await database.collection('alunos').find({ escolaId: escolaId }).toArray();
+            const todosAlunosBrutos = await database.collection('alunos').find({ escolaId: escolaId }).toArray();
+            const todosAlunos = todosAlunosBrutos.filter(ehAlunoAtivo);
             const alunosDaTurma = todosAlunos.filter(a => {
                 if (turmaAlvo === 'global') return true;
                 const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turmas, a.turma, a.turmaId];
@@ -1589,7 +1607,7 @@ router.post('/materiais', verificarToken, async (req, res) => {
             const autor = novoMaterial.autorNome || 'Professor';
             const tituloMat = novoMaterial.titulo || 'Novo Material';
 
-            const alunos = await db.collection('alunos').find({ escolaId: escolaId }).toArray();
+            const alunos = (await db.collection('alunos').find({ escolaId: escolaId }).toArray()).filter(ehAlunoAtivo);
             let alunosAlvo = [];
             if (destino === 'global' || (Array.isArray(destino) && destino.includes('global'))) {
                 alunosAlvo = alunos;
@@ -1681,7 +1699,7 @@ router.put('/materiais/:id', verificarToken, async (req, res) => {
             const autor = materialAtualizado.autorNome || 'Professor';
             const tituloMat = materialAtualizado.titulo || 'Material Atualizado';
 
-            const alunos = await db.collection('alunos').find({ escolaId: escolaId }).toArray();
+            const alunos = (await db.collection('alunos').find({ escolaId: escolaId }).toArray()).filter(ehAlunoAtivo);
             let alunosAlvo = [];
             if (destino === 'global' || (Array.isArray(destino) && destino.includes('global'))) {
                 alunosAlvo = alunos;
@@ -1727,7 +1745,7 @@ router.get('/monitoramento/status', verificarToken, async (req, res) => {
         const escolaId = req.query.escolaId; 
         const filtro = escolaId ? { escolaId } : {};
 
-        const alunos = await db.collection('alunos').find(filtro).toArray();
+        const alunos = (await db.collection('alunos').find(filtro).toArray()).filter(ehAlunoAtivo);
         const usuarios = await db.collection('usuarios').find(filtro).toArray();
         
         const agora = new Date();

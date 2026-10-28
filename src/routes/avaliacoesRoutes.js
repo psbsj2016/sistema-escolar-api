@@ -5,6 +5,16 @@ const crypto = require('crypto');
 const connectDB = require('../config/db'); // 🚀 LIGAÇÃO À BD REAL
 const { filtroTenant } = require('../middlewares/auth'); // 🚀 IMPORTAR O CADEADO AQUI!
 
+// 🛡️ Filtro Oficial: Considera apenas alunos ATIVOS no Sistema Principal
+const ehAlunoAtivo = (aluno) => {
+    if (!aluno) return false;
+    const st = String(aluno.status || 'Ativo').trim().toLowerCase();
+    if (st.includes('cancel') || st.includes('tranc') || st.includes('exclu') || st.includes('inativ') || st.includes('desist')) {
+        return false;
+    }
+    return st === 'ativo' || st === '';
+};
+
 // 1. CRIAR NOVA AVALIAÇÃO (E AVISAR ALUNOS)
 router.post('/', async (req, res) => {
     try {
@@ -44,7 +54,8 @@ router.post('/', async (req, res) => {
             if (tipo === 'oral') origemNoti = 'avaliacao_oral';
             if (tipo === 'online' || tipo === 'sessao_ao_vivo' || tipo === 'sessao') origemNoti = 'online';
 
-            const alunos = await db.collection('alunos').find({ escolaId: escola }).toArray();
+            const alunosBrutos = await db.collection('alunos').find({ escolaId: escola }).toArray();
+            const alunos = alunosBrutos.filter(ehAlunoAtivo);
             
             let alunosAlvo = [];
             if (novaAvaliacao.destino === 'global') {
@@ -155,12 +166,13 @@ router.put('/:id', async (req, res) => {
             if (tipo === 'escrita' || tipo === 'oral') {
                 origemNoti = tipo === 'escrita' ? 'avaliacao_escrita' : 'avaliacao_oral';
                 textoAviso = `alterou os dados da avaliação ${tipo}: "${tituloNovo}". Fique atento aos prazos!`;
-            } else {
+           } else {
                 origemNoti = 'online_edit';
                 textoAviso = `fez algumas alterações no acesso da sessão "${tituloNovo}". Confira o que mudou em <strong>Sala de Acessos</strong>.`;
             }
 
-            const alunos = await db.collection('alunos').find({ escolaId: escola }).toArray();
+            const alunosBrutos = await db.collection('alunos').find({ escolaId: escola }).toArray();
+            const alunos = alunosBrutos.filter(ehAlunoAtivo);
 
             let alunosAlvo = [];
             if (provaAtualizada.destino === 'global') {
