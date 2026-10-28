@@ -730,11 +730,241 @@ router.put('/:id/ocultar-massa', async (req, res) => {
             );
         }
         
-        if (global.workspaceStream) {
+       if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', { type: 'SALA_UPDATE', turmaId: req.params.id, escolaId: 'DEFAULT' });
         }
         res.json({ success: true });
     } catch (error) { res.status(500).json({ error: 'Erro ao alterar visibilidade em massa.' }); }
+});
+
+// ============================================================================
+// 🪄 IDEIA 1: GERADOR MÁGICO DE PROVAS COM IA EM 1 CLIQUE (AI EXAM BUILDER)
+// ============================================================================
+router.post('/gerar-ia', async (req, res) => {
+    try {
+        const { tema, nivel = 'B1', quantidade = 5, formato = 'misto' } = req.body;
+        if (!tema || !String(tema).trim()) {
+            return res.status(400).json({ success: false, error: 'Informe o tema ou assunto da avaliação.' });
+        }
+
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) return res.status(500).json({ success: false, error: 'Chave GROQ_API_KEY não configurada no servidor.' });
+
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+        const qtdSegura = Math.min(Math.max(parseInt(quantidade, 10) || 5, 1), 15);
+
+        let regraFormato = 'Crie uma mistura equilibrada de questões do tipo "escolha" (múltipla escolha com 4 opções) e do tipo "texto" (dissertativa).';
+        if (formato === 'escolha') {
+            regraFormato = 'Crie TODAS as questões estritamente do tipo "escolha" (múltipla escolha com 4 opções distintas).';
+        } else if (formato === 'texto') {
+            regraFormato = 'Crie TODAS as questões estritamente do tipo "texto" (perguntas abertas/dissertativas).';
+        }
+
+        const systemPrompt = `Você é um professor especialista em criar exames e avaliações de Inglês (CEFR nível ${nivel}).
+        Tema solicitado pelo professor: "${String(tema).trim()}".
+        Quantidade exata de questões a gerar: ${qtdSegura}.
+        Regra de formato: ${regraFormato}
+
+        REGRAS OBRIGATÓRIAS:
+        1. Para questões de múltipla escolha ("tipo": "escolha"):
+           - Forneça um array "opcoes" com EXATAMENTE 4 alternativas claras e sem prefixos como "A)" ou "1.".
+           - O campo "respostaCorreta" DEVE ser idêntico (texto exato) a uma das 4 strings dentro de "opcoes".
+        2. Para questões abertas ("tipo": "texto"):
+           - Defina "tipo": "texto" e apenas o enunciado em "pergunta".
+        3. Não numere o início do campo "pergunta" (o sistema numera automaticamente).
+        
+        Retorne APENAS um JSON válido neste formato exato:
+        {
+            "tituloSugerido": "Título curto e profissional para a prova",
+            "questoes": [
+                {
+                    "tipo": "escolha",
+                    "pergunta": "Enunciado da questão...",
+                    "opcoes": ["Opção 1", "Opção 2", "Opção 3", "Opção 4"],
+                    "respostaCorreta": "Opção 2"
+                }
+            ]
+        }`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: `Gere ${qtdSegura} questões sobre: ${tema} (Nível ${nivel})` }
+            ],
+            model: 'openai/gpt-oss-120b',
+            temperature: 0.4,
+            response_format: { type: 'json_object' }
+        });
+
+        let conteudoLimpo = completion.choices[0].message.content.trim();
+        if (conteudoLimpo.startsWith('```')) {
+            conteudoLimpo = conteudoLimpo.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+        }
+        const dadosGerados = JSON.parse(conteudoLimpo);
+
+        res.json({
+            success: true,
+            tituloSugerido: dadosGerados.tituloSugerido || `Avaliação: ${tema} (${nivel})`,
+            questoes: Array.isArray(dadosGerados.questoes) ? dadosGerados.questoes : []
+        });
+    } catch (error) {
+        console.error('Erro ao gerar prova com IA:', error);
+        res.status(500).json({ success: false, error: 'A IA não conseguiu gerar as questões agora. Tente novamente.' });
+    }
+});
+
+// ============================================================================
+// 🤖 IDEIA 2 (PARTE A): AVALIADOR IA PARA SUGERIR NOTA E FEEDBACK NA PROVA
+// ============================================================================
+router.post('/entregas/:entregaId/avaliar-ia', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const entrega = await db.collection('workspace_entregas_provas').findOne({ id: req.params.entregaId });
+        if (!entrega) return res.status(404).json({ success: false, error: 'Entrega não encontrada.' });
+
+        const prova = await db.collection('workspace_avaliacoes').findOne({ id: entrega.avaliacaoId });
+        if (!prova) return res.status(404).json({ success: false, error: 'Avaliação original não encontrada.' });
+
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) return res.status(500).json({ success: false, error: 'Chave GROQ_API_KEY ausente.' });
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+
+        const respostasAluno = entrega.respostas || {};
+        const resumoQuestoes = (prova.questoes || []).map((q, idx) => {
+            const resp = respostasAluno[q.id] || '(Deixou em branco)';
+            if (q.tipo === 'escolha') {
+                const acertou = resp === q.respostaCorreta;
+                return `Questão ${idx + 1} [Múltipla Escolha]: "${q.pergunta}"\n- Resposta do Aluno: "${resp}"\n- Gabarito Oficial: "${q.respostaCorreta}" (${acertou ? 'ACERTOU' : 'ERROU'})`;
+            }
+            return `Questão ${idx + 1} [Dissertativa/Texto]: "${q.pergunta}"\n- Resposta Escrita pelo Aluno: "${resp}"`;
+        }).join('\n\n');
+
+        const systemPrompt = `Você é um professor de inglês avaliando a prova submetida pelo aluno "${entrega.alunoNome || 'Aluno'}".
+        Título da Avaliação: "${prova.titulo}".
+        
+        Abaixo estão as questões da prova e as respostas do aluno:
+        ${resumoQuestoes}
+        
+        Sua missão:
+        1. Calcule uma "notaSugerida" justa de 0 a 100 (inteiro), levando em conta as questões objetivas certas e a qualidade gramatical/coerência das respostas dissertativas.
+        2. Escreva um "feedbackSugerido" em Português (direcionado diretamente ao aluno, acolhedor, didático e claro), elogiando os pontos fortes e explicando brevemente a correção das questões que ele errou ou como melhorar as frases em inglês.
+        
+        Retorne APENAS um JSON válido neste formato exato:
+        {
+            "notaSugerida": 85,
+            "feedbackSugerido": "Excelente trabalho! Você dominou..."
+        }`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'system', content: systemPrompt }],
+            model: 'openai/gpt-oss-120b',
+            temperature: 0.3,
+            response_format: { type: 'json_object' }
+        });
+
+        let conteudoLimpo = completion.choices[0].message.content.trim();
+        if (conteudoLimpo.startsWith('```')) {
+            conteudoLimpo = conteudoLimpo.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+        }
+        const avaliacaoIA = JSON.parse(conteudoLimpo);
+
+        res.json({
+            success: true,
+            notaSugerida: avaliacaoIA.notaSugerida !== undefined ? avaliacaoIA.notaSugerida : 0,
+            feedbackSugerido: avaliacaoIA.feedbackSugerido || ''
+        });
+    } catch (error) {
+        console.error('Erro no Avaliador IA de provas:', error);
+        res.status(500).json({ success: false, error: 'Erro ao analisar as respostas com a IA.' });
+    }
+});
+
+// ============================================================================
+// 💾 IDEIA 2 (PARTE B): SALVAR NOTA OFICIAL E FEEDBACK + NOTIFICAR SININHO
+// ============================================================================
+router.put('/entregas/:entregaId/correcao', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { notaFinal, feedbackProf, professorNome } = req.body;
+        const entregaId = req.params.entregaId;
+
+        const entrega = await db.collection('workspace_entregas_provas').findOne({ id: entregaId });
+        if (!entrega) return res.status(404).json({ success: false, error: 'Entrega não encontrada.' });
+
+        const prova = await db.collection('workspace_avaliacoes').findOne({ id: entrega.avaliacaoId });
+        const notaLimpa = notaFinal !== undefined && notaFinal !== '' ? Number(notaFinal) : null;
+        const feedbackLimpo = String(feedbackProf || '').trim();
+        const dataCorrecao = new Date().toISOString();
+
+        await db.collection('workspace_entregas_provas').updateOne(
+            { id: entregaId },
+            {
+                $set: {
+                    notaFinal: notaLimpa,
+                    feedbackProf: feedbackLimpo,
+                    professorCorretor: professorNome || 'Professor',
+                    corrigidoEm: dataCorrecao
+                }
+            }
+        );
+
+        // Encontra a conta do aluno em 'usuarios' para enviar a notificação ao Nome Escolhido e com o Avatar do Professor
+        try {
+            const escolaId = (prova && prova.escolaId) || 'DEFAULT';
+            const contaAluno = await db.collection('usuarios').findOne({
+                $or: [
+                    { id: String(entrega.alunoId) },
+                    { alunoRefId: String(entrega.alunoId) },
+                    ...(entrega.alunoRefId ? [{ id: String(entrega.alunoRefId) }, { alunoRefId: String(entrega.alunoRefId) }] : [])
+                ]
+            });
+
+            const contaProf = professorNome
+                ? await db.collection('usuarios').findOne({ $or: [{ nome: professorNome }, { login: professorNome }] })
+                : null;
+
+            const nomeDestinoAluno = (contaAluno && (contaAluno.nome || contaAluno.login))
+                ? (contaAluno.nome || contaAluno.login).trim()
+                : String(entrega.alunoNome || 'Aluno').trim();
+
+            const tituloProva = prova ? prova.titulo : 'Avaliação';
+            const origemNoti = (prova && prova.tipo === 'oral') ? 'avaliacao_oral' : 'avaliacao_escrita';
+            const txtNota = notaLimpa !== null ? ` Nota: <strong>${notaLimpa}%</strong>.` : '';
+
+            const novaNoti = {
+                id: 'notif_corr_' + crypto.randomUUID(),
+                escolaId: escolaId,
+                destinatarioNome: nomeDestinoAluno,
+                loginDestino: contaAluno ? contaAluno.login : '',
+                remetenteNome: professorNome || 'Professor',
+                remetenteAvatar: (contaProf && contaProf.avatar) ? contaProf.avatar : null,
+                mensagem: `corrigiu a sua avaliação <strong>"${tituloProva}"</strong>!${txtNota} Clique para ver o seu feedback.`,
+                origem: origemNoti,
+                origemId: prova ? prova.id : entrega.avaliacaoId,
+                destinoNome: 'Central de Avaliações',
+                lida: false,
+                data: dataCorrecao
+            };
+
+            await db.collection('workspace_notificacoes').insertOne(novaNoti);
+
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'NOVA_NOTIFICACAO',
+                    destinatarios: [nomeDestinoAluno, entrega.alunoNome].filter(Boolean),
+                    escolaId: escolaId
+                });
+            }
+        } catch (errNoti) {
+            console.error('Aviso ao gerar notificação de correção:', errNoti);
+        }
+
+        res.json({ success: true, notaFinal: notaLimpa, feedbackProf: feedbackLimpo, corrigidoEm: dataCorrecao });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Erro ao salvar correção.' });
+    }
 });
 
 module.exports = router;
