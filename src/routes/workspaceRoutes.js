@@ -2395,9 +2395,13 @@ router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
 
         const { idCanonico, nomeTurma } = await resolverIdentidadeTurmaLousa(db, turmaIdReq);
         const agoraIso = new Date().toISOString();
-        const listaRecords = Array.isArray(records) ? records : [];
 
-        // Permite ao professor desenhar e guardar mesmo antes de ativar a visualização para os alunos!
+        // Filtra estritamente apenas desenhos reais ('shape', 'asset', 'binding') para nunca corromper o editor
+        const tiposValidos = new Set(['shape', 'asset', 'binding']);
+        const listaRecords = Array.isArray(records)
+            ? records.filter(r => r && tiposValidos.has(r.typeName))
+            : [];
+
         await db.collection('workspace_lousa_dados').updateOne(
             { id: idCanonico },
             { $set: { id: idCanonico, nome: nomeTurma, records: listaRecords, atualizadoEm: agoraIso } },
@@ -2412,7 +2416,6 @@ router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
             );
         }
 
-        // Emite atualização em tempo real identificando o senderId para não dar "eco" em quem desenhou!
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'LOUSA_DADOS_CHANGED',
@@ -2439,7 +2442,6 @@ router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
             $or: [{ id: { $in: chavesBusca } }, { idOriginal: { $in: chavesBusca } }, { nome: { $in: chavesBusca } }]
         });
 
-        // Se o aluno estiver sintonizado numa lousa global, puxa o desenho global caso a turma esteja vazia
         if ((!doc || !doc.records || doc.records.length === 0) && idCanonico !== 'global') {
             const statusGlobal = await db.collection('workspace_lousa_status').findOne({ id: 'global' });
             if (statusGlobal && (statusGlobal.ativa || statusGlobal.lousaAtiva)) {
@@ -2450,7 +2452,13 @@ router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
             }
         }
 
-        res.json({ success: true, turmaId: idCanonico, records: doc?.records || [] });
+        // Remove qualquer registo antigo de 'page', 'camera' ou 'instance' que estivesse salvo no banco de testes anteriores
+        const tiposValidos = new Set(['shape', 'asset', 'binding']);
+        const recordsLimpos = Array.isArray(doc?.records)
+            ? doc.records.filter(r => r && tiposValidos.has(r.typeName))
+            : [];
+
+        res.json({ success: true, turmaId: idCanonico, records: recordsLimpos });
     } catch (e) {
         res.status(500).json({ success: false, records: [] });
     }
