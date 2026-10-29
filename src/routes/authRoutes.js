@@ -165,10 +165,18 @@ router.post('/login', async (req, res) => {
         path: '/' 
     });
     
-    let dadosExtras = {};
-    if (user.tipo === 'Aluno' && user.alunoRefId) {
-        const alunoMatriculado = await database.collection('alunos').findOne({ id: user.alunoRefId });
+  let dadosExtras = {};
+    if (user.tipo === 'Aluno') {
+        const alunoMatriculado = user.alunoRefId
+            ? await database.collection('alunos').findOne({ id: String(user.alunoRefId) })
+            : await database.collection('alunos').findOne({ login: new RegExp(`^${user.login}$`, 'i') });
+
         if (alunoMatriculado) {
+            const st = String(alunoMatriculado.status || 'Ativo').trim().toLowerCase();
+            if (st.includes('cancel') || st.includes('tranc') || st.includes('exclu') || st.includes('inativ') || st.includes('desist')) {
+                res.clearCookie('token_acesso', { path: '/' });
+                return res.status(403).json({ error: 'A sua matrícula encontra-se inativa ou cancelada. Entre em contacto com a secretaria.' });
+            }
             dadosExtras.turma = alunoMatriculado.turma;
             if (alunoMatriculado.turmas) dadosExtras.turmas = alunoMatriculado.turmas;
             if (alunoMatriculado.curso) dadosExtras.curso = alunoMatriculado.curso;

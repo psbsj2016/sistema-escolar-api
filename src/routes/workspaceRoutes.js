@@ -1019,6 +1019,11 @@ router.get('/perfil/info/:identificador', verificarToken, async (req, res) => {
         const user = await database.collection('usuarios').findOne({ $or: [{ id: idBusca }, { nome: idBusca }, { login: idBusca }] });
         const aluno = await database.collection('alunos').findOne({ $or: [{ id: idBusca }, { nome: idBusca }, { login: idBusca }, ...(user && user.alunoRefId ? [{ id: String(user.alunoRefId) }] : [])] });
         
+        // Se o aluno foi cancelado/trancado/excluído no sistema principal, avisa o aparelho para encerrar a sessão
+        if (aluno && !ehAlunoAtivo(aluno)) {
+            return res.status(403).json({ error: 'Matrícula inativa.', revogado: true });
+        }
+
         let perfilFinal = user || aluno;
         
         if (perfilFinal) {
@@ -1045,7 +1050,7 @@ router.get('/perfil/info/:identificador', verificarToken, async (req, res) => {
                 arenaStats: stats || null
             });
         } else {
-            res.status(404).json({ error: 'Usuário não encontrado.' });
+            res.status(404).json({ error: 'Usuário não encontrado.', revogado: true });
         }
     } catch (error) { 
         res.status(500).json({ error: 'Erro ao buscar perfil.' }); 
@@ -1648,13 +1653,36 @@ router.get('/materiais', verificarToken, async (req, res) => {
         const db = await connectDB();
         const escolaId = req.query.escolaId;
         const alunoRefId = req.query.alunoRefId;
-        let filtro = { escolaId: escolaId };
+        const filtroEscola = (escolaId && escolaId !== 'DEFAULT')
+            ? { $in: [escolaId, 'DEFAULT', null] }
+            : { $exists: true };
+
+        let filtro = { escolaId: filtroEscola };
         
         if (alunoRefId && alunoRefId !== 'undefined') {
-            const aluno = await db.collection('alunos').findOne({ id: alunoRefId });
+            let aluno = await db.collection('alunos').findOne({ id: String(alunoRefId) });
+            if (!aluno) {
+                const contaUser = await db.collection('usuarios').findOne({ id: String(alunoRefId) });
+                if (contaUser && contaUser.alunoRefId) {
+                    aluno = await db.collection('alunos').findOne({ id: String(contaUser.alunoRefId) });
+                }
+            }
             if (aluno) {
-                let minhasTurmas = Array.isArray(aluno.turmas) ? aluno.turmas : [aluno.turmas || aluno.turma];
-                filtro = { escolaId: escolaId, $or: [{ destino: 'global' }, { destino: { $in: ['global'] } }, { destino: { $in: minhasTurmas } }, { destinoNome: { $in: minhasTurmas } }] };
+                let minhasTurmas = Array.isArray(aluno.turmas) ? [...aluno.turmas] : [];
+                if (aluno.turma) minhasTurmas.push(aluno.turma);
+                if (aluno.turmaId) minhasTurmas.push(aluno.turmaId);
+                minhasTurmas = minhasTurmas.filter(Boolean);
+
+                if (minhasTurmas.length > 0) {
+                    filtro = {
+                        escolaId: filtroEscola,
+                        $or: [
+                            { destino: 'global' },
+                            { destino: { $in: ['global', ...minhasTurmas] } },
+                            { destinoNome: { $in: ['Todas as Turmas', 'Global', ...minhasTurmas] } }
+                        ]
+                    };
+                }
             }
         }
         const materiais = await db.collection('workspace_materiais').find(filtro).sort({ dataCriacao: -1 }).toArray();
@@ -2324,6 +2352,16 @@ router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
             { $set: { id: turmaId, records: records || [], atualizadoEm: new Date().toISOString() } },
             { upsert: true }
         );
+
+        // 🚀 Emite o sinal em tempo real para que o quadro do aluno atualize instantaneamente!
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'LOUSA_DADOS_CHANGED',
+                turmaId: turmaId,
+                escolaId: status.escolaId || 'DEFAULT'
+            });
+        }
+
         res.json({ success:true, count: (records||[]).length });
     } catch(e){ res.status(500).json({ success:false }); }
 });

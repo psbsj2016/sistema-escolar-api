@@ -235,10 +235,21 @@ router.post('/enviar-aviso-aluno', verificarToken, async (req, res) => {
             if (destinatariosParaGravar.size === 0 && nomeDestino) {
                 destinatariosParaGravar.add(String(nomeDestino).trim());
             }
-        } else {
-            // Modo TODOS: Busca todas as contas de alunos no Workspace
+       } else {
+            // Modo TODOS: Busca todas as contas de alunos ATIVOS no Workspace
+            const todosAlunos = await database.collection('alunos').find({}).toArray();
+            const idsInativos = new Set(
+                todosAlunos
+                    .filter(a => {
+                        const st = String(a.status || 'Ativo').trim().toLowerCase();
+                        return st.includes('cancel') || st.includes('tranc') || st.includes('exclu') || st.includes('inativ') || st.includes('desist');
+                    })
+                    .map(a => String(a.id))
+            );
+
             const todosUsuarios = await database.collection('usuarios').find({}).toArray();
             todosUsuarios.forEach(u => {
+                if (u.alunoRefId && idsInativos.has(String(u.alunoRefId))) return;
                 const pertenceEscola = (escolaId === 'DEFAULT' || !u.escolaId || String(u.escolaId) === String(escolaId));
                 const ehAluno = (u.tipo === 'Aluno' || Boolean(u.alunoRefId));
                 if (pertenceEscola && ehAluno) {

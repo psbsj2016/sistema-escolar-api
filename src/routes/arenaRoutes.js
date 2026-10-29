@@ -152,6 +152,92 @@ router.post('/desafio-aleatorio/aceitar', verificarToken, async (req, res) => {
     }
 });
 
+// 🚀 DESAFIO DIRETO A PARTIR DO CARTÃO DO FEED (10 MINUTOS)
+router.post('/desafio-direto', verificarToken, async (req, res) => {
+    try {
+        const { desafiadoNome, desafianteNome, escolaId, minutos, postId } = req.body;
+        if (!desafiadoNome || !desafianteNome) {
+            return res.status(400).json({ error: 'Dados do desafio incompletos.' });
+        }
+
+        const salaId = 'dir_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_DESAFIO_DIRETO',
+                salaId: salaId,
+                desafianteNome: desafianteNome,
+                destinatarios: [desafiadoNome],
+                minutos: parseInt(minutos, 10) || 10,
+                postId: postId || null,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+
+        res.status(200).json({ success: true, salaId });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao enviar desafio direto.' });
+    }
+});
+
+router.post('/desafio-direto/aceitar', verificarToken, async (req, res) => {
+    try {
+        const { salaId, desafiadoNome, desafianteNome, escolaId, minutos, postId } = req.body;
+        const db = await connectDB();
+
+        const userDesafiado = await db.collection('usuarios').findOne({ $or: [{ nome: desafiadoNome }, { login: desafiadoNome }] });
+        const userDesafiante = await db.collection('usuarios').findOne({ $or: [{ nome: desafianteNome }, { login: desafianteNome }] });
+
+        const salaIdFinal = salaId || ('dir_match_' + Date.now());
+        const cenarioSorteado = sortearCenarioNivelado(null);
+
+        const novaSala = {
+            id: salaIdFinal,
+            escolaId: escolaId || 'DEFAULT',
+            tipo: 'desafio_direto',
+            status: 'em_curso',
+            jogador1: { id: userDesafiante?.id || null, nome: desafianteNome },
+            jogador2: { id: userDesafiado?.id || null, nome: desafiadoNome },
+            limiteMinutos: parseInt(minutos, 10) || 10,
+            iniciadoEm: new Date().toISOString(),
+            cenario: "⚔️ DUELO DIRETO DO FEED ⚔️\n" + cenarioSorteado.t,
+            cenarioObj: cenarioSorteado,
+            historico: []
+        };
+
+        await db.collection('workspace_arenas').insertOne(novaSala);
+
+        // Se veio de um post de desafio no Feed, remove o post antigo para ninguém mais clicar num duelo já iniciado
+        if (postId) {
+            await db.collection('workspace_posts').deleteOne({ id: String(postId) });
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'POST_APAGADO',
+                    postId: String(postId),
+                    escolaId: escolaId || 'DEFAULT'
+                });
+            }
+        }
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_MATCH_ENCONTRADO',
+                destinatarios: [desafianteNome, desafiadoNome],
+                destinatariosIds: [userDesafiante?.id, userDesafiado?.id].filter(Boolean),
+                salaId: salaIdFinal,
+                limiteMinutos: novaSala.limiteMinutos,
+                cenario: novaSala.cenario,
+                cenarioObj: cenarioSorteado,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+
+        res.status(200).json({ success: true, salaId: salaIdFinal });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao iniciar duelo direto.' });
+    }
+});
+
 router.post('/desafio-direto/recusar', verificarToken, async (req, res) => {
     try {
         const { desafianteNome, escolaId } = req.body;
