@@ -2251,128 +2251,209 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🚀 LOUSA DIGITAL - ROTAS FINAIS v3
+// 🚀 LOUSA DIGITAL - ROTAS FINAIS v4 (SINCRONIA TOTAL PROFESSOR <-> ALUNO)
 // ============================================================================
+
+// 🔍 Auxiliar que descobre o ID oficial e o Nome da Turma para que Professor e Aluno falem sempre a mesma língua
+async function resolverIdentidadeTurmaLousa(database, turmaInput) {
+    const chave = String(turmaInput || 'global').trim();
+    if (!chave || chave.toLowerCase() === 'global') {
+        return { idCanonico: 'global', nomeTurma: 'global', chavesBusca: ['global'] };
+    }
+    try {
+        const regexNome = new RegExp(`^\\s*${chave.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
+        const turmaDoc = await database.collection('turmas').findOne({
+            $or: [{ id: chave }, { nome: regexNome }]
+        });
+        if (turmaDoc) {
+            const idC = String(turmaDoc.id || chave).trim();
+            const nomeC = String(turmaDoc.nome || chave).trim();
+            return {
+                idCanonico: idC,
+                nomeTurma: nomeC,
+                chavesBusca: Array.from(new Set([idC, nomeC, chave]))
+            };
+        }
+    } catch (e) {}
+    return { idCanonico: chave, nomeTurma: chave, chavesBusca: [chave] };
+}
+
 router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
     try {
         const { turmaId, ativa, recursos, escolaId } = req.body;
         if (!turmaId) return res.status(400).json({ success: false, error: 'turmaId é obrigatório' });
         
         const database = await connectDB();
-        const idLimpo = String(turmaId).trim();
         const escolaFinal = escolaId || req.query.escolaId || req.body.escolaId || req.usuario?.escolaId || 'DEFAULT';
-        
-        let turmaDoc = null;
-        try { turmaDoc = await database.collection('turmas').findOne({ $or: [{ id: idLimpo }, { nome: idLimpo }] }); } catch(e){}
-        const nomeTurma = turmaDoc?.nome || null;
+        const { idCanonico, nomeTurma } = await resolverIdentidadeTurmaLousa(database, turmaId);
+        const agoraIso = new Date().toISOString();
+
+        const dadosStatus = {
+            id: idCanonico,
+            idOriginal: idCanonico,
+            nome: nomeTurma,
+            ativa: !!ativa,
+            recursos: !!recursos,
+            lousaAtiva: !!ativa,
+            lousaRecursos: !!recursos,
+            atualizadoEm: agoraIso,
+            escolaId: escolaFinal,
+            professorId: req.usuario?.id || null
+        };
 
         await database.collection('workspace_lousa_status').updateOne(
-            { id: idLimpo },
-            { $set: { id: idLimpo, nome: nomeTurma, ativa: !!ativa, recursos: !!recursos, lousaAtiva: !!ativa, lousaRecursos: !!recursos, atualizadoEm: new Date().toISOString(), escolaId: escolaFinal, professorId: req.usuario?.id || null } },
+            { id: idCanonico },
+            { $set: dadosStatus },
             { upsert: true }
         );
 
-        if(nomeTurma && nomeTurma !== idLimpo){
+        if (nomeTurma && nomeTurma !== idCanonico) {
             await database.collection('workspace_lousa_status').updateOne(
                 { id: nomeTurma },
-                { $set: { id: nomeTurma, idOriginal: idLimpo, nome: nomeTurma, ativa: !!ativa, recursos: !!recursos, lousaAtiva: !!ativa, lousaRecursos: !!recursos, atualizadoEm: new Date().toISOString(), escolaId: escolaFinal } },
+                { $set: { ...dadosStatus, id: nomeTurma } },
                 { upsert: true }
             );
         }
 
-        if(!ativa){
-  // Mantém os dados pra quando reativar, só desativa a visualização
-  // Remova os deleteOne de workspace_lousa_dados
-  try{
-    await database.collection('workspace_lousa_status').updateOne(
-      { id: idLimpo },
-      { $set: { ativa: false, lousaAtiva: false, atualizadoEm: new Date().toISOString() } }
-    );
-    if(nomeTurma && nomeTurma !== idLimpo){
-      await database.collection('workspace_lousa_status').updateOne(
-        { id: nomeTurma },
-        { $set: { ativa: false, lousaAtiva: false } }
-      );
-    }
-  }catch(e){}
-}
-// Remova completamente os deleteMany de dados aqui
-
         if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', { type: 'LOUSA_STATUS_CHANGED', turmaId: idLimpo, turmaNome: nomeTurma, ativa: !!ativa, recursos: !!recursos, escolaId: escolaFinal });
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'LOUSA_STATUS_CHANGED',
+                turmaId: idCanonico,
+                turmaNome: nomeTurma,
+                ativa: !!ativa,
+                recursos: !!recursos,
+                escolaId: escolaFinal
+            });
         }
 
-        res.json({ success: true, turmaId: idLimpo, turmaNome: nomeTurma, ativa: !!ativa, recursos: !!recursos });
-    } catch (e) { res.status(500).json({ success: false, error: 'Erro ao sincronizar lousa.' }); }
+        res.json({ success: true, turmaId: idCanonico, turmaNome: nomeTurma, ativa: !!ativa, recursos: !!recursos });
+    } catch (e) {
+        res.status(500).json({ success: false, error: 'Erro ao sincronizar lousa.' });
+    }
 });
 
 router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
         const turmaIdReq = String(req.params.turmaId || 'global').trim();
+        const { idCanonico, nomeTurma, chavesBusca } = await resolverIdentidadeTurmaLousa(database, turmaIdReq);
 
-        let status = await database.collection('workspace_lousa_status').findOne({ id: turmaIdReq });
-        if(!status) status = await database.collection('workspace_lousa_status').findOne({ $or: [{ nome: turmaIdReq }, { idOriginal: turmaIdReq }] });
+        // 1. Procura o status específico da turma solicitada
+        let status = await database.collection('workspace_lousa_status').findOne({
+            $or: [
+                { id: { $in: chavesBusca } },
+                { nome: { $in: chavesBusca } },
+                { idOriginal: { $in: chavesBusca } }
+            ]
+        });
 
-        if(!status){
-            const turmaDoc = await database.collection('turmas').findOne({ $or: [{ id: turmaIdReq }, { nome: turmaIdReq }] });
-            if(turmaDoc) status = await database.collection('workspace_lousa_status').findOne({ $or: [{ id: turmaDoc.id }, { id: turmaDoc.nome }, { idOriginal: turmaDoc.id }] });
+        let ativa = !!(status?.ativa || status?.lousaAtiva);
+        let recursos = !!(status?.recursos || status?.lousaRecursos);
+        let salaAtivaId = status?.idOriginal || status?.id || idCanonico;
+
+        // 2. Se a turma específica do aluno NÃO estiver ativa, verifica se o Professor ativou a lousa 'global' (Público Geral)!
+        if (!ativa && idCanonico !== 'global' && req.query.estrito !== 'true') {
+            const statusGlobal = await database.collection('workspace_lousa_status').findOne({ id: 'global' });
+            if (statusGlobal && (statusGlobal.ativa || statusGlobal.lousaAtiva)) {
+                ativa = true;
+                recursos = !!(statusGlobal.recursos || statusGlobal.lousaRecursos);
+                salaAtivaId = 'global';
+            }
         }
 
-        if(!status && turmaIdReq === 'global') status = await database.collection('workspace_lousa_status').findOne({ id: 'global' });
-
-        const ativa = !!(status?.ativa || status?.lousaAtiva);
-        const recursos = !!(status?.recursos || status?.lousaRecursos);
-
-        res.json({ success: true, ativa, recursos, turmaId: turmaIdReq, statusId: status?.id || null });
-    } catch (e) { res.status(500).json({ success: false, ativa: false, recursos: false }); }
+        res.json({
+            success: true,
+            ativa,
+            recursos,
+            turmaId: turmaIdReq,
+            idCanonico,
+            nomeTurma,
+            salaAtivaId
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, ativa: false, recursos: false });
+    }
 });
 
 router.delete('/sala/workspace-lousa/status/tudo', verificarToken, async (req, res) => {
-    try{
+    try {
         const db = await connectDB();
         const r1 = await db.collection('workspace_lousa_status').deleteMany({});
         const r2 = await db.collection('workspace_lousa_dados').deleteMany({});
-        res.json({ success:true, deletedStatus: r1.deletedCount, deletedDados: r2.deletedCount });
-    }catch(e){ res.status(500).json({ success:false }); }
+        res.json({ success: true, deletedStatus: r1.deletedCount, deletedDados: r2.deletedCount });
+    } catch (e) {
+        res.status(500).json({ success: false });
+    }
 });
 
 router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const turmaId = String(req.params.turmaId).trim();
-        const { records } = req.body;
-        if(!turmaId) return res.status(400).json({ success:false });
-        
-        const status = await db.collection('workspace_lousa_status').findOne({ $or: [{ id: turmaId }, { nome: turmaId }, { idOriginal: turmaId }] });
-        if(!status) return res.json({ success:false, error:'Lousa não está ativa' });
+        const turmaIdReq = String(req.params.turmaId || 'global').trim();
+        const { records, senderId } = req.body;
+        if (!turmaIdReq) return res.status(400).json({ success: false });
 
+        const { idCanonico, nomeTurma } = await resolverIdentidadeTurmaLousa(db, turmaIdReq);
+        const agoraIso = new Date().toISOString();
+        const listaRecords = Array.isArray(records) ? records : [];
+
+        // Permite ao professor desenhar e guardar mesmo antes de ativar a visualização para os alunos!
         await db.collection('workspace_lousa_dados').updateOne(
-            { id: turmaId },
-            { $set: { id: turmaId, records: records || [], atualizadoEm: new Date().toISOString() } },
+            { id: idCanonico },
+            { $set: { id: idCanonico, nome: nomeTurma, records: listaRecords, atualizadoEm: agoraIso } },
             { upsert: true }
         );
 
-        // 🚀 Emite o sinal em tempo real para que o quadro do aluno atualize instantaneamente!
+        if (nomeTurma && nomeTurma !== idCanonico) {
+            await db.collection('workspace_lousa_dados').updateOne(
+                { id: nomeTurma },
+                { $set: { id: nomeTurma, idOriginal: idCanonico, records: listaRecords, atualizadoEm: agoraIso } },
+                { upsert: true }
+            );
+        }
+
+        // Emite atualização em tempo real identificando o senderId para não dar "eco" em quem desenhou!
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'LOUSA_DADOS_CHANGED',
-                turmaId: turmaId,
-                escolaId: status.escolaId || 'DEFAULT'
+                turmaId: idCanonico,
+                turmaNome: nomeTurma,
+                senderId: senderId || null,
+                escolaId: 'DEFAULT'
             });
         }
 
-        res.json({ success:true, count: (records||[]).length });
-    } catch(e){ res.status(500).json({ success:false }); }
+        res.json({ success: true, count: listaRecords.length });
+    } catch (e) {
+        res.status(500).json({ success: false });
+    }
 });
 
 router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const turmaId = String(req.params.turmaId).trim();
-        const doc = await db.collection('workspace_lousa_dados').findOne({ id: turmaId });
-        res.json({ success:true, turmaId, records: doc?.records || [] });
-    } catch(e){ res.status(500).json({ success:false, records:[] }); }
+        const turmaIdReq = String(req.params.turmaId || 'global').trim();
+        const { idCanonico, chavesBusca } = await resolverIdentidadeTurmaLousa(db, turmaIdReq);
+
+        let doc = await db.collection('workspace_lousa_dados').findOne({
+            $or: [{ id: { $in: chavesBusca } }, { idOriginal: { $in: chavesBusca } }, { nome: { $in: chavesBusca } }]
+        });
+
+        // Se o aluno estiver sintonizado numa lousa global, puxa o desenho global caso a turma esteja vazia
+        if ((!doc || !doc.records || doc.records.length === 0) && idCanonico !== 'global') {
+            const statusGlobal = await db.collection('workspace_lousa_status').findOne({ id: 'global' });
+            if (statusGlobal && (statusGlobal.ativa || statusGlobal.lousaAtiva)) {
+                const docGlobal = await db.collection('workspace_lousa_dados').findOne({ id: 'global' });
+                if (docGlobal && docGlobal.records && docGlobal.records.length > 0) {
+                    doc = docGlobal;
+                }
+            }
+        }
+
+        res.json({ success: true, turmaId: idCanonico, records: doc?.records || [] });
+    } catch (e) {
+        res.status(500).json({ success: false, records: [] });
+    }
 });
 
 // ============================================================================
