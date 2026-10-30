@@ -2290,15 +2290,20 @@ router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
         const { idCanonico, nomeTurma } = await resolverIdentidadeTurmaLousa(database, turmaId);
         const agoraIso = new Date().toISOString();
 
-        // 🔒 REGRA DE OURO: Recursos SÓ podem ficar ativos se a lousa estiver ATIVA!
+        // 🔒 Recursos só ficam disponíveis se a lousa estiver ativa!
         const lousaAtiva = !!ativa;
         const recursosAtivos = lousaAtiva ? !!recursos : false;
 
-        // Se o professor está a ativar esta turma, desativa lousas antigas de outras turmas para o aluno conectar sempre na sala certa
+        // Verifica se já estava ativa para manter o cronómetro contínuo ao alternar apenas os recursos
+        const statusAnterior = await database.collection('workspace_lousa_status').findOne({ id: idCanonico });
+        const ativadaEm = lousaAtiva
+            ? ((statusAnterior && statusAnterior.ativa && statusAnterior.ativadaEm) ? statusAnterior.ativadaEm : Date.now())
+            : null;
+
         if (lousaAtiva) {
             await database.collection('workspace_lousa_status').updateMany(
                 { id: { $nin: [idCanonico, nomeTurma] } },
-                { $set: { ativa: false, lousaAtiva: false, recursos: false, lousaRecursos: false } }
+                { $set: { ativa: false, lousaAtiva: false, recursos: false, lousaRecursos: false, ativadaEm: null } }
             );
         }
 
@@ -2310,6 +2315,7 @@ router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
             recursos: recursosAtivos,
             lousaAtiva: lousaAtiva,
             lousaRecursos: recursosAtivos,
+            ativadaEm: ativadaEm,
             atualizadoEm: agoraIso,
             escolaId: escolaFinal,
             professorId: req.usuario?.id || null
@@ -2330,27 +2336,22 @@ router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
         }
 
         if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', {
+            const payloadEvento = {
                 type: 'LOUSA_STATUS_CHANGED',
                 turmaId: idCanonico,
                 turmaNome: nomeTurma,
                 ativa: lousaAtiva,
                 recursos: recursosAtivos,
+                ativadaEm: ativadaEm,
                 escolaId: 'DEFAULT'
-            });
+            };
+            global.workspaceStream.emit('evento_realtime', payloadEvento);
             if (escolaFinal !== 'DEFAULT') {
-                global.workspaceStream.emit('evento_realtime', {
-                    type: 'LOUSA_STATUS_CHANGED',
-                    turmaId: idCanonico,
-                    turmaNome: nomeTurma,
-                    ativa: lousaAtiva,
-                    recursos: recursosAtivos,
-                    escolaId: escolaFinal
-                });
+                global.workspaceStream.emit('evento_realtime', { ...payloadEvento, escolaId: escolaFinal });
             }
         }
 
-        res.json({ success: true, turmaId: idCanonico, turmaNome: nomeTurma, ativa: lousaAtiva, recursos: recursosAtivos });
+        res.json({ success: true, turmaId: idCanonico, turmaNome: nomeTurma, ativa: lousaAtiva, recursos: recursosAtivos, ativadaEm });
     } catch (e) {
         res.status(500).json({ success: false, error: 'Erro ao sincronizar lousa.' });
     }
@@ -2376,6 +2377,7 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
                 success: true,
                 ativa: ativaE,
                 recursos: recursosE,
+                ativadaEm: ativaE ? (statusEstrito?.ativadaEm || Date.now()) : null,
                 turmaId: turmaIdReq,
                 idCanonico,
                 nomeTurma,
@@ -2383,7 +2385,6 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
             });
         }
 
-        // 🎓 MODO ALUNO: Verifica se a lousa está ativa para a turma do aluno ou no modo Público Geral ('global')
         const candidatos = new Set([...chavesBusca, 'global', 'Público Geral']);
         const userId = req.query.userId ? String(req.query.userId).trim() : '';
         const alunoRefId = req.query.alunoRefId ? String(req.query.alunoRefId).trim() : '';
@@ -2455,6 +2456,7 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
             success: true,
             ativa,
             recursos,
+            ativadaEm: ativa ? (statusAtivo?.ativadaEm || Date.now()) : null,
             turmaId: turmaIdReq,
             idCanonico,
             nomeTurma: statusAtivo?.nome || nomeTurma,
