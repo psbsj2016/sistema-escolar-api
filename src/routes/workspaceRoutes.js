@@ -2338,28 +2338,99 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
         const turmaIdReq = String(req.params.turmaId || 'global').trim();
         const { idCanonico, nomeTurma, chavesBusca } = await resolverIdentidadeTurmaLousa(database, turmaIdReq);
 
-        // 1. Procura o status específico da turma solicitada
-        let status = await database.collection('workspace_lousa_status').findOne({
-            $or: [
-                { id: { $in: chavesBusca } },
-                { nome: { $in: chavesBusca } },
-                { idOriginal: { $in: chavesBusca } }
-            ]
-        });
+        // Se for consulta estrita do painel do professor, devolve apenas o estado exato da turma selecionada no dropdown
+        if (req.query.estrito === 'true') {
+            const statusEstrito = await database.collection('workspace_lousa_status').findOne({
+                $or: [
+                    { id: { $in: chavesBusca } },
+                    { nome: { $in: chavesBusca } },
+                    { idOriginal: { $in: chavesBusca } }
+                ]
+            });
+            const ativaE = !!(statusEstrito?.ativa || statusEstrito?.lousaAtiva);
+            const recursosE = !!(statusEstrito?.recursos || statusEstrito?.lousaRecursos);
+            return res.json({
+                success: true,
+                ativa: ativaE,
+                recursos: recursosE,
+                turmaId: turmaIdReq,
+                idCanonico,
+                nomeTurma,
+                salaAtivaId: statusEstrito?.idOriginal || statusEstrito?.id || idCanonico
+            });
+        }
 
-        let ativa = !!(status?.ativa || status?.lousaAtiva);
-        let recursos = !!(status?.recursos || status?.lousaRecursos);
-        let salaAtivaId = status?.idOriginal || status?.id || idCanonico;
+        // 🎓 MODO ALUNO: Descobre todas as turmas a que o aluno pertence para nunca falhar a conexão
+        const candidatos = new Set([...chavesBusca, 'global']);
+        const userId = req.query.userId ? String(req.query.userId).trim() : '';
+        const alunoRefId = req.query.alunoRefId ? String(req.query.alunoRefId).trim() : '';
 
-        // 2. Se a turma específica do aluno NÃO estiver ativa, verifica se o Professor ativou a lousa 'global' (Público Geral)!
-        if (!ativa && idCanonico !== 'global' && req.query.estrito !== 'true') {
-            const statusGlobal = await database.collection('workspace_lousa_status').findOne({ id: 'global' });
-            if (statusGlobal && (statusGlobal.ativa || statusGlobal.lousaAtiva)) {
-                ativa = true;
-                recursos = !!(statusGlobal.recursos || statusGlobal.lousaRecursos);
-                salaAtivaId = 'global';
+        if (userId || alunoRefId) {
+            const criteriosAluno = [];
+            if (alunoRefId && alunoRefId !== 'undefined') criteriosAluno.push({ id: alunoRefId });
+            if (userId && userId !== 'undefined') criteriosAluno.push({ id: userId });
+
+            if (criteriosAluno.length > 0) {
+                const fichaAluno = await database.collection('alunos').findOne({ $or: criteriosAluno });
+                if (fichaAluno) {
+                    const extrair = (v) => {
+                        if (!v) return;
+                        if (Array.isArray(v)) v.forEach(extrair);
+                        else if (typeof v === 'object') {
+                            if (v.id) candidatos.add(String(v.id).trim());
+                            if (v.nome) candidatos.add(String(v.nome).trim());
+                        } else {
+                            candidatos.add(String(v).trim());
+                        }
+                    };
+                    extrair(fichaAluno.turma);
+                    extrair(fichaAluno.turmaId);
+                    extrair(fichaAluno.turmas);
+                }
             }
         }
+
+        // Resolve também os IDs e nomes oficiais de todas as turmas candidatas do aluno
+        const listaCandidatos = Array.from(candidatos).filter(Boolean);
+        for (const cand of listaCandidatos) {
+            if (cand !== 'global') {
+                const infoT = await resolverIdentidadeTurmaLousa(database, cand);
+                infoT.chavesBusca.forEach(k => candidatos.add(k));
+            }
+        }
+
+        const todasChavesAluno = Array.from(candidatos);
+
+        // 1. Procura uma lousa ATIVA que pertença às turmas do aluno (ou 'global'), priorizando a ativada mais recentemente!
+        let statusAtivo = await database.collection('workspace_lousa_status')
+            .find({
+                $and: [
+                    { $or: [{ ativa: true }, { lousaAtiva: true }] },
+                    {
+                        $or: [
+                            { id: { $in: todasChavesAluno } },
+                            { nome: { $in: todasChavesAluno } },
+                            { idOriginal: { $in: todasChavesAluno } }
+                        ]
+                    }
+                ]
+            })
+            .sort({ atualizadoEm: -1 })
+            .limit(1)
+            .next();
+
+        // 2. Fallback de segurança: Se o professor ativou uma lousa na escola e o aluno é convidado VIP, conecta à lousa ativa mais recente
+        if (!statusAtivo) {
+            statusAtivo = await database.collection('workspace_lousa_status')
+                .find({ $or: [{ ativa: true }, { lousaAtiva: true }] })
+                .sort({ atualizadoEm: -1 })
+                .limit(1)
+                .next();
+        }
+
+        const ativa = !!(statusAtivo?.ativa || statusAtivo?.lousaAtiva);
+        const recursos = !!(statusAtivo?.recursos || statusAtivo?.lousaRecursos);
+        const salaAtivaId = statusAtivo ? (statusAtivo.idOriginal || statusAtivo.id) : idCanonico;
 
         res.json({
             success: true,
@@ -2367,7 +2438,7 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
             recursos,
             turmaId: turmaIdReq,
             idCanonico,
-            nomeTurma,
+            nomeTurma: statusAtivo?.nome || nomeTurma,
             salaAtivaId
         });
     } catch (e) {
@@ -2396,7 +2467,6 @@ router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
         const { idCanonico, nomeTurma } = await resolverIdentidadeTurmaLousa(db, turmaIdReq);
         const agoraIso = new Date().toISOString();
 
-        // Filtra estritamente apenas desenhos reais ('shape', 'asset', 'binding') para nunca corromper o editor
         const tiposValidos = new Set(['shape', 'asset', 'binding']);
         const listaRecords = Array.isArray(records)
             ? records.filter(r => r && tiposValidos.has(r.typeName))
@@ -2436,29 +2506,18 @@ router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
     try {
         const db = await connectDB();
         const turmaIdReq = String(req.params.turmaId || 'global').trim();
-        const { idCanonico, chavesBusca } = await resolverIdentidadeTurmaLousa(db, turmaIdReq);
+        const { idCanonico, nomeTurma, chavesBusca } = await resolverIdentidadeTurmaLousa(db, turmaIdReq);
 
-        let doc = await db.collection('workspace_lousa_dados').findOne({
+        const doc = await db.collection('workspace_lousa_dados').findOne({
             $or: [{ id: { $in: chavesBusca } }, { idOriginal: { $in: chavesBusca } }, { nome: { $in: chavesBusca } }]
         });
 
-        if ((!doc || !doc.records || doc.records.length === 0) && idCanonico !== 'global') {
-            const statusGlobal = await db.collection('workspace_lousa_status').findOne({ id: 'global' });
-            if (statusGlobal && (statusGlobal.ativa || statusGlobal.lousaAtiva)) {
-                const docGlobal = await db.collection('workspace_lousa_dados').findOne({ id: 'global' });
-                if (docGlobal && docGlobal.records && docGlobal.records.length > 0) {
-                    doc = docGlobal;
-                }
-            }
-        }
-
-        // Remove qualquer registo antigo de 'page', 'camera' ou 'instance' que estivesse salvo no banco de testes anteriores
         const tiposValidos = new Set(['shape', 'asset', 'binding']);
         const recordsLimpos = Array.isArray(doc?.records)
             ? doc.records.filter(r => r && tiposValidos.has(r.typeName))
             : [];
 
-        res.json({ success: true, turmaId: idCanonico, records: recordsLimpos });
+        res.json({ success: true, turmaId: idCanonico, nomeTurma, records: recordsLimpos });
     } catch (e) {
         res.status(500).json({ success: false, records: [] });
     }
