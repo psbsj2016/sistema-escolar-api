@@ -2978,5 +2978,324 @@ router.post('/ingles/transcricao/corrigir', verificarToken, async (req, res) => 
     }
 });
 
+// ============================================================================
+// 🌎 ENGLISH SPACES - ROTAS INTEGRADAS AO ECOSSISTEMA (MONGODB + GROQ + LIVE)
+// ============================================================================
+
+const SPACES_UNLOCKED_DEFAULT = ['home', 'school', 'coffee', 'shopping', 'restaurant', 'beach', 'taxi', 'cinema'];
+
+async function obterOuCriarProgressoSpaces(db, userId) {
+    const uid = String(userId || 'demo_user').trim();
+    let doc = await db.collection('workspace_spaces_progresso').findOne({ userId: uid });
+    if (!doc) {
+        doc = {
+            userId: uid,
+            totalXP: 0,
+            spacesVisited: [],
+            missionsCompleted: [],
+            spacesProgress: [],
+            vocabularyDiscovered: [],
+            speakingAttempts: 0,
+            immersionMode: true,
+            unlockedSpaces: [...SPACES_UNLOCKED_DEFAULT],
+            lastActivity: new Date().toISOString(),
+            createdAt: new Date().toISOString()
+        };
+        await db.collection('workspace_spaces_progresso').insertOne(doc);
+    }
+    return doc;
+}
+
+// 1. GET /api/workspace/english-spaces/progress
+router.get('/english-spaces/progress', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const userId = req.query.userId || req.headers['x-user-id'] || 'demo_user';
+        const progress = await obterOuCriarProgressoSpaces(db, userId);
+
+        res.json({
+            success: true,
+            data: progress,
+            compatibility: {
+                xp: progress.totalXP || 0,
+                visited: progress.spacesVisited || [],
+                missionsCompleted: (progress.missionsCompleted || []).length,
+                vocab: (progress.vocabularyDiscovered || []).map(v => v.word),
+                unlocked: progress.unlockedSpaces || SPACES_UNLOCKED_DEFAULT
+            }
+        });
+    } catch (e) {
+        console.error('Erro ao buscar progresso English Spaces:', e);
+        res.status(500).json({ success: false, error: 'Erro ao buscar progresso.' });
+    }
+});
+
+// 2. POST /api/workspace/english-spaces/progress/mission
+router.post('/english-spaces/progress/mission', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { userId, spaceId, level, missionId, xp, nomeAluno, escolaId } = req.body;
+        const uid = String(userId || req.headers['x-user-id'] || 'demo_user').trim();
+
+        if (!spaceId || !level || !missionId) {
+            return res.status(400).json({ success: false, error: 'Dados obrigatórios em falta.' });
+        }
+
+        const progress = await obterOuCriarProgressoSpaces(db, uid);
+        const xpGanho = Number(xp) || 50;
+
+        const jaCompletou = (progress.missionsCompleted || []).some(
+            m => m.spaceId === spaceId && m.level === level && m.missionId === missionId
+        );
+
+        if (!jaCompletou) {
+            if (missionId !== 'visit') {
+                progress.missionsCompleted.push({
+                    spaceId,
+                    level,
+                    missionId,
+                    xpEarned: xpGanho,
+                    completedAt: new Date().toISOString()
+                });
+            }
+            progress.totalXP = (progress.totalXP || 0) + xpGanho;
+
+            let sp = (progress.spacesProgress || []).find(s => s.spaceId === spaceId && s.level === level);
+            if (!sp) {
+                sp = { spaceId, level, missionsCompleted: [], xpEarned: 0, completionPercentage: 0, lastVisited: new Date().toISOString() };
+                progress.spacesProgress.push(sp);
+            }
+            if (missionId !== 'visit' && !sp.missionsCompleted.includes(missionId)) {
+                sp.missionsCompleted.push(missionId);
+                sp.xpEarned = (sp.xpEarned || 0) + xpGanho;
+                sp.completionPercentage = Math.min(100, Math.round((sp.missionsCompleted.length / 3) * 100));
+                sp.lastVisited = new Date().toISOString();
+            }
+
+            // Desbloqueio progressivo de cenários por XP
+            if (progress.totalXP >= 500) {
+                ['airport', 'hotel'].forEach(id => {
+                    if (!progress.unlockedSpaces.includes(id)) progress.unlockedSpaces.push(id);
+                });
+            }
+            if (progress.totalXP >= 1500) {
+                ['job', 'hospital'].forEach(id => {
+                    if (!progress.unlockedSpaces.includes(id)) progress.unlockedSpaces.push(id);
+                });
+            }
+
+            // Integra o XP ganho com as Moedas de Bronze do Ranking da Escola
+            if (uid !== 'demo_user') {
+                await db.collection('workspace_ingles_stats').updateOne(
+                    { userId: uid },
+                    {
+                        $inc: { "coins.bronze": xpGanho },
+                        $set: { ultimaAtividade: new Date().toISOString(), escolaId: escolaId \vert{}\vert{} 'DEFAULT' },$setOnInsert: { nome: nomeAluno || 'Aluno', streak: 1 }
+                    },
+                    { upsert: true }
+                );
+            }
+        }
+
+        if (!progress.spacesVisited.includes(spaceId)) {
+            progress.spacesVisited.push(spaceId);
+        }
+
+        progress.lastActivity = new Date().toISOString();
+
+        await db.collection('workspace_spaces_progresso').updateOne(
+            { userId: uid },
+            { $set: progress },
+            { upsert: true }
+        );
+
+        res.json({ success: true, data: progress, xpEarned: jaCompletou ? 0 : xpGanho });
+    } catch (e) {
+        console.error('Erro ao salvar missão English Spaces:', e);
+        res.status(500).json({ success: false, error: 'Erro ao salvar missão.' });
+    }
+});
+
+// 3. POST /api/workspace/english-spaces/progress/vocab
+router.post('/english-spaces/progress/vocab', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { userId, word, spaceId } = req.body;
+        const uid = String(userId || req.headers['x-user-id'] || 'demo_user').trim();
+
+        const progress = await obterOuCriarProgressoSpaces(db, uid);
+        if (word && !(progress.vocabularyDiscovered || []).some(v => v.word === word)) {
+            progress.vocabularyDiscovered.push({ word, spaceId, discoveredAt: new Date().toISOString() });
+            progress.totalXP = (progress.totalXP || 0) + 15;
+            await db.collection('workspace_spaces_progresso').updateOne(
+                { userId: uid },
+                { $set: { vocabularyDiscovered: progress.vocabularyDiscovered, totalXP: progress.totalXP, lastActivity: new Date().toISOString() } }
+            );
+        }
+        res.json({ success: true, data: progress });
+    } catch (e) {
+        res.status(500).json({ success: false, error: 'Erro ao salvar vocabulário.' });
+    }
+});
+
+// 4. POST /api/workspace/english-spaces/live/token (Salas Ao Vivo por Cenário)
+router.post('/english-spaces/live/token', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { userId, spaceId, level, role, displayName } = req.body;
+        const participantId = String(userId || req.headers['x-user-id'] || 'user_' + Date.now()).trim();
+        const participantName = String(displayName || 'Student').trim();
+        const roomName = `space-${spaceId}-${level}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
+
+        let session = await db.collection('workspace_spaces_sessoes').findOne({
+            roomName,
+            status: { $in: ['waiting', 'active'] }
+        });
+
+        if (!session) {
+            session = {
+                spaceId,
+                level,
+                roomName,
+                participants: [],
+                maxParticipants: 8,
+                status: 'waiting',
+                createdBy: participantId,
+                createdAt: new Date().toISOString()
+            };
+            await db.collection('workspace_spaces_sessoes').insertOne(session);
+        }
+
+        const participantesAtuais = Array.isArray(session.participants) ? session.participants : [];
+        if (!participantesAtuais.some(p => p.userId === participantId)) {
+            participantesAtuais.push({
+                userId: participantId,
+                displayName: participantName,
+                role: role || 'PARTICIPANT',
+                joinedAt: new Date().toISOString()
+            });
+        }
+
+        const novoStatus = participantesAtuais.length >= 2 ? 'active' : 'waiting';
+        await db.collection('workspace_spaces_sessoes').updateOne(
+            { roomName },
+            { $set: { participants: participantesAtuais, status: novoStatus, updatedAt: new Date().toISOString() } }
+        );
+        session.participants = participantesAtuais;
+        session.status = novoStatus;
+
+        // Dispara evento SSE para atualizar em tempo real quem está na mesma sala
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ENGLISH_SPACES_ROOM_UPDATE',
+                roomName,
+                spaceId,
+                participants: participantesAtuais,
+                escolaId: 'DEFAULT'
+            });
+        }
+
+        res.json({
+            success: true,
+            token: 'ws_space_token_' + Date.now(),
+            url: process.env.LIVEKIT_URL || 'wss://simulated.livekit.cloud',
+            roomName,
+            simulated: !process.env.LIVEKIT_API_SECRET,
+            session
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: 'Erro ao entrar na experiência ao vivo.' });
+    }
+});
+
+// 5. POST /api/workspace/english-spaces/live/leave
+router.post('/english-spaces/live/leave', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { roomName, userId } = req.body;
+        const uid = String(userId || req.headers['x-user-id'] || '').trim();
+        if (roomName && uid) {
+            await db.collection('workspace_spaces_sessoes').updateOne(
+                { roomName },
+                { $pull: { participants: { userId: uid } } }
+            );
+        }
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false });
+    }
+});
+
+// 6. POST /api/workspace/english-spaces/ai/chat (Conversação Inteligente com Groq no Cenário)
+router.post('/english-spaces/ai/chat', verificarToken, async (req, res) => {
+    try {
+        const { message, spaceName, npcName, npcRole, studentRole, level = 'B1', missions = [] } = req.body;
+        if (!message) return res.status(400).json({ success: false, error: 'Mensagem vazia.' });
+
+        const Groq = require('groq-sdk');
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) {
+            return res.json({
+                success: true,
+                reply: `That sounds great! As a ${npcRole}, how else can I help you at the ${spaceName}?`,
+                grammarTip: null,
+                completedMissionId: null
+            });
+        }
+
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+        const listaMissoes = (missions || []).map(m => `${m.id}: "${m.title}"`).join(', ');
+
+        const systemPrompt = `You are "${npcName || 'Alex'}", acting as "${npcRole || 'Staff'}" inside the English learning scenario "${spaceName || 'Coffee Shop'}".
+        The student is playing the role of "${studentRole || 'Customer'}" at CEFR level ${level}.
+        Available missions for the student in this scenario: [${listaMissoes}].
+
+        RULES:
+        1. Reply naturally in character (1 to 2 short sentences in English appropriate for level ${level}) and ask a follow-up question to keep the roleplay going.
+        2. If the student made a clear grammar or vocabulary mistake in "${message}", provide a brief, friendly tip in "grammarTip" (in English or Portuguese), otherwise set "grammarTip" to null.
+        3. If the student's message fulfills one of the missions in [${listaMissoes}], return its exact ID (e.g. "m1", "m2", or "m3") in "completedMissionId", otherwise null.
+
+        Return ONLY a valid JSON object:
+        {
+            "reply": "Your in-character response in English...",
+            "translation": "Tradução em português da sua resposta",
+            "grammarTip": "Short tip if needed or null",
+            "completedMissionId": "m1 or null"
+        }`;
+
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: String(message).trim() }
+            ],
+            model: 'openai/gpt-oss-120b',
+            temperature: 0.4,
+            response_format: { type: 'json_object' }
+        });
+
+        let conteudo = completion.choices[0].message.content.trim();
+        if (conteudo.startsWith('```')) {
+            conteudo = conteudo.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+        }
+        const parsed = JSON.parse(conteudo);
+
+        res.json({
+            success: true,
+            reply: parsed.reply || "Got it! What else would you like to do?",
+            translation: parsed.translation || "",
+            grammarTip: parsed.grammarTip || null,
+            completedMissionId: parsed.completedMissionId || null
+        });
+    } catch (e) {
+        console.error('Erro no chat IA do English Spaces:', e);
+        res.json({
+            success: true,
+            reply: "I see! Could you tell me a little more about that?",
+            translation: "Entendi! Poderia me contar um pouco mais sobre isso?",
+            grammarTip: null,
+            completedMissionId: null
+        });
+    }
+});
 
 module.exports = router;
