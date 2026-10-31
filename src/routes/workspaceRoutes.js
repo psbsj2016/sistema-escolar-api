@@ -2251,13 +2251,16 @@ router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🚀 LOUSA DIGITAL - ROTAS FINAIS v5 (TEMPO REAL INSTANTÂNEO + TRAVA DE RECURSOS)
+// 🚀 LOUSA DIGITAL - ROTAS FINAIS v6 (ISOLAMENTO ESTRITO POR TURMA + MODO NINGUÉM)
 // ============================================================================
 
 async function resolverIdentidadeTurmaLousa(database, turmaInput) {
-    const chave = String(turmaInput || 'global').trim();
-    if (!chave || chave.toLowerCase() === 'global') {
-        return { idCanonico: 'global', nomeTurma: 'Público Geral', chavesBusca: ['global'] };
+    const chave = String(turmaInput || 'nenhuma').trim();
+    if (!chave || chave.toLowerCase() === 'nenhuma') {
+        return { idCanonico: 'nenhuma', nomeTurma: 'Ninguém', chavesBusca: ['nenhuma'] };
+    }
+    if (chave.toLowerCase() === 'global') {
+        return { idCanonico: 'global', nomeTurma: 'Público Geral', chavesBusca: ['global', 'Público Geral'] };
     }
     try {
         const regexNome = new RegExp(`^\\s*${chave.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
@@ -2282,30 +2285,51 @@ async function resolverIdentidadeTurmaLousa(database, turmaInput) {
 
 router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
     try {
-        const { turmaId, ativa, recursos, escolaId } = req.body;
-        if (!turmaId) return res.status(400).json({ success: false, error: 'turmaId é obrigatório' });
-        
+        const { turmaId, ativa, recursos, escolaId, desativarTodas } = req.body;
         const database = await connectDB();
         const escolaFinal = escolaId || req.query.escolaId || req.body.escolaId || req.usuario?.escolaId || 'DEFAULT';
-        const { idCanonico, nomeTurma } = await resolverIdentidadeTurmaLousa(database, turmaId);
         const agoraIso = new Date().toISOString();
 
-        // 🔒 Recursos só ficam disponíveis se a lousa estiver ativa!
+        // 🚫 Se selecionou "Ninguém" ou pediu desativação geral ao trocar de turma, encerra imediatamente todas as projeções
+        if (!turmaId || String(turmaId).toLowerCase() === 'nenhuma' || desativarTodas) {
+            await database.collection('workspace_lousa_status').updateMany(
+                {},
+                { $set: { ativa: false, lousaAtiva: false, recursos: false, lousaRecursos: false, ativadaEm: null, atualizadoEm: agoraIso } }
+            );
+            if (global.workspaceStream) {
+                const payloadOff = {
+                    type: 'LOUSA_STATUS_CHANGED',
+                    turmaId: 'nenhuma',
+                    turmaNome: 'Ninguém',
+                    ativa: false,
+                    recursos: false,
+                    ativadaEm: null,
+                    escolaId: 'DEFAULT'
+                };
+                global.workspaceStream.emit('evento_realtime', payloadOff);
+                if (escolaFinal !== 'DEFAULT') {
+                    global.workspaceStream.emit('evento_realtime', { ...payloadOff, escolaId: escolaFinal });
+                }
+            }
+            return res.json({ success: true, turmaId: 'nenhuma', turmaNome: 'Ninguém', ativa: false, recursos: false, ativadaEm: null });
+        }
+
+        const { idCanonico, nomeTurma, chavesBusca } = await resolverIdentidadeTurmaLousa(database, turmaId);
+
+        // 🔒 Recursos só podem ficar ativos se a lousa estiver ativa para a turma!
         const lousaAtiva = !!ativa;
         const recursosAtivos = lousaAtiva ? !!recursos : false;
 
-        // Verifica se já estava ativa para manter o cronómetro contínuo ao alternar apenas os recursos
+        // Desativa sempre qualquer outra turma diferente desta para garantir que apenas a turma selecionada veja a lousa
+        await database.collection('workspace_lousa_status').updateMany(
+            { id: { $nin: chavesBusca } },
+            { $set: { ativa: false, lousaAtiva: false, recursos: false, lousaRecursos: false, ativadaEm: null } }
+        );
+
         const statusAnterior = await database.collection('workspace_lousa_status').findOne({ id: idCanonico });
         const ativadaEm = lousaAtiva
             ? ((statusAnterior && statusAnterior.ativa && statusAnterior.ativadaEm) ? statusAnterior.ativadaEm : Date.now())
             : null;
-
-        if (lousaAtiva) {
-            await database.collection('workspace_lousa_status').updateMany(
-                { id: { $nin: [idCanonico, nomeTurma] } },
-                { $set: { ativa: false, lousaAtiva: false, recursos: false, lousaRecursos: false, ativadaEm: null } }
-            );
-        }
 
         const dadosStatus = {
             id: idCanonico,
@@ -2360,9 +2384,15 @@ router.put('/sala/workspace-lousa/status', verificarToken, async (req, res) => {
 router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, res) => {
     try {
         const database = await connectDB();
-        const turmaIdReq = String(req.params.turmaId || 'global').trim();
+        const turmaIdReq = String(req.params.turmaId || 'nenhuma').trim();
+
+        if (turmaIdReq.toLowerCase() === 'nenhuma' && req.query.estrito === 'true') {
+            return res.json({ success: true, ativa: false, recursos: false, ativadaEm: null, turmaId: 'nenhuma', idCanonico: 'nenhuma', nomeTurma: 'Ninguém', salaAtivaId: 'nenhuma' });
+        }
+
         const { idCanonico, nomeTurma, chavesBusca } = await resolverIdentidadeTurmaLousa(database, turmaIdReq);
 
+        // Consulta estrita do Professor ao selecionar uma turma no dropdown
         if (req.query.estrito === 'true') {
             const statusEstrito = await database.collection('workspace_lousa_status').findOne({
                 $or: [
@@ -2381,11 +2411,16 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
                 turmaId: turmaIdReq,
                 idCanonico,
                 nomeTurma,
-                salaAtivaId: 'LOUSA_MESTRA_UNIFICADA'
+                salaAtivaId: idCanonico
             });
         }
 
-        const candidatos = new Set([...chavesBusca, 'global', 'Público Geral']);
+        // 🎓 MODO ALUNO: Verifica ESTRITAMENTE as turmas às quais este aluno pertence (mais 'global' se o Professor ativou Público Geral)
+        const candidatos = new Set(['global', 'Público Geral']);
+        if (idCanonico !== 'nenhuma') {
+            chavesBusca.forEach(k => candidatos.add(k));
+        }
+
         const userId = req.query.userId ? String(req.query.userId).trim() : '';
         const alunoRefId = req.query.alunoRefId ? String(req.query.alunoRefId).trim() : '';
 
@@ -2416,7 +2451,7 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
 
         const listaCandidatos = Array.from(candidatos).filter(Boolean);
         for (const cand of listaCandidatos) {
-            if (cand !== 'global' && cand !== 'Público Geral') {
+            if (cand !== 'global' && cand !== 'Público Geral' && cand !== 'nenhuma') {
                 const infoT = await resolverIdentidadeTurmaLousa(database, cand);
                 infoT.chavesBusca.forEach(k => candidatos.add(k));
             }
@@ -2424,7 +2459,8 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
 
         const todasChavesAluno = Array.from(candidatos);
 
-        let statusAtivo = await database.collection('workspace_lousa_status')
+        // 🛡️ BLOQUEIO RIGOROSO POR TURMA: Só retorna ativa se a lousa ativa pertencer exatamente à turma deste aluno (ou 'global')!
+        const statusAtivo = await database.collection('workspace_lousa_status')
             .find({
                 $and: [
                     { $or: [{ ativa: true }, { lousaAtiva: true }] },
@@ -2441,16 +2477,9 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
             .limit(1)
             .next();
 
-        if (!statusAtivo) {
-            statusAtivo = await database.collection('workspace_lousa_status')
-                .find({ $or: [{ ativa: true }, { lousaAtiva: true }] })
-                .sort({ atualizadoEm: -1 })
-                .limit(1)
-                .next();
-        }
-
         const ativa = !!(statusAtivo?.ativa || statusAtivo?.lousaAtiva);
         const recursos = ativa ? !!(statusAtivo?.recursos || statusAtivo?.lousaRecursos) : false;
+        const salaAtivaId = statusAtivo ? (statusAtivo.idOriginal || statusAtivo.id) : idCanonico;
 
         res.json({
             success: true,
@@ -2458,9 +2487,9 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
             recursos,
             ativadaEm: ativa ? (statusAtivo?.ativadaEm || Date.now()) : null,
             turmaId: turmaIdReq,
-            idCanonico,
+            idCanonico: salaAtivaId,
             nomeTurma: statusAtivo?.nome || nomeTurma,
-            salaAtivaId: 'LOUSA_MESTRA_UNIFICADA'
+            salaAtivaId: salaAtivaId
         });
     } catch (e) {
         res.status(500).json({ success: false, ativa: false, recursos: false });
@@ -2481,7 +2510,13 @@ router.delete('/sala/workspace-lousa/status/tudo', verificarToken, async (req, r
 router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
+        const turmaIdReq = String(req.params.turmaId || 'nenhuma').trim();
+        if (!turmaIdReq || turmaIdReq.toLowerCase() === 'nenhuma') {
+            return res.json({ success: true, count: 0 });
+        }
+
         const { records, senderId } = req.body;
+        const { idCanonico, nomeTurma } = await resolverIdentidadeTurmaLousa(db, turmaIdReq);
         const agoraIso = new Date().toISOString();
 
         const tiposValidos = new Set(['shape', 'asset', 'binding']);
@@ -2489,25 +2524,33 @@ router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
             ? records.filter(r => r && tiposValidos.has(r.typeName))
             : [];
 
-        // Grava sempre no Quadro Mestre Unificado para que Professor e Alunos vejam SEMPRE as mesmas Telas Numeradas!
+        // Grava os dados isoladamente no ID desta turma específica!
         await db.collection('workspace_lousa_dados').updateOne(
-            { id: 'LOUSA_MESTRA_UNIFICADA' },
-            { $set: { id: 'LOUSA_MESTRA_UNIFICADA', records: listaRecords, atualizadoEm: agoraIso } },
+            { id: idCanonico },
+            { $set: { id: idCanonico, nome: nomeTurma, records: listaRecords, atualizadoEm: agoraIso } },
             { upsert: true }
         );
 
-        // ⚡ VELOCIDADE DA LUZ: Envia os 'records' diretamente dentro do evento SSE para atualização instantânea em 0ms!
+        if (nomeTurma && nomeTurma !== idCanonico) {
+            await db.collection('workspace_lousa_dados').updateOne(
+                { id: nomeTurma },
+                { $set: { id: nomeTurma, idOriginal: idCanonico, records: listaRecords, atualizadoEm: agoraIso } },
+                { upsert: true }
+            );
+        }
+
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'LOUSA_DADOS_CHANGED',
-                turmaId: 'LOUSA_MESTRA_UNIFICADA',
+                turmaId: idCanonico,
+                turmaNome: nomeTurma,
                 senderId: senderId || null,
                 records: listaRecords,
                 escolaId: 'DEFAULT'
             });
         }
 
-        res.json({ success: true, count: listaRecords.length });
+        res.json({ success: true, turmaId: idCanonico, count: listaRecords.length });
     } catch (e) {
         res.status(500).json({ success: false });
     }
@@ -2516,23 +2559,24 @@ router.put('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, r
 router.get('/sala/workspace-lousa/dados/:turmaId', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        let doc = await db.collection('workspace_lousa_dados').findOne({ id: 'LOUSA_MESTRA_UNIFICADA' });
-
-        // Se ainda não existir o documento unificado, recupera o mais recente que existir na coleção
-        if (!doc || !Array.isArray(doc.records) || doc.records.length === 0) {
-            doc = await db.collection('workspace_lousa_dados')
-                .find({ "records.0": { $exists: true } })
-                .sort({ atualizadoEm: -1 })
-                .limit(1)
-                .next();
+        const turmaIdReq = String(req.params.turmaId || 'nenhuma').trim();
+        if (!turmaIdReq || turmaIdReq.toLowerCase() === 'nenhuma') {
+            return res.json({ success: true, turmaId: 'nenhuma', nomeTurma: 'Ninguém', records: [] });
         }
+
+        const { idCanonico, nomeTurma, chavesBusca } = await resolverIdentidadeTurmaLousa(db, turmaIdReq);
+
+        // Carrega estritamente as telas numeradas que foram criadas nesta turma!
+        const doc = await db.collection('workspace_lousa_dados').findOne({
+            $or: [{ id: {$in: chavesBusca } }, { idOriginal: { $in: chavesBusca } }, { nome: {$in: chavesBusca } }]
+        });
 
         const tiposValidos = new Set(['shape', 'asset', 'binding']);
         const recordsLimpos = Array.isArray(doc?.records)
             ? doc.records.filter(r => r && tiposValidos.has(r.typeName))
             : [];
 
-        res.json({ success: true, turmaId: 'LOUSA_MESTRA_UNIFICADA', records: recordsLimpos });
+        res.json({ success: true, turmaId: idCanonico, nomeTurma, records: recordsLimpos });
     } catch (e) {
         res.status(500).json({ success: false, records: [] });
     }
