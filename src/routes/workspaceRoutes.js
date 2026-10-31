@@ -2415,7 +2415,7 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
             });
         }
 
-        // 🎓 MODO ALUNO: Verifica ESTRITAMENTE as turmas às quais este aluno pertence (mais 'global' se o Professor ativou Público Geral)
+        // 🎓 MODO ALUNO: Cruza 'usuarios' e 'alunos' para identificar todas as turmas deste aluno com precisão absoluta
         const candidatos = new Set(['global', 'Público Geral']);
         if (idCanonico !== 'nenhuma') {
             chavesBusca.forEach(k => candidatos.add(k));
@@ -2424,27 +2424,44 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
         const userId = req.query.userId ? String(req.query.userId).trim() : '';
         const alunoRefId = req.query.alunoRefId ? String(req.query.alunoRefId).trim() : '';
 
-        if (userId || alunoRefId) {
-            const criteriosAluno = [];
-            if (alunoRefId && alunoRefId !== 'undefined') criteriosAluno.push({ id: alunoRefId });
-            if (userId && userId !== 'undefined') criteriosAluno.push({ id: userId });
+        const extrairTurmas = (v) => {
+            if (!v) return;
+            if (Array.isArray(v)) v.forEach(extrairTurmas);
+            else if (typeof v === 'object') {
+                if (v.id) candidatos.add(String(v.id).trim());
+                if (v._id) candidatos.add(String(v._id).trim());
+                if (v.nome) candidatos.add(String(v.nome).trim());
+            } else {
+                candidatos.add(String(v).trim());
+            }
+        };
 
-            if (criteriosAluno.length > 0) {
+        if (userId || alunoRefId) {
+            const idsBusca = [userId, alunoRefId].filter(x => x && x !== 'undefined');
+            if (idsBusca.length > 0) {
+                const contaUser = await database.collection('usuarios').findOne({
+                    $or: [{ id: { $in: idsBusca } }, { alunoRefId: { $in: idsBusca } }]
+                });
+                if (contaUser) {
+                    extrairTurmas(contaUser.turma);
+                    extrairTurmas(contaUser.turmaId);
+                    extrairTurmas(contaUser.turmas);
+                    if (contaUser.alunoRefId) idsBusca.push(String(contaUser.alunoRefId).trim());
+                }
+
+                const criteriosAluno = [{ id: { $in: idsBusca } }];
+                if (contaUser && contaUser.login) {
+                    criteriosAluno.push({ login: new RegExp(`^\\s*${String(contaUser.login).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i') });
+                }
+                if (contaUser && contaUser.nome) {
+                    criteriosAluno.push({ nome: new RegExp(`^\\s*${String(contaUser.nome).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i') });
+                }
+
                 const fichaAluno = await database.collection('alunos').findOne({ $or: criteriosAluno });
                 if (fichaAluno) {
-                    const extrair = (v) => {
-                        if (!v) return;
-                        if (Array.isArray(v)) v.forEach(extrair);
-                        else if (typeof v === 'object') {
-                            if (v.id) candidatos.add(String(v.id).trim());
-                            if (v.nome) candidatos.add(String(v.nome).trim());
-                        } else {
-                            candidatos.add(String(v).trim());
-                        }
-                    };
-                    extrair(fichaAluno.turma);
-                    extrair(fichaAluno.turmaId);
-                    extrair(fichaAluno.turmas);
+                    extrairTurmas(fichaAluno.turma);
+                    extrairTurmas(fichaAluno.turmaId);
+                    extrairTurmas(fichaAluno.turmas);
                 }
             }
         }
@@ -2457,7 +2474,10 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
             }
         }
 
-        const todasChavesAluno = Array.from(candidatos);
+        const regexCandidatos = Array.from(candidatos).filter(Boolean).map(c => {
+            const esc = String(c).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp(`^\\s*${esc}\\s*$`, 'i');
+        });
 
         // 🛡️ BLOQUEIO RIGOROSO POR TURMA: Só retorna ativa se a lousa ativa pertencer exatamente à turma deste aluno (ou 'global')!
         const statusAtivo = await database.collection('workspace_lousa_status')
@@ -2466,9 +2486,9 @@ router.get('/sala/workspace-lousa/status/:turmaId', verificarToken, async (req, 
                     { $or: [{ ativa: true }, { lousaAtiva: true }] },
                     {
                         $or: [
-                            { id: { $in: todasChavesAluno } },
-                            { nome: { $in: todasChavesAluno } },
-                            { idOriginal: { $in: todasChavesAluno } }
+                            { id: { $in: regexCandidatos } },
+                            { nome: { $in: regexCandidatos } },
+                            { idOriginal: { $in: regexCandidatos } }
                         ]
                     }
                 ]
