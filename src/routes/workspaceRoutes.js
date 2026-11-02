@@ -3333,4 +3333,124 @@ router.post('/english-spaces/ai/chat', async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🏙️ ENGLISH SPACES 3D WORLD - MULTIPLAYER EM TEMPO REAL E PROXIMIDADE
+// ============================================================================
+
+// Mapa em memória de alta velocidade para posições 3D em tempo real
+const _mundo3DJogadores = new Map();
+
+function limparJogadoresInativos3D() {
+    const agora = Date.now();
+    for (const [uid, dados] of _mundo3DJogadores.entries()) {
+        if (agora - (dados.updatedAt || 0) > 45000) {
+            _mundo3DJogadores.delete(uid);
+        }
+    }
+}
+
+// 1. GET /api/workspace/english-spaces/world/state (Lista todos os avatares online na cidade 3D)
+router.get('/english-spaces/world/state', async (req, res) => {
+    try {
+        limparJogadoresInativos3D();
+        const players = Array.from(_mundo3DJogadores.values());
+        res.status(200).json({ success: true, players });
+    } catch (e) {
+        res.status(200).json({ success: true, players: [] });
+    }
+});
+
+// 2. POST /api/workspace/english-spaces/world/move (Sincroniza passos, rotação e edifício atual)
+router.post('/english-spaces/world/move', async (req, res) => {
+    try {
+        limparJogadoresInativos3D();
+        const b = req.body || {};
+        const userId = String(b.userId || '').trim();
+        if (!userId) return res.status(200).json({ success: true });
+
+        const estadoJogador = {
+            userId,
+            nome: String(b.nome || 'Student').trim(),
+            avatar: b.avatar || null,
+            role: String(b.role || 'EXPLORER').trim(),
+            color: String(b.color || '#8b5cf6').trim(),
+            x: Number(b.x) || 0,
+            z: Number(b.z) || 0,
+            rotY: Number(b.rotY) || 0,
+            spaceId: String(b.spaceId || 'street').trim(),
+            escolaId: String(b.escolaId || 'DEFAULT').trim(),
+            updatedAt: Date.now()
+        };
+
+        _mundo3DJogadores.set(userId, estadoJogador);
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ES_WORLD_MOVE',
+                player: estadoJogador,
+                escolaId: 'DEFAULT'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            players: Array.from(_mundo3DJogadores.values())
+        });
+    } catch (e) {
+        res.status(200).json({ success: true, players: [] });
+    }
+});
+
+// 3. POST /api/workspace/english-spaces/world/speak (Transmite fala por proximidade no mundo 3D)
+router.post('/english-spaces/world/speak', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const userId = String(b.userId || '').trim();
+        const texto = String(b.text || '').trim();
+        if (!userId || !texto) return res.status(200).json({ success: true });
+
+        const msgEvento = {
+            type: 'ES_WORLD_SPEAK',
+            speakerId: userId,
+            speakerName: String(b.nome || 'Student').trim(),
+            speakerRole: String(b.role || 'STUDENT').trim(),
+            text: texto,
+            x: Number(b.x) || 0,
+            z: Number(b.z) || 0,
+            spaceId: String(b.spaceId || 'street').trim(),
+            timestamp: Date.now(),
+            escolaId: 'DEFAULT'
+        };
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', msgEvento);
+        }
+
+        res.status(200).json({ success: true });
+    } catch (e) {
+        res.status(200).json({ success: true });
+    }
+});
+
+// 4. POST /api/workspace/english-spaces/world/leave (Remove o avatar ao sair da cidade 3D)
+router.post('/english-spaces/world/leave', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const userId = String(b.userId || '').trim();
+        if (userId) {
+            _mundo3DJogadores.delete(userId);
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ES_WORLD_LEAVE',
+                    userId,
+                    escolaId: 'DEFAULT'
+                });
+            }
+        }
+        res.status(200).json({ success: true });
+    } catch (e) {
+        res.status(200).json({ success: true });
+    }
+});
+
 module.exports = router;
