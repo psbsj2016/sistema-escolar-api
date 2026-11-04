@@ -2988,7 +2988,8 @@ const _mundo3DJogadores = new Map();
 function limparJogadoresInativos3D() {
     const agora = Date.now();
     for (const [uid, dados] of _mundo3DJogadores.entries()) {
-        if (agora - (dados.updatedAt ? dados.updatedAt : 0) > 45000) {
+        const ultimo = dados.updatedAt ? dados.updatedAt : 0;
+        if (agora - ultimo > 45000) {
             _mundo3DJogadores.delete(uid);
         }
     }
@@ -3033,7 +3034,8 @@ async function obterOuCriarProgressoSpaces(db, userIdInput) {
 router.get('/english-spaces/progress', async (req, res) => {
     try {
         const db = await connectDB();
-        const userId = req.query.userId ? req.query.userId : (req.headers['x-user-id'] ? req.headers['x-user-id'] : 'demo_user');
+        const headerUid = req.headers['x-user-id'] ? req.headers['x-user-id'] : 'demo_user';
+        const userId = req.query.userId ? req.query.userId : headerUid;
         const progress = await obterOuCriarProgressoSpaces(db, userId);
 
         res.json({
@@ -3056,7 +3058,7 @@ router.get('/english-spaces/progress', async (req, res) => {
     }
 });
 
-// 2. PUT /api/workspace/english-spaces/progress/customization (Guarda Género, Roupa, Sapatos, Pets e Compras no MongoDB)
+// 2. PUT /api/workspace/english-spaces/progress/customization
 router.put('/english-spaces/progress/customization', async (req, res) => {
     try {
         const db = await connectDB();
@@ -3083,10 +3085,14 @@ router.put('/english-spaces/progress/customization', async (req, res) => {
 
         if (b.purchasedItem) {
             const inv = Array.isArray(configAtual.inventory) ? [...configAtual.inventory] : [];
+            const nomeItem = b.purchasedItem.nome ? String(b.purchasedItem.nome) : 'Item';
+            const tipoItem = b.purchasedItem.tipo ? String(b.purchasedItem.tipo) : 'item';
+            const corItem = Number(b.purchasedItem.cor) ? Number(b.purchasedItem.cor) : 0;
+
             inv.push({
-                nome: String(b.purchasedItem.nome || 'Item'),
-                tipo: String(b.purchasedItem.tipo || 'item'),
-                cor: Number(b.purchasedItem.cor) || 0,
+                nome: nomeItem,
+                tipo: tipoItem,
+                cor: corItem,
                 preco: custoXP,
                 purchasedAt: new Date().toISOString()
             });
@@ -3098,7 +3104,7 @@ router.put('/english-spaces/progress/customization', async (req, res) => {
                     { userId: uid },
                     {
                         $inc: { "coins.bronze": bonusXP - custoXP },
-                        $addToSet: { itensComprados: String(b.purchasedItem.nome \vert{}\vert{} 'Item') },$set: { ultimaAtividade: new Date().toISOString() }
+                        $addToSet: { itensComprados: nomeItem },$set: { ultimaAtividade: new Date().toISOString() }
                     },
                     { upsert: true }
                 ).catch(() => {});
@@ -3117,7 +3123,6 @@ router.put('/english-spaces/progress/customization', async (req, res) => {
             { upsert: true }
         );
 
-        // Atualiza imediatamente na memória em tempo real da Cidade 3D e avisa todos os jogadores online
         if (_mundo3DJogadores.has(uid)) {
             const jog = _mundo3DJogadores.get(uid);
             jog.isFemale = configAtual.isFemale;
@@ -3257,24 +3262,42 @@ router.post('/english-spaces/progress/vocab', async (req, res) => {
     }
 });
 
-// 5. GET & POST /api/workspace/english-spaces/world/stickies (Mural de Post-its Persistente no MongoDB)
+// 5. GET, POST, PUT e DELETE /api/workspace/english-spaces/world/stickies (Mural de Post-its com Autor no MongoDB)
+async function listarStickiesEscola(db, escolaId) {
+    const docs = await db.collection('workspace_spaces_stickies')
+        .find({ escolaId: { $in: [escolaId, 'DEFAULT'] } })
+        .sort({ createdAt: -1 })
+        .limit(8)
+        .toArray();
+
+    if (docs.length === 0) {
+        return [
+            { id: 'seed_1', author: 'Paulo', text: 'Hello from Bahia!', userId: 'seed' },
+            { id: 'seed_2', author: 'Teacher', text: 'Coffee first, English second!', userId: 'seed' }
+        ];
+    }
+    return docs.map(d => ({
+        id: d.id ? d.id : String(d._id),
+        author: d.author ? d.author : 'Student',
+        text: d.text ? d.text : '',
+        userId: d.userId ? d.userId : ''
+    }));
+}
+
 router.get('/english-spaces/world/stickies', async (req, res) => {
     try {
         const db = await connectDB();
         const escolaId = req.query.escolaId ? String(req.query.escolaId).trim() : 'DEFAULT';
-        const docs = await db.collection('workspace_spaces_stickies')
-            .find({ escolaId: { $in: [escolaId, 'DEFAULT'] } })
-            .sort({ createdAt: -1 })
-            .limit(12)
-            .toArray();
-
-        const notes = docs.length > 0
-            ? docs.map(d => d.text)
-            : ['Hello from Bahia!', 'Coffee first, English second!'];
-
+        const notes = await listarStickiesEscola(db, escolaId);
         res.json({ success: true, notes });
     } catch (e) {
-        res.status(200).json({ success: true, notes: ['Hello from Bahia!', 'Coffee first, English second!'] });
+        res.status(200).json({
+            success: true,
+            notes: [
+                { id: 'seed_1', author: 'Paulo', text: 'Hello from Bahia!', userId: 'seed' },
+                { id: 'seed_2', author: 'Teacher', text: 'Coffee first, English second!', userId: 'seed' }
+            ]
+        });
     }
 });
 
@@ -3282,8 +3305,9 @@ router.post('/english-spaces/world/stickies', async (req, res) => {
     try {
         const db = await connectDB();
         const b = req.body ? req.body : {};
-        const texto = String(b.text ? b.text : '').trim().slice(0, 45);
+        const texto = String(b.text ? b.text : '').trim().slice(0, 80);
         const autor = String(b.author ? b.author : 'Student').trim();
+        const userId = String(b.userId ? b.userId : '').trim();
         const escolaId = String(b.escolaId ? b.escolaId : 'DEFAULT').trim();
 
         if (!texto) return res.status(400).json({ success: false });
@@ -3292,17 +3316,12 @@ router.post('/english-spaces/world/stickies', async (req, res) => {
             id: crypto.randomUUID(),
             escolaId,
             author: autor,
+            userId,
             text: texto,
             createdAt: new Date().toISOString()
         });
 
-        const docs = await db.collection('workspace_spaces_stickies')
-            .find({ escolaId: { $in: [escolaId, 'DEFAULT'] } })
-            .sort({ createdAt: -1 })
-            .limit(12)
-            .toArray();
-        const notes = docs.map(d => d.text);
-
+        const notes = await listarStickiesEscola(db, escolaId);
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ES_STICKY_UPDATE',
@@ -3310,7 +3329,69 @@ router.post('/english-spaces/world/stickies', async (req, res) => {
                 escolaId: 'DEFAULT'
             });
         }
+        res.json({ success: true, notes });
+    } catch (e) {
+        res.status(200).json({ success: false });
+    }
+});
 
+router.put('/english-spaces/world/stickies/:id', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const noteId = String(req.params.id ? req.params.id : '').trim();
+        const b = req.body ? req.body : {};
+        const userId = String(b.userId ? b.userId : '').trim();
+        const novoTexto = String(b.text ? b.text : '').trim().slice(0, 80);
+        const escolaId = String(b.escolaId ? b.escolaId : 'DEFAULT').trim();
+
+        if (!noteId || !novoTexto) return res.status(400).json({ success: false });
+
+        const doc = await db.collection('workspace_spaces_stickies').findOne({ id: noteId });
+        if (!doc || String(doc.userId) !== userId) {
+            return res.status(403).json({ success: false, error: 'Apenas o autor pode editar este Post-it.' });
+        }
+
+        await db.collection('workspace_spaces_stickies').updateOne(
+            { id: noteId },
+            { $set: { text: novoTexto, updatedAt: new Date().toISOString() } }
+        );
+
+        const notes = await listarStickiesEscola(db, escolaId);
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ES_STICKY_UPDATE',
+                notes,
+                escolaId: 'DEFAULT'
+            });
+        }
+        res.json({ success: true, notes });
+    } catch (e) {
+        res.status(200).json({ success: false });
+    }
+});
+
+router.delete('/english-spaces/world/stickies/:id', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const noteId = String(req.params.id ? req.params.id : '').trim();
+        const userId = String(req.query.userId ? req.query.userId : '').trim();
+        const escolaId = String(req.query.escolaId ? req.query.escolaId : 'DEFAULT').trim();
+
+        const doc = await db.collection('workspace_spaces_stickies').findOne({ id: noteId });
+        if (!doc || String(doc.userId) !== userId) {
+            return res.status(403).json({ success: false, error: 'Apenas o autor pode excluir este Post-it.' });
+        }
+
+        await db.collection('workspace_spaces_stickies').deleteOne({ id: noteId });
+
+        const notes = await listarStickiesEscola(db, escolaId);
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ES_STICKY_UPDATE',
+                notes,
+                escolaId: 'DEFAULT'
+            });
+        }
         res.json({ success: true, notes });
     } catch (e) {
         res.status(200).json({ success: false });
@@ -3475,7 +3556,7 @@ router.post('/english-spaces/ai/chat', async (req, res) => {
     }
 });
 
-// 9. ROTAS MULTIPLAYER DA CIDADE 3D (SINCRONIZAÇÃO DE MOVIMENTO, GÉNERO, ROUPAS, PETS E VOZ)
+// 9. ROTAS MULTIPLAYER DA CIDADE 3D
 router.get('/english-spaces/world/state', async (req, res) => {
     try {
         limparJogadoresInativos3D();
