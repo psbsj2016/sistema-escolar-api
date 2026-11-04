@@ -2979,7 +2979,7 @@ router.post('/ingles/transcricao/corrigir', verificarToken, async (req, res) => 
 });
 
 // ============================================================================
-// 🌎 ENGLISH SPACES & CIDADE 3D MULTIPLAYER - BLOCO ÚNICO OFICIAL (SEM DUPLICAÇÃO)
+// 🌎 ENGLISH SPACES & CIDADE 3D MULTIPLAYER - PERSISTÊNCIA TOTAL MONGODB
 // ============================================================================
 
 const SPACES_UNLOCKED_DEFAULT = ['home', 'school', 'coffee', 'shopping', 'restaurant', 'beach', 'taxi', 'cinema'];
@@ -3000,7 +3000,7 @@ async function obterOuCriarProgressoSpaces(db, userIdInput) {
     if (!doc) {
         const novoDoc = {
             userId: uid,
-            totalXP: 0,
+            totalXP: 500,
             spacesVisited: [],
             missionsCompleted: [],
             spacesProgress: [],
@@ -3008,6 +3008,13 @@ async function obterOuCriarProgressoSpaces(db, userIdInput) {
             speakingAttempts: 0,
             immersionMode: true,
             unlockedSpaces: [...SPACES_UNLOCKED_DEFAULT],
+            avatarConfig: {
+                isFemale: null,
+                shirtColor: null,
+                shoeColor: 0x111111,
+                petType: null,
+                inventory: []
+            },
             lastActivity: new Date().toISOString(),
             createdAt: new Date().toISOString()
         };
@@ -3033,22 +3040,109 @@ router.get('/english-spaces/progress', async (req, res) => {
             success: true,
             data: progress,
             compatibility: {
-                xp: progress.totalXP ? progress.totalXP : 0,
+                xp: typeof progress.totalXP === 'number' ? progress.totalXP : 500,
                 visited: Array.isArray(progress.spacesVisited) ? progress.spacesVisited : [],
                 missionsCompleted: Array.isArray(progress.missionsCompleted) ? progress.missionsCompleted.length : 0,
                 vocab: Array.isArray(progress.vocabularyDiscovered) ? progress.vocabularyDiscovered.map(v => (typeof v === 'object' ? v.word : v)).filter(Boolean) : [],
-                unlocked: Array.isArray(progress.unlockedSpaces) ? progress.unlockedSpaces : SPACES_UNLOCKED_DEFAULT
+                unlocked: Array.isArray(progress.unlockedSpaces) ? progress.unlockedSpaces : SPACES_UNLOCKED_DEFAULT,
+                avatarConfig: progress.avatarConfig ? progress.avatarConfig : {}
             }
         });
     } catch (e) {
         res.status(200).json({
             success: true,
-            compatibility: { xp: 0, visited: [], missionsCompleted: 0, vocab: [], unlocked: SPACES_UNLOCKED_DEFAULT }
+            compatibility: { xp: 500, visited: [], missionsCompleted: 0, vocab: [], unlocked: SPACES_UNLOCKED_DEFAULT, avatarConfig: {} }
         });
     }
 });
 
-// 2. POST /api/workspace/english-spaces/progress/mission
+// 2. PUT /api/workspace/english-spaces/progress/customization (Guarda Género, Roupa, Sapatos, Pets e Compras no MongoDB)
+router.put('/english-spaces/progress/customization', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const b = req.body ? req.body : {};
+        const uid = String(b.userId ? b.userId : 'demo_user').trim();
+        const progress = await obterOuCriarProgressoSpaces(db, uid);
+
+        const configAtual = progress.avatarConfig ? { ...progress.avatarConfig } : {
+            isFemale: null,
+            shirtColor: null,
+            shoeColor: 0x111111,
+            petType: null,
+            inventory: []
+        };
+
+        if (typeof b.isFemale === 'boolean') configAtual.isFemale = b.isFemale;
+        if (typeof b.shirtColor === 'number') configAtual.shirtColor = b.shirtColor;
+        if (typeof b.shoeColor === 'number') configAtual.shoeColor = b.shoeColor;
+        if (b.petType !== undefined) configAtual.petType = b.petType;
+
+        let novoXP = typeof progress.totalXP === 'number' ? progress.totalXP : 500;
+        const custoXP = Number(b.costXP) ? Number(b.costXP) : 0;
+        const bonusXP = Number(b.bonusXP) ? Number(b.bonusXP) : 0;
+
+        if (b.purchasedItem) {
+            const inv = Array.isArray(configAtual.inventory) ? [...configAtual.inventory] : [];
+            inv.push({
+                nome: String(b.purchasedItem.nome || 'Item'),
+                tipo: String(b.purchasedItem.tipo || 'item'),
+                cor: Number(b.purchasedItem.cor) || 0,
+                preco: custoXP,
+                purchasedAt: new Date().toISOString()
+            });
+            configAtual.inventory = inv;
+            novoXP = Math.max(0, novoXP - custoXP + bonusXP);
+
+            if (uid !== 'demo_user') {
+                await db.collection('workspace_ingles_stats').updateOne(
+                    { userId: uid },
+                    {
+                        $inc: { "coins.bronze": bonusXP - custoXP },
+                        $addToSet: { itensComprados: String(b.purchasedItem.nome \vert{}\vert{} 'Item') },$set: { ultimaAtividade: new Date().toISOString() }
+                    },
+                    { upsert: true }
+                ).catch(() => {});
+            }
+        }
+
+        await db.collection('workspace_spaces_progresso').updateOne(
+            { userId: uid },
+            {
+                $set: {
+                    avatarConfig: configAtual,
+                    totalXP: novoXP,
+                    lastActivity: new Date().toISOString()
+                }
+            },
+            { upsert: true }
+        );
+
+        // Atualiza imediatamente na memória em tempo real da Cidade 3D e avisa todos os jogadores online
+        if (_mundo3DJogadores.has(uid)) {
+            const jog = _mundo3DJogadores.get(uid);
+            jog.isFemale = configAtual.isFemale;
+            jog.shirtColor = configAtual.shirtColor;
+            jog.shoeColor = configAtual.shoeColor;
+            jog.petType = configAtual.petType;
+            jog.updatedAt = Date.now();
+            _mundo3DJogadores.set(uid, jog);
+
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ES_WORLD_MOVE',
+                    player: jog,
+                    escolaId: 'DEFAULT'
+                });
+            }
+        }
+
+        res.json({ success: true, avatarConfig: configAtual, totalXP: novoXP });
+    } catch (e) {
+        res.status(200).json({ success: false });
+    }
+});
+
+// 3. POST /api/workspace/english-spaces/progress/mission
 router.post('/english-spaces/progress/mission', async (req, res) => {
     try {
         const db = await connectDB();
@@ -3135,7 +3229,7 @@ router.post('/english-spaces/progress/mission', async (req, res) => {
     }
 });
 
-// 3. POST /api/workspace/english-spaces/progress/vocab
+// 4. POST /api/workspace/english-spaces/progress/vocab
 router.post('/english-spaces/progress/vocab', async (req, res) => {
     try {
         const db = await connectDB();
@@ -3163,7 +3257,67 @@ router.post('/english-spaces/progress/vocab', async (req, res) => {
     }
 });
 
-// 4. POST /api/workspace/english-spaces/live/token
+// 5. GET & POST /api/workspace/english-spaces/world/stickies (Mural de Post-its Persistente no MongoDB)
+router.get('/english-spaces/world/stickies', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const escolaId = req.query.escolaId ? String(req.query.escolaId).trim() : 'DEFAULT';
+        const docs = await db.collection('workspace_spaces_stickies')
+            .find({ escolaId: { $in: [escolaId, 'DEFAULT'] } })
+            .sort({ createdAt: -1 })
+            .limit(12)
+            .toArray();
+
+        const notes = docs.length > 0
+            ? docs.map(d => d.text)
+            : ['Hello from Bahia!', 'Coffee first, English second!'];
+
+        res.json({ success: true, notes });
+    } catch (e) {
+        res.status(200).json({ success: true, notes: ['Hello from Bahia!', 'Coffee first, English second!'] });
+    }
+});
+
+router.post('/english-spaces/world/stickies', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const b = req.body ? req.body : {};
+        const texto = String(b.text ? b.text : '').trim().slice(0, 45);
+        const autor = String(b.author ? b.author : 'Student').trim();
+        const escolaId = String(b.escolaId ? b.escolaId : 'DEFAULT').trim();
+
+        if (!texto) return res.status(400).json({ success: false });
+
+        await db.collection('workspace_spaces_stickies').insertOne({
+            id: crypto.randomUUID(),
+            escolaId,
+            author: autor,
+            text: texto,
+            createdAt: new Date().toISOString()
+        });
+
+        const docs = await db.collection('workspace_spaces_stickies')
+            .find({ escolaId: { $in: [escolaId, 'DEFAULT'] } })
+            .sort({ createdAt: -1 })
+            .limit(12)
+            .toArray();
+        const notes = docs.map(d => d.text);
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ES_STICKY_UPDATE',
+                notes,
+                escolaId: 'DEFAULT'
+            });
+        }
+
+        res.json({ success: true, notes });
+    } catch (e) {
+        res.status(200).json({ success: false });
+    }
+});
+
+// 6. POST /api/workspace/english-spaces/live/token
 router.post('/english-spaces/live/token', async (req, res) => {
     try {
         const db = await connectDB();
@@ -3222,7 +3376,7 @@ router.post('/english-spaces/live/token', async (req, res) => {
     }
 });
 
-// 5. POST /api/workspace/english-spaces/live/leave
+// 7. POST /api/workspace/english-spaces/live/leave
 router.post('/english-spaces/live/leave', async (req, res) => {
     try {
         const db = await connectDB();
@@ -3241,7 +3395,7 @@ router.post('/english-spaces/live/leave', async (req, res) => {
     }
 });
 
-// 6. POST /api/workspace/english-spaces/ai/chat (Conversação com Groq nos Cenários)
+// 8. POST /api/workspace/english-spaces/ai/chat
 router.post('/english-spaces/ai/chat', async (req, res) => {
     try {
         const body = req.body ? req.body : {};
@@ -3321,7 +3475,7 @@ router.post('/english-spaces/ai/chat', async (req, res) => {
     }
 });
 
-// 7. ROTAS MULTIPLAYER DA CIDADE 3D (MOVIMENTO E VOZ POR PROXIMIDADE)
+// 9. ROTAS MULTIPLAYER DA CIDADE 3D (SINCRONIZAÇÃO DE MOVIMENTO, GÉNERO, ROUPAS, PETS E VOZ)
 router.get('/english-spaces/world/state', async (req, res) => {
     try {
         limparJogadoresInativos3D();
@@ -3343,6 +3497,10 @@ router.post('/english-spaces/world/move', async (req, res) => {
             nome: String(b.nome ? b.nome : 'Student').trim(),
             avatar: b.avatar ? b.avatar : null,
             role: String(b.role ? b.role : 'EXPLORER').trim(),
+            isFemale: typeof b.isFemale === 'boolean' ? b.isFemale : false,
+            shirtColor: typeof b.shirtColor === 'number' ? b.shirtColor : null,
+            shoeColor: typeof b.shoeColor === 'number' ? b.shoeColor : null,
+            petType: b.petType ? String(b.petType) : null,
             x: Number(b.x) ? Number(b.x) : 0,
             z: Number(b.z) ? Number(b.z) : 0,
             rotY: Number(b.rotY) ? Number(b.rotY) : 0,
