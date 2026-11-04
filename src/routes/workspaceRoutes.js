@@ -2979,10 +2979,14 @@ router.post('/ingles/transcricao/corrigir', verificarToken, async (req, res) => 
 });
 
 // ============================================================================
-// 🌎 ENGLISH SPACES & CIDADE 3D MULTIPLAYER - PERSISTÊNCIA TOTAL MONGODB
+// 🌎 ENGLISH SPACES & CIDADE 3D MULTIPLAYER - ECONOMIA UNIFICADA DOVRYX (DRX)
 // ============================================================================
 
-const SPACES_UNLOCKED_DEFAULT = ['home', 'school', 'coffee', 'shopping', 'restaurant', 'beach', 'taxi', 'cinema'];
+const SPACES_UNLOCKED_DEFAULT = [
+    'home', 'school', 'coffee', 'shopping', 'restaurant', 'beach', 'taxi', 'cinema',
+    'bank', 'clothing', 'shoes', 'tools', 'petshop', 'supermarket', 'pharmacy', 'bookstore',
+    'real_estate', 'dealership', 'building_supply', 'guild_bau'
+];
 const _mundo3DJogadores = new Map();
 
 function limparJogadoresInativos3D() {
@@ -2995,13 +2999,24 @@ function limparJogadoresInativos3D() {
     }
 }
 
+// 💰 Sincroniza e unifica o saldo DOVRYX (DRX) entre o Baú do Inglês e a Cidade 3D
 async function obterOuCriarProgressoSpaces(db, userIdInput) {
     const uid = userIdInput ? String(userIdInput).trim() : 'demo_user';
     let doc = await db.collection('workspace_spaces_progresso').findOne({ userId: uid });
+    const statsBau = uid !== 'demo_user'
+        ? await db.collection('workspace_ingles_stats').findOne({ userId: uid })
+        : null;
+
+    const drxNoBau = (statsBau && statsBau.coins && typeof statsBau.coins.bronze === 'number')
+        ? statsBau.coins.bronze
+        : null;
+
     if (!doc) {
+        const saldoInicial = drxNoBau !== null ? Math.max(500, drxNoBau) : 1250;
         const novoDoc = {
             userId: uid,
-            totalXP: 500,
+            totalXP: saldoInicial,
+            dovryx: saldoInicial,
             spacesVisited: [],
             missionsCompleted: [],
             spacesProgress: [],
@@ -3014,6 +3029,11 @@ async function obterOuCriarProgressoSpaces(db, userIdInput) {
                 shirtColor: null,
                 shoeColor: 0x111111,
                 petType: null,
+                equippedVehicle: null,
+                ownedVehicles: ['bicycle'],
+                houseStage: 1,
+                materialsCount: 0,
+                lotIndex: 0,
                 inventory: []
             },
             lastActivity: new Date().toISOString(),
@@ -3026,11 +3046,16 @@ async function obterOuCriarProgressoSpaces(db, userIdInput) {
         );
         doc = await db.collection('workspace_spaces_progresso').findOne({ userId: uid });
         if (!doc) doc = novoDoc;
+    } else if (drxNoBau !== null && drxNoBau !== doc.totalXP) {
+        // Mantém o maior/mais recente saldo unificado entre Baú e Cidade
+        const saldoUnificado = Math.max(Number(doc.totalXP) ? Number(doc.totalXP) : 0, drxNoBau);
+        doc.totalXP = saldoUnificado;
+        doc.dovryx = saldoUnificado;
     }
     return doc;
 }
 
-// 1. GET /api/workspace/english-spaces/progress
+// 1. GET /api/workspace/english-spaces/progress (Retorna DRX unificado, Avatar, Veículos, Terreno e Lotes da Escola)
 router.get('/english-spaces/progress', async (req, res) => {
     try {
         const db = await connectDB();
@@ -3038,11 +3063,33 @@ router.get('/english-spaces/progress', async (req, res) => {
         const userId = req.query.userId ? req.query.userId : headerUid;
         const progress = await obterOuCriarProgressoSpaces(db, userId);
 
+        // Busca os lotes residenciais construídos pelos alunos para exibir na Cidade 3D
+        const todosPerfis = await db.collection('workspace_spaces_progresso')
+            .find({})
+            .sort({ lastActivity: -1 })
+            .limit(8)
+            .toArray();
+        const usuarios = await db.collection('usuarios').find({}).toArray();
+        const mapaNomes = {};
+        usuarios.forEach(u => {
+            if (u.id) mapaNomes[String(u.id)] = u.nome ? u.nome : (u.login ? u.login : 'Student');
+        });
+
+        const communityLots = todosPerfis.map((p, idx) => ({
+            userId: p.userId,
+            ownerName: mapaNomes[String(p.userId)] ? mapaNomes[String(p.userId)] : (p.ownerName ? p.ownerName : `Student ${idx + 1}`),
+            stage: (p.avatarConfig && typeof p.avatarConfig.houseStage === 'number') ? p.avatarConfig.houseStage : 1
+        }));
+
+        const drxSaldo = typeof progress.totalXP === 'number' ? progress.totalXP : 1250;
+
         res.json({
             success: true,
             data: progress,
+            communityLots,
             compatibility: {
-                xp: typeof progress.totalXP === 'number' ? progress.totalXP : 500,
+                xp: drxSaldo,
+                dovryx: drxSaldo,
                 visited: Array.isArray(progress.spacesVisited) ? progress.spacesVisited : [],
                 missionsCompleted: Array.isArray(progress.missionsCompleted) ? progress.missionsCompleted.length : 0,
                 vocab: Array.isArray(progress.vocabularyDiscovered) ? progress.vocabularyDiscovered.map(v => (typeof v === 'object' ? v.word : v)).filter(Boolean) : [],
@@ -3053,12 +3100,13 @@ router.get('/english-spaces/progress', async (req, res) => {
     } catch (e) {
         res.status(200).json({
             success: true,
-            compatibility: { xp: 500, visited: [], missionsCompleted: 0, vocab: [], unlocked: SPACES_UNLOCKED_DEFAULT, avatarConfig: {} }
+            communityLots: [],
+            compatibility: { xp: 1250, dovryx: 1250, visited: [], missionsCompleted: 0, vocab: [], unlocked: SPACES_UNLOCKED_DEFAULT, avatarConfig: {} }
         });
     }
 });
 
-// 2. PUT /api/workspace/english-spaces/progress/customization
+// 2. PUT /api/workspace/english-spaces/progress/customization (Salva DRX, Roupas, Veículos, Materiais e Construção da Casa)
 router.put('/english-spaces/progress/customization', async (req, res) => {
     try {
         const db = await connectDB();
@@ -3071,6 +3119,10 @@ router.put('/english-spaces/progress/customization', async (req, res) => {
             shirtColor: null,
             shoeColor: 0x111111,
             petType: null,
+            equippedVehicle: null,
+            ownedVehicles: ['bicycle'],
+            houseStage: 1,
+            materialsCount: 0,
             inventory: []
         };
 
@@ -3078,10 +3130,18 @@ router.put('/english-spaces/progress/customization', async (req, res) => {
         if (typeof b.shirtColor === 'number') configAtual.shirtColor = b.shirtColor;
         if (typeof b.shoeColor === 'number') configAtual.shoeColor = b.shoeColor;
         if (b.petType !== undefined) configAtual.petType = b.petType;
+        if (b.equippedVehicle !== undefined) configAtual.equippedVehicle = b.equippedVehicle;
+        if (typeof b.houseStage === 'number') configAtual.houseStage = b.houseStage;
+        if (typeof b.materialsCount === 'number') configAtual.materialsCount = b.materialsCount;
+        if (Array.isArray(b.ownedVehicles)) configAtual.ownedVehicles = b.ownedVehicles;
 
-        let novoXP = typeof progress.totalXP === 'number' ? progress.totalXP : 500;
-        const custoXP = Number(b.costXP) ? Number(b.costXP) : 0;
-        const bonusXP = Number(b.bonusXP) ? Number(b.bonusXP) : 0;
+        let novoDRX = typeof progress.totalXP === 'number' ? progress.totalXP : 1250;
+        const custoDRX = Number(b.costXP) ? Number(b.costXP) : 0;
+        const bonusDRX = Number(b.bonusXP) ? Number(b.bonusXP) : 0;
+
+        if (custoDRX > 0 || bonusDRX > 0) {
+            novoDRX = Math.max(0, novoDRX - custoDRX + bonusDRX);
+        }
 
         if (b.purchasedItem) {
             const inv = Array.isArray(configAtual.inventory) ? [...configAtual.inventory] : [];
@@ -3093,30 +3153,48 @@ router.put('/english-spaces/progress/customization', async (req, res) => {
                 nome: nomeItem,
                 tipo: tipoItem,
                 cor: corItem,
-                preco: custoXP,
+                preco: custoDRX,
                 purchasedAt: new Date().toISOString()
             });
             configAtual.inventory = inv;
-            novoXP = Math.max(0, novoXP - custoXP + bonusXP);
 
-            if (uid !== 'demo_user') {
-                await db.collection('workspace_ingles_stats').updateOne(
-                    { userId: uid },
-                    {
-                        $inc: { "coins.bronze": bonusXP - custoXP },
-                        $addToSet: { itensComprados: nomeItem },$set: { ultimaAtividade: new Date().toISOString() }
-                    },
-                    { upsert: true }
-                ).catch(() => {});
+            if (tipoItem === 'vehicle' && b.purchasedItem.vehicleType) {
+                const veics = Array.isArray(configAtual.ownedVehicles) ? [...configAtual.ownedVehicles] : ['bicycle'];
+                if (!veics.includes(b.purchasedItem.vehicleType)) veics.push(b.purchasedItem.vehicleType);
+                configAtual.ownedVehicles = veics;
+                configAtual.equippedVehicle = b.purchasedItem.vehicleType;
             }
+            if (tipoItem === 'material') {
+                const qtdMat = Number(b.purchasedItem.units) ? Number(b.purchasedItem.units) : 1;
+                configAtual.materialsCount = (Number(configAtual.materialsCount) ? Number(configAtual.materialsCount) : 0) + qtdMat;
+            }
+            if (tipoItem === 'house_upgrade') {
+                const stageAlvo = Number(b.purchasedItem.targetStage) ? Number(b.purchasedItem.targetStage) : ((configAtual.houseStage ? configAtual.houseStage : 1) + 1);
+                configAtual.houseStage = Math.min(5, Math.max(configAtual.houseStage ? configAtual.houseStage : 1, stageAlvo));
+            }
+        }
+
+        // Sincroniza o novo saldo DOVRYX (DRX) em AMBAS as coleções (Cidade 3D + Baú do Inglês)
+        if (uid !== 'demo_user') {
+            const updateStats = {
+                "coins.bronze": novoDRX,
+                ultimaAtividade: new Date().toISOString()
+            };
+            await db.collection('workspace_ingles_stats').updateOne(
+                { userId: uid },
+                { $set: updateStats },
+                { upsert: true }
+            ).catch(() => {});
         }
 
         await db.collection('workspace_spaces_progresso').updateOne(
             { userId: uid },
             {
                 $set: {
+                    ownerName: b.ownerName ? String(b.ownerName) : undefined,
                     avatarConfig: configAtual,
-                    totalXP: novoXP,
+                    totalXP: novoDRX,
+                    dovryx: novoDRX,
                     lastActivity: new Date().toISOString()
                 }
             },
@@ -3129,6 +3207,8 @@ router.put('/english-spaces/progress/customization', async (req, res) => {
             jog.shirtColor = configAtual.shirtColor;
             jog.shoeColor = configAtual.shoeColor;
             jog.petType = configAtual.petType;
+            jog.equippedVehicle = configAtual.equippedVehicle;
+            jog.houseStage = configAtual.houseStage;
             jog.updatedAt = Date.now();
             _mundo3DJogadores.set(uid, jog);
 
@@ -3141,7 +3221,7 @@ router.put('/english-spaces/progress/customization', async (req, res) => {
             }
         }
 
-        res.json({ success: true, avatarConfig: configAtual, totalXP: novoXP });
+        res.json({ success: true, avatarConfig: configAtual, totalXP: novoDRX, dovryx: novoDRX });
     } catch (e) {
         res.status(200).json({ success: false });
     }
@@ -3181,25 +3261,18 @@ router.post('/english-spaces/progress/mission', async (req, res) => {
             }
             novoTotalXP += xpGanho;
 
-            if (novoTotalXP >= 500) {
-                ['airport', 'hotel'].forEach(id => {
-                    if (!desbloqueadosAtuais.includes(id)) desbloqueadosAtuais.push(id);
-                });
-            }
-            if (novoTotalXP >= 1500) {
-                ['job', 'hospital'].forEach(id => {
-                    if (!desbloqueadosAtuais.includes(id)) desbloqueadosAtuais.push(id);
-                });
-            }
-
             if (uid !== 'demo_user') {
                 const escolaAlvo = body.escolaId ? body.escolaId : 'DEFAULT';
                 const nomeAlvo = body.nomeAluno ? body.nomeAluno : 'Aluno';
                 await db.collection('workspace_ingles_stats').updateOne(
                     { userId: uid },
                     {
-                        $inc: { "coins.bronze": xpGanho },
-                        $set: { ultimaAtividade: new Date().toISOString(), escolaId: escolaAlvo, nome: nomeAlvo }
+                        $set: {
+                            "coins.bronze": novoTotalXP,
+                            ultimaAtividade: new Date().toISOString(),
+                            escolaId: escolaAlvo,
+                            nome: nomeAlvo
+                        }
                     },
                     { upsert: true }
                 ).catch(() => {});
@@ -3212,6 +3285,7 @@ router.post('/english-spaces/progress/mission', async (req, res) => {
 
         const camposParaAtualizar = {
             totalXP: novoTotalXP,
+            dovryx: novoTotalXP,
             missionsCompleted: missoesAtuais,
             spacesVisited: visitadosAtuais,
             unlockedSpaces: desbloqueadosAtuais,
@@ -3252,7 +3326,7 @@ router.post('/english-spaces/progress/vocab', async (req, res) => {
             novoTotalXP += 15;
             await db.collection('workspace_spaces_progresso').updateOne(
                 { userId: uid },
-                { $set: { vocabularyDiscovered: vocabAtual, totalXP: novoTotalXP, lastActivity: new Date().toISOString() } },
+                { $set: { vocabularyDiscovered: vocabAtual, totalXP: novoTotalXP, dovryx: novoTotalXP, lastActivity: new Date().toISOString() } },
                 { upsert: true }
             );
         }
@@ -3262,7 +3336,7 @@ router.post('/english-spaces/progress/vocab', async (req, res) => {
     }
 });
 
-// 5. GET, POST, PUT e DELETE /api/workspace/english-spaces/world/stickies (Mural de Post-its com Autor no MongoDB)
+// 5. GET, POST, PUT e DELETE /api/workspace/english-spaces/world/stickies
 async function listarStickiesEscola(db, escolaId) {
     const docs = await db.collection('workspace_spaces_stickies')
         .find({ escolaId: { $in: [escolaId, 'DEFAULT'] } })
@@ -3273,7 +3347,7 @@ async function listarStickiesEscola(db, escolaId) {
     if (docs.length === 0) {
         return [
             { id: 'seed_1', author: 'Paulo', text: 'Hello from Bahia!', userId: 'seed' },
-            { id: 'seed_2', author: 'Teacher', text: 'Coffee first, English second!', userId: 'seed' }
+            { id: 'seed_2', author: 'Teacher', text: 'Earn DRX and build your house!', userId: 'seed' }
         ];
     }
     return docs.map(d => ({
@@ -3295,7 +3369,7 @@ router.get('/english-spaces/world/stickies', async (req, res) => {
             success: true,
             notes: [
                 { id: 'seed_1', author: 'Paulo', text: 'Hello from Bahia!', userId: 'seed' },
-                { id: 'seed_2', author: 'Teacher', text: 'Coffee first, English second!', userId: 'seed' }
+                { id: 'seed_2', author: 'Teacher', text: 'Earn DRX and build your house!', userId: 'seed' }
             ]
         });
     }
@@ -3430,7 +3504,8 @@ router.post('/english-spaces/live/token', async (req, res) => {
         await db.collection('workspace_spaces_sessoes').updateOne(
             { roomName },
             {
-                $set: { spaceId, level, roomName, participants: participantesAtuais, status: novoStatus, updatedAt: agoraIso },$setOnInsert: {
+                $set: { spaceId, level, roomName, participants: participantesAtuais, status: novoStatus, updatedAt: agoraIso },
+                $setOnInsert: {
                     createdBy: participantId,
                     maxParticipants: 12,
                     createdAt: agoraIso
@@ -3556,7 +3631,7 @@ router.post('/english-spaces/ai/chat', async (req, res) => {
     }
 });
 
-// 9. ROTAS MULTIPLAYER DA CIDADE 3D
+// 9. ROTAS MULTIPLAYER DA CIDADE 3D (SINCRONIZA AVATAR, VEÍCULOS E CASA)
 router.get('/english-spaces/world/state', async (req, res) => {
     try {
         limparJogadoresInativos3D();
@@ -3582,6 +3657,8 @@ router.post('/english-spaces/world/move', async (req, res) => {
             shirtColor: typeof b.shirtColor === 'number' ? b.shirtColor : null,
             shoeColor: typeof b.shoeColor === 'number' ? b.shoeColor : null,
             petType: b.petType ? String(b.petType) : null,
+            equippedVehicle: b.equippedVehicle ? String(b.equippedVehicle) : null,
+            houseStage: typeof b.houseStage === 'number' ? b.houseStage : 1,
             x: Number(b.x) ? Number(b.x) : 0,
             z: Number(b.z) ? Number(b.z) : 0,
             rotY: Number(b.rotY) ? Number(b.rotY) : 0,
