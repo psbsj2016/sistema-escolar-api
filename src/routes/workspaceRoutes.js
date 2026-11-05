@@ -86,20 +86,32 @@ const verificarToken = async (req, res, next) => {
 // ============================================================================
 router.get('/stream', verificarToken, (req, res) => { 
     res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders(); 
 
     const escolaId = req.query.escolaId;
 
+    // 💓 Sinal de vida inicial e a cada 25s para evitar ERR_NETWORK_IO_SUSPENDED no navegador e no Render
+    res.write(`: connected\n\n`);
+    const heartbeatInterval = setInterval(() => {
+        if (!res.writableEnded) {
+            res.write(`: ping\n\n`);
+        }
+    }, 25000);
+
     const enviarEvento = (data) => {
-        if (data.escolaId === escolaId || data.escolaId === 'DEFAULT') {
+        if (!res.writableEnded && (data.escolaId === escolaId || data.escolaId === 'DEFAULT')) {
             res.write(`data: ${JSON.stringify(data)}\n\n`);
         }
     };
 
     workspaceStream.on('evento_realtime', enviarEvento);
-    req.on('close', () => workspaceStream.off('evento_realtime', enviarEvento));
+    req.on('close', () => {
+        clearInterval(heartbeatInterval);
+        workspaceStream.off('evento_realtime', enviarEvento);
+    });
 });
 
 router.post('/upload/solicitar-link', verificarToken, async (req, res) => {
