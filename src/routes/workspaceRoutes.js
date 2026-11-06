@@ -1855,7 +1855,7 @@ router.post('/monitoramento/offline', verificarToken, async (req, res) => {
 router.post('/ingles/xp', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { userId, escolaId, nome, coins, streak, streakFreeze, srs, itensConcluidos, itensComprados, mascoteAtivo, tituloAtivo } = req.body || {};
+        const { userId, escolaId, nome, coins, cofre, streak, streakFreeze, srs, itensConcluidos, itensComprados, mascoteAtivo, tituloAtivo } = req.body || {};
         if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
 
         let nomeReal = (nome && nome !== 'Aluno') ? String(nome).trim() : null;
@@ -1875,6 +1875,7 @@ router.post('/ingles/xp', verificarToken, async (req, res) => {
             ultimaAtividade: new Date().toISOString()
         };
 
+        if (cofre && typeof cofre === 'object') camposUpdate.cofre = cofre;
         if (srs && typeof srs === 'object') camposUpdate.srs = srs;
         if (Array.isArray(itensConcluidos)) camposUpdate.itensConcluidos = itensConcluidos;
         if (Array.isArray(itensComprados)) camposUpdate.itensComprados = itensComprados;
@@ -1995,6 +1996,7 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
                 srs: (statsAluno && statsAluno.srs) ? statsAluno.srs : (d.srs || {}),
                 statsAluno: statsAluno ? {
                     coins: statsAluno.coins,
+                    cofre: statsAluno.cofre || { saldo: 0, ultimoRendimento: '' },
                     streak: statsAluno.streak,
                     streakFreeze: statsAluno.streakFreeze || 0,
                     itensComprados: statsAluno.itensComprados || [],
@@ -2150,6 +2152,75 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
 
         res.json({ success: true, resposta: respostaGroq.choices[0]?.message?.content || 'A IA ficou sem palavras.' });
     } catch (error) { res.status(500).json({ success: false, error: 'Falha de comunicação com a Nuvem.' }); }
+});
+
+// 🧠 GERADOR AUTOMÁTICO DE PACOTES PEDAGÓGICOS COM IA (GROQ) PARA O PROFESSOR
+router.post('/ingles/gerar-pacote-ia', verificarToken, async (req, res) => {
+    try {
+        const { tema, nivel } = req.body || {};
+        if (!tema || !String(tema).trim()) {
+            return res.status(400).json({ success: false, error: 'Informe o tema da aula.' });
+        }
+
+        const apiKey = process.env.GROQ_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ success: false, error: 'GROQ_API_KEY não configurada no servidor.' });
+        }
+
+        const nivelEscolhido = nivel || 'A2';
+        const promptSistema = `You are an expert English curriculum designer. Generate an English learning package about the theme "${String(tema).trim()}" for CEFR level ${nivelEscolhido}.
+Return ONLY a valid JSON object (no markdown, no backticks, no explanations) following this exact structure:
+{
+  "words": [
+    { "word": "BOARDING PASS", "translation": "Cartão de embarque" }
+  ],
+  "phrases": [
+    { "phrase": "May I see your passport and boarding pass, please?" }
+  ],
+  "quizzes": [
+    { "question": "Where ___ you flying today?", "options": ["are", "is", "am"], "correct": 0 }
+  ],
+  "wordPickers": [
+    { "text": "I would like a ___ seat, please.", "options": ["window", "table", "roof"], "correct": 0 }
+  ],
+  "roleplays": [
+    { "scenario": "You are at the airport check-in counter talking to the agent." }
+  ]
+}
+Requirements:
+- Exactly 5 items in "words" (uppercase English word + Portuguese translation).
+- Exactly 3 items in "phrases" (natural English sentences).
+- Exactly 2 items in "quizzes" (3 options each, "correct" is the index 0, 1, or 2).
+- Exactly 2 items in "wordPickers" (sentence with ___ blank, 3 options, "correct" is 0).
+- Exactly 1 item in "roleplays" (clear scenario description in English).`;
+
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'llama-3.3-70b-versatile',
+                messages: [
+                    { role: 'system', content: 'You output only raw valid JSON objects.' },
+                    { role: 'user', content: promptSistema }
+                ],
+                temperature: 0.6,
+                max_tokens: 1800
+            })
+        });
+
+        const data = await response.json();
+        const rawText = data?.choices?.[0]?.message?.content || '{}';
+        const jsonLimpo = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const pacote = JSON.parse(jsonLimpo);
+
+        res.json({ success: true, pacote });
+    } catch (e) {
+        console.error('Erro em /ingles/gerar-pacote-ia:', e);
+        res.status(200).json({ success: false, error: 'Não foi possível gerar o pacote com a IA agora.' });
+    }
 });
 
 router.post('/ingles/jogo/avaliar', verificarToken, async (req, res) => {
