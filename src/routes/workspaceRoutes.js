@@ -1969,7 +1969,18 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
         const escolaId = req.query.escolaId || 'DEFAULT';
         const userId = req.query.userId || null;
 
-        let d = await db.collection('workspace_ingles_data').findOne({ escolaId: escolaId }) || {};
+        // 🚀 Busca sempre a Biblioteca mais recente salva pelo Professor (mesmo se escolaId variar entre código da escola e DEFAULT)
+        let d = await db.collection('workspace_ingles_data').findOne(
+            {
+                escolaId: { $in: [escolaId, 'DEFAULT'] },
+                ultimaAtualizacao: { $exists: true }
+            },
+            { sort: { ultimaAtualizacao: -1 } }
+        );
+        if (!d) {
+            d = await db.collection('workspace_ingles_data').findOne({ escolaId: { $in: [escolaId, 'DEFAULT'] } }) || {};
+        }
+
         let statsAluno = null;
         if (userId) {
             statsAluno = await db.collection('workspace_ingles_stats').findOne({ userId: String(userId) });
@@ -2154,7 +2165,7 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: 'Falha de comunicação com a Nuvem.' }); }
 });
 
-// 🧠 GERADOR AUTOMÁTICO DE PACOTES PEDAGÓGICOS COM IA (GROQ) PARA O PROFESSOR
+// 🧠 GERADOR AUTOMÁTICO DE PACOTES PEDAGÓGICOS COM IA (GROQ) PARA TODOS OS JOGOS DO BAÚ
 router.post('/ingles/gerar-pacote-ia', verificarToken, async (req, res) => {
     try {
         const { tema, nivel } = req.body || {};
@@ -2162,14 +2173,18 @@ router.post('/ingles/gerar-pacote-ia', verificarToken, async (req, res) => {
             return res.status(400).json({ success: false, error: 'Informe o tema da aula.' });
         }
 
+        const Groq = require('groq-sdk');
         const apiKey = process.env.GROQ_API_KEY;
         if (!apiKey) {
             return res.status(500).json({ success: false, error: 'GROQ_API_KEY não configurada no servidor.' });
         }
 
+        const groq = new Groq({ apiKey: apiKey.trim() });
         const nivelEscolhido = nivel || 'A2';
-        const promptSistema = `You are an expert English curriculum designer. Generate an English learning package about the theme "${String(tema).trim()}" for CEFR level ${nivelEscolhido}.
-Return ONLY a valid JSON object (no markdown, no backticks, no explanations) following this exact structure:
+        const temaLimpo = String(tema).trim();
+
+        const promptSistema = `You are an expert English curriculum designer. Generate a complete English learning package about the theme "${temaLimpo}" for CEFR level ${nivelEscolhido}.
+Return ONLY a valid JSON object with these 10 arrays so every game in our platform receives new content:
 {
   "words": [
     { "word": "BOARDING PASS", "translation": "Cartão de embarque" }
@@ -2181,40 +2196,43 @@ Return ONLY a valid JSON object (no markdown, no backticks, no explanations) fol
     { "question": "Where ___ you flying today?", "options": ["are", "is", "am"], "correct": 0 }
   ],
   "wordPickers": [
-    { "text": "I would like a ___ seat, please.", "options": ["window", "table", "roof"], "correct": 0 }
+    { "text": "I would like a ___ seat, please.", "options": ["window", "table"], "correct": 0 }
+  ],
+  "minimalPairs": [
+    { "a": "ship", "b": "sheep" }
+  ],
+  "debates": [
+    { "topic": "Traveling by plane is better than traveling by car", "starter": "Planes are faster, but road trips are scenic. What is your opinion?" }
   ],
   "roleplays": [
-    { "scenario": "You are at the airport check-in counter talking to the agent." }
+    { "title": "${temaLimpo}", "prompt": "Hello! Welcome. How can I help you today?", "tip": "Answer politely in English" }
+  ],
+  "questions": [
+    { "text": "Where would you like to travel on your next vacation?" }
+  ],
+  "answerStatements": [
+    { "text": "I arrived at the airport two hours before my flight." }
+  ],
+  "pictures": [
+    { "word": "airplane", "translation": "avião", "emoji": "✈️" }
   ]
 }
 Requirements:
-- Exactly 5 items in "words" (uppercase English word + Portuguese translation).
-- Exactly 3 items in "phrases" (natural English sentences).
-- Exactly 2 items in "quizzes" (3 options each, "correct" is the index 0, 1, or 2).
-- Exactly 2 items in "wordPickers" (sentence with ___ blank, 3 options, "correct" is 0).
-- Exactly 1 item in "roleplays" (clear scenario description in English).`;
+- 5 items in "words", 3 in "phrases", 2 in "quizzes", 2 in "wordPickers", 2 in "minimalPairs", 1 in "debates", 1 in "roleplays", 2 in "questions", 2 in "answerStatements", and 2 in "pictures" (with a real single emoji).`;
 
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: 'llama-3.3-70b-versatile',
-                messages: [
-                    { role: 'system', content: 'You output only raw valid JSON objects.' },
-                    { role: 'user', content: promptSistema }
-                ],
-                temperature: 0.6,
-                max_tokens: 1800
-            })
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: 'You output only valid JSON objects.' },
+                { role: 'user', content: promptSistema }
+            ],
+            model: 'openai/gpt-oss-120b',
+            temperature: 0.5,
+            response_format: { type: 'json_object' }
         });
 
-        const data = await response.json();
-        const rawText = data?.choices?.[0]?.message?.content || '{}';
-        const jsonLimpo = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
-        const pacote = JSON.parse(jsonLimpo);
+        let rawText = completion.choices[0]?.message?.content || '{}';
+        rawText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const pacote = JSON.parse(rawText);
 
         res.json({ success: true, pacote });
     } catch (e) {
