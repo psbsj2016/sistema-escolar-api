@@ -2165,10 +2165,10 @@ router.post('/ingles/ia-teste/groq', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: 'Falha de comunicação com a Nuvem.' }); }
 });
 
-// 🧠 GERADOR AUTOMÁTICO DE PACOTES PEDAGÓGICOS COM IA (GROQ) PARA TODOS OS JOGOS DO BAÚ
+// 🧠 GERADOR AUTOMÁTICO DE PACOTES PEDAGÓGICOS COM IA (GROQ) - 100% INÉDITO SEM REPETIÇÕES
 router.post('/ingles/gerar-pacote-ia', verificarToken, async (req, res) => {
     try {
-        const { tema, nivel } = req.body || {};
+        const { tema, nivel, existentes = {} } = req.body || {};
         if (!tema || !String(tema).trim()) {
             return res.status(400).json({ success: false, error: 'Informe o tema da aula.' });
         }
@@ -2183,50 +2183,82 @@ router.post('/ingles/gerar-pacote-ia', verificarToken, async (req, res) => {
         const nivelEscolhido = nivel || 'A2';
         const temaLimpo = String(tema).trim();
 
-        const promptSistema = `You are an expert English curriculum designer. Generate a complete English learning package about the theme "${temaLimpo}" for CEFR level ${nivelEscolhido}.
-Return ONLY a valid JSON object with these 10 arrays so every game in our platform receives new content:
+        // Sorteia um sub-ângulo criativo para variar o vocabulário mesmo quando o professor pede o mesmo tema várias vezes
+        const angulosCriativos = [
+            'practical everyday situations and action verbs',
+            'useful objects, places, and polite expressions',
+            'common problems, solutions, and adjectives',
+            'social interactions, feelings, and specific vocabulary',
+            'unexpected situations, idioms, and natural dialogues'
+        ];
+        const anguloSorteado = angulosCriativos[Math.floor(Math.random() * angulosCriativos.length)];
+
+        // Monta o resumo do que já existe na Biblioteca para proibir a IA de repetir
+        const resumoProibido = JSON.stringify({
+            words: (existentes.words || []).slice(0, 120),
+            phrases: (existentes.phrases || []).slice(0, 50),
+            quizzes: (existentes.quizzes || []).slice(0, 40),
+            wordPickers: (existentes.wordPickers || []).slice(0, 40),
+            minimalPairs: (existentes.minimalPairs || []).slice(0, 40),
+            debates: (existentes.debates || []).slice(0, 30),
+            roleplays: (existentes.roleplays || []).slice(0, 30),
+            questions: (existentes.questions || []).slice(0, 40),
+            answerStatements: (existentes.answerStatements || []).slice(0, 40),
+            pictures: (existentes.pictures || []).slice(0, 50)
+        });
+
+        const promptSistema = `You are an expert English curriculum designer. Generate a 100% BRAND-NEW English learning package about the theme "${temaLimpo}" (focusing on ${anguloSorteado}) for CEFR level ${nivelEscolhido}.
+
+CRITICAL RULE - ZERO DUPLICATES ALLOWED:
+The teacher ALREADY has the following items in their database:
+${resumoProibido}
+
+You MUST NOT repeat, reuse, or closely copy ANY word, phrase, quiz question, fill-in-the-blank sentence, minimal pair, debate topic, roleplay prompt, open question, statement, or picture word listed above! Every single item you generate MUST be completely new and different.
+
+Return ONLY a valid JSON object with these exact 10 arrays:
 {
   "words": [
-    { "word": "BOARDING PASS", "translation": "Cartão de embarque" }
+    { "word": "UPPERCASE_ENGLISH_WORD", "translation": "Tradução em Português" }
   ],
   "phrases": [
-    { "phrase": "May I see your passport and boarding pass, please?" }
+    { "phrase": "Natural English sentence related to the theme." }
   ],
   "quizzes": [
-    { "question": "Where ___ you flying today?", "options": ["are", "is", "am"], "correct": 0 }
+    { "question": "English grammar or vocabulary question with ___ blank?", "options": ["correct_option", "wrong_option_1", "wrong_option_2"], "correct": 0 }
   ],
   "wordPickers": [
-    { "text": "I would like a ___ seat, please.", "options": ["window", "table"], "correct": 0 }
+    { "text": "English sentence with a ___ blank.", "options": ["correct_word", "wrong_word"], "correct": 0 }
   ],
   "minimalPairs": [
-    { "a": "ship", "b": "sheep" }
+    { "a": "word1", "b": "word2" }
   ],
   "debates": [
-    { "topic": "Traveling by plane is better than traveling by car", "starter": "Planes are faster, but road trips are scenic. What is your opinion?" }
+    { "topic": "Debate statement about the theme", "starter": "Engaging question to start the debate?" }
   ],
   "roleplays": [
-    { "title": "${temaLimpo}", "prompt": "Hello! Welcome. How can I help you today?", "tip": "Answer politely in English" }
+    { "title": "Short scenario title", "prompt": "NPC opening line in English asking something to the student", "tip": "Short tip in Portuguese or English" }
   ],
   "questions": [
-    { "text": "Where would you like to travel on your next vacation?" }
+    { "text": "Open-ended conversation question in English about the theme?" }
   ],
   "answerStatements": [
-    { "text": "I arrived at the airport two hours before my flight." }
+    { "text": "First-person statement in English (so the student can guess the question that generated it)." }
   ],
   "pictures": [
-    { "word": "airplane", "translation": "avião", "emoji": "✈️" }
+    { "word": "english_noun", "translation": "tradução", "emoji": "🎯" }
   ]
 }
 Requirements:
-- 5 items in "words", 3 in "phrases", 2 in "quizzes", 2 in "wordPickers", 2 in "minimalPairs", 1 in "debates", 1 in "roleplays", 2 in "questions", 2 in "answerStatements", and 2 in "pictures" (with a real single emoji).`;
+- Generate 6 items in "words", 4 in "phrases", 3 in "quizzes", 3 in "wordPickers", 2 in "minimalPairs", 1 in "debates", 1 in "roleplays", 2 in "questions", 2 in "answerStatements", and 2 in "pictures" (each with 1 accurate single emoji).
+- Do NOT output placeholder text like "UPPERCASE_ENGLISH_WORD"; output real English content for "${temaLimpo}".`;
 
         const completion = await groq.chat.completions.create({
             messages: [
-                { role: 'system', content: 'You output only valid JSON objects.' },
+                { role: 'system', content: 'You output only raw valid JSON objects with 100% original, non-duplicate educational content.' },
                 { role: 'user', content: promptSistema }
             ],
             model: 'openai/gpt-oss-120b',
-            temperature: 0.5,
+            temperature: 0.85,
             response_format: { type: 'json_object' }
         });
 
