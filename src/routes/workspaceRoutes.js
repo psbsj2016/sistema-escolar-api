@@ -1969,17 +1969,17 @@ router.get('/ingles/dados', verificarToken, async (req, res) => {
         const escolaId = req.query.escolaId || 'DEFAULT';
         const userId = req.query.userId || null;
 
-        // 🚀 Busca sempre a Biblioteca mais recente salva pelo Professor (mesmo se escolaId variar entre código da escola e DEFAULT)
-        let d = await db.collection('workspace_ingles_data').findOne(
-            {
-                escolaId: { $in: [escolaId, 'DEFAULT'] },
-                ultimaAtualizacao: { $exists: true }
-            },
-            { sort: { ultimaAtualizacao: -1 } }
-        );
-        if (!d) {
-            d = await db.collection('workspace_ingles_data').findOne({ escolaId: { $in: [escolaId, 'DEFAULT'] } }) || {};
-        }
+        // 🚀 Busca todos os documentos candidatos da escola e escolhe o mais recente que possua conteúdo na Biblioteca
+        const docsCandidatos = await db.collection('workspace_ingles_data')
+            .find({ escolaId: { $in: [escolaId, 'DEFAULT'] } })
+            .sort({ ultimaAtualizacao: -1 })
+            .toArray();
+
+        let d = docsCandidatos.find(doc =>
+            (Array.isArray(doc.words) && doc.words.length > 0) ||
+            (Array.isArray(doc.phrases) && doc.phrases.length > 0) ||
+            (Array.isArray(doc.quizzes) && doc.quizzes.length > 0)
+        ) || docsCandidatos[0] || {};
 
         let statsAluno = null;
         if (userId) {
@@ -2042,10 +2042,24 @@ router.put('/ingles/dados', verificarToken, async (req, res) => {
             return res.json({ success: true });
         }
 
-        // 👨‍🏫 Salvamento do Professor: Atualiza toda a biblioteca e cupons e avisa os alunos em Tempo Real!
+        // 🛡️ BLINDAGEM DO PROFESSOR: Não permite sobrescrever um array existente no banco por um array vazio acidental
+        const docAtual = await db.collection('workspace_ingles_data').findOne({ escolaId: escolaAlvo }) || {};
         const update = { ultimaAtualizacao: new Date().toISOString() };
         const permitidos = ['words','phrases','quizzes','pictures','submissions','pool','errosRetidos','srs','wordPickers','minimalPairs','debates','roleplays','questions','answerStatements','recompensasProf'];
-        Object.keys(campos).forEach(k => { if (permitidos.includes(k)) update[k] = campos[k]; });
+        const colecoesJogos = ['words','phrases','quizzes','pictures','wordPickers','minimalPairs','debates','roleplays','questions','answerStatements'];
+
+        Object.keys(campos).forEach(k => {
+            if (permitidos.includes(k)) {
+                const novoValor = campos[k];
+                const valorAntigo = docAtual[k];
+                // Se for uma coleção de jogo que veio vazia [] mas no banco já tinha itens, preserva os itens do banco
+                if (colecoesJogos.includes(k) && Array.isArray(novoValor) && novoValor.length === 0 && Array.isArray(valorAntigo) && valorAntigo.length > 0) {
+                    update[k] = valorAntigo;
+                } else {
+                    update[k] = novoValor;
+                }
+            }
+        });
         
         await db.collection('workspace_ingles_data').updateOne(
             { escolaId: escolaAlvo }, 
