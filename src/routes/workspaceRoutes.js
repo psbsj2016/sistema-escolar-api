@@ -2218,7 +2218,7 @@ You MUST NOT repeat, reuse, or closely copy ANY word, phrase, quiz question, fil
 Return ONLY a valid JSON object with these exact 10 arrays:
 {
   "words": [
-    { "word": "UPPERCASE_ENGLISH_WORD", "translation": "Tradução em Português" }
+    { "word": "lowercase_english_word", "translation": "tradução em português" }
   ],
   "phrases": [
     { "phrase": "Natural English sentence related to the theme." }
