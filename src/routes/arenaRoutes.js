@@ -1035,4 +1035,63 @@ router.get('/:salaId/estado', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🎙️ TRANSCRIÇÃO EM NUVEM (GROQ WHISPER) - FALLBACK ANTI-BLOQUEIO DE CHAMADA
+// ============================================================================
+router.post('/transcrever-audio', verificarToken, async (req, res) => {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    let tempFilePath = null;
+
+    try {
+        const { audioBase64, mimeType } = req.body || {};
+        if (!audioBase64) {
+            return res.status(400).json({ success: false, error: 'Áudio vazio.' });
+        }
+
+        const chaveApi = process.env.GROQ_API_KEY;
+        if (!chaveApi) {
+            return res.status(500).json({ success: false, error: 'Chave API da Groq em falta.' });
+        }
+
+        // Remove o cabeçalho data:audio/...;base64, e grava num ficheiro temporário leve
+        const base64Limpo = String(audioBase64).replace(/^data:[^;]+;base64,/, '');
+        const buffer = Buffer.from(base64Limpo, 'base64');
+        if (buffer.length < 200) {
+            return res.status(400).json({ success: false, error: 'Áudio demasiado curto.' });
+        }
+
+        const extensao = (mimeType && mimeType.includes('mp4')) ? 'm4a' : (mimeType && mimeType.includes('ogg') ? 'ogg' : 'webm');
+        tempFilePath = path.join(os.tmpdir(), `arena_voice_${Date.now()}_${Math.random().toString(36).substring(7)}.${extensao}`);
+        fs.writeFileSync(tempFilePath, buffer);
+
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: chaveApi.trim() });
+
+        // 1. Transcreve o áudio em Inglês usando o motor ultrarrápido Whisper da Groq
+        const transcricao = await groq.audio.transcriptions.create({
+            file: fs.createReadStream(tempFilePath),
+            model: 'whisper-large-v3-turbo',
+            language: 'en',
+            response_format: 'json',
+            temperature: 0.0
+        });
+
+        const textoCru = (transcricao && transcricao.text) ? String(transcricao.text).trim() : '';
+        if (!textoCru) {
+            return res.status(200).json({ success: false, error: 'Não foi possível ouvir a fala.' });
+        }
+
+        res.status(200).json({ success: true, textoTranscrito: textoCru });
+    } catch (error) {
+        console.error('🚨 Erro na transcrição Whisper da Arena:', error);
+        res.status(500).json({ success: false, error: 'Falha ao processar o áudio na nuvem.' });
+    } finally {
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+            try { fs.unlinkSync(tempFilePath); } catch (e) {}
+        }
+    }
+});
+
 module.exports = router;
