@@ -787,6 +787,9 @@ router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
         await executarAutoCuraRetroativa(database);
 
         const nomeRecebido = String(req.params.nomeDono ? req.params.nomeDono : '').trim();
+        const userIdReq = String(req.query.userId || '').trim();
+        const tipoReq = String(req.query.tipo || '').trim();
+
         const usuarios = await database.collection('usuarios').find({}).toArray();
         const alunos = await database.collection('alunos').find({}).toArray();
 
@@ -805,18 +808,12 @@ router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
             };
         };
 
-        // Primeiro mapeia a ficha bruta de alunos como base
         alunos.forEach(a => {
             const k = String(a.nome || '').trim().toLowerCase();
-            if (k) {
-                registarVariacao(a.nome, a.nome.trim(), a.avatar || null);
-            }
-            if (a.id) {
-                mapaPorId[String(a.id)] = { nomeAtual: String(a.nome || '').trim(), avatar: a.avatar || null };
-            }
+            if (k) registarVariacao(a.nome, a.nome.trim(), a.avatar || null);
+            if (a.id) mapaPorId[String(a.id)] = { nomeAtual: String(a.nome || '').trim(), avatar: a.avatar || null };
         });
 
-        // Em seguida, 'usuarios' (onde mora o Nome Escolhido pelo aluno no Perfil e a Foto dele) tem PRIORIDADE TOTAL!
         usuarios.forEach(u => {
             const fichaAluno = alunos.find(a =>
                 (u.alunoRefId && (String(a.id) === String(u.alunoRefId) || String(a._id) === String(u.alunoRefId))) ||
@@ -834,7 +831,6 @@ router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
             registarVariacao(u.nome, nomeEscolhido, avatarAtual);
             registarVariacao(u.login, nomeEscolhido, avatarAtual);
             if (fichaAluno && fichaAluno.nome) {
-                // Mapeia o Nome Completo da matrícula para apontar SEMPRE para o Nome Escolhido no Perfil!
                 mapaIdentidade[String(fichaAluno.nome).trim().toLowerCase()] = {
                     nomeAtual: nomeEscolhido,
                     avatar: avatarAtual || mapaIdentidade[String(fichaAluno.nome).trim().toLowerCase()]?.avatar || null
@@ -842,36 +838,116 @@ router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
             }
         });
 
-        // 2. Descobre todos os nomes possíveis do dono do Sininho (nome escolhido, login e nome completo de matrícula)
-        const nomesDoDono = new Set([nomeRecebido]);
-        const userDono = usuarios.find(u =>
-            String(u.nome || '').trim().toLowerCase() === nomeRecebido.toLowerCase() ||
-            String(u.login || '').trim().toLowerCase() === nomeRecebido.toLowerCase()
-        );
-        if (userDono) {
-            if (userDono.nome) nomesDoDono.add(userDono.nome.trim());
-            if (userDono.login) nomesDoDono.add(userDono.login.trim());
-            if (userDono.alunoRefId) {
-                const alunoDono = alunos.find(a => String(a.id) === String(userDono.alunoRefId) || String(a._id) === String(userDono.alunoRefId));
-                if (alunoDono && alunoDono.nome) nomesDoDono.add(alunoDono.nome.trim());
+        // 2. Localiza a conta exata do dono do Sininho priorizando o ID único e o Cargo (Aluno vs Professor/Gestor)
+        let userDono = null;
+        if (userIdReq) {
+            userDono = usuarios.find(u => String(u.id) === userIdReq || String(u.alunoRefId) === userIdReq);
+        }
+        if (!userDono) {
+            userDono = usuarios.find(u => {
+                const mesmoNomeOuLogin = String(u.nome || '').trim().toLowerCase() === nomeRecebido.toLowerCase() ||
+                                         String(u.login || '').trim().toLowerCase() === nomeRecebido.toLowerCase();
+                if (!mesmoNomeOuLogin) return false;
+                if (tipoReq) return String(u.tipo || 'Aluno').toLowerCase() === tipoReq.toLowerCase();
+                return true;
+            });
+        }
+
+        const cargoDono = tipoReq || (userDono && userDono.tipo) || 'Aluno';
+        const ehAluno = String(cargoDono).toLowerCase() === 'aluno';
+
+        // 🛡️ BARREIRA 1: Se for Aluno e estiver Inativo/Cancelado/Trancado, não devolve nenhuma notificação!
+        let alunoDono = null;
+        if (ehAluno) {
+            if (userDono && userDono.alunoRefId) {
+                alunoDono = alunos.find(a => String(a.id) === String(userDono.alunoRefId) || String(a._id) === String(userDono.alunoRefId));
+            }
+            if (!alunoDono && userIdReq) {
+                alunoDono = alunos.find(a => String(a.id) === userIdReq);
+            }
+            if (alunoDono && !ehAlunoAtivo(alunoDono)) {
+                return res.status(200).json([]);
             }
         }
 
-        const regexesDono = Array.from(nomesDoDono).map(n => {
+        // 3. Monta os nomes do dono sem misturar com contas de outros cargos!
+        const nomesDoDono = new Set([nomeRecebido]);
+        if (userDono) {
+            if (userDono.nome) nomesDoDono.add(userDono.nome.trim());
+            if (userDono.login) nomesDoDono.add(userDono.login.trim());
+            if (alunoDono && alunoDono.nome) nomesDoDono.add(alunoDono.nome.trim());
+        }
+
+        // Se for Aluno, remove da busca qualquer nome que pertença a um Professor ou Gestor
+        if (ehAluno) {
+            usuarios.forEach(u => {
+                if (u.tipo === 'Professor' || u.tipo === 'Gestor') {
+                    const nomeProf = String(u.nome || '').trim();
+                    const loginProf = String(u.login || '').trim();
+                    if (userDono && String(u.id) !== String(userDono.id)) {
+                        if (nomeProf && nomeProf.toLowerCase() !== String(userDono.login || '').toLowerCase()) {
+                            // Mantém isolamento por ID caso tenham nomes iguais
+                        }
+                    }
+                }
+            });
+        }
+
+        const regexesDono = Array.from(nomesDoDono).filter(Boolean).map(n => {
             const limpo = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             return new RegExp(`^\\s*${limpo}\\s*$`, 'i');
         });
 
-        const notificacoes = await database.collection('workspace_notificacoes').find({
+        const notificacoesBrutas = await database.collection('workspace_notificacoes').find({
             $or: [
                 { destinatarioNome: { $in: regexesDono } },
-                { loginDestino: { $in: regexesDono } }
+                { loginDestino: { $in: regexesDono } },
+                ...(userIdReq ? [{ destinatarioId: userIdReq }] : [])
             ],
             lida: false
-        }).sort({ data: -1 }).toArray();
+        }).sort({ data: -1 }).limit(60).toArray();
 
-        // 3. Traduz qualquer remetente (mesmo "Nome Completo" ou "Nome Completo (@Apelido)") para o Nome Escolhido e Foto Atual!
-        const notificacoesCuradas = notificacoes.map(n => {
+        // 🛡️ BARREIRA 2: Filtro estrito de isolamento entre Aluno e Professor/Gestor
+        const idsProfessores = new Set(
+            usuarios.filter(u => u.tipo === 'Professor' || u.tipo === 'Gestor').map(u => String(u.id))
+        );
+        const nomesProfessores = new Set(
+            usuarios.filter(u => u.tipo === 'Professor' || u.tipo === 'Gestor')
+                .flatMap(u => [String(u.nome || '').trim().toLowerCase(), String(u.login || '').trim().toLowerCase()])
+                .filter(Boolean)
+        );
+
+        const notificacoesIsoladas = notificacoesBrutas.filter(n => {
+            // Se a notificação tem destinatarioId gravado, tem de bater exatamente com o utilizador logado
+            if (n.destinatarioId && userIdReq && String(n.destinatarioId) !== userIdReq) {
+                return false;
+            }
+            if (ehAluno) {
+                // Bloqueia qualquer notificação marcada para Professor/Gestor
+                if (n.destinatarioTipo && String(n.destinatarioTipo).toLowerCase() !== 'aluno') return false;
+                if (n.destinatarioId && idsProfessores.has(String(n.destinatarioId))) return false;
+
+                // Bloqueia origens e mensagens que são exclusivas de Professores (ex: entregas de tarefas de alunos)
+                if (['lousa_espera', 'acesso_online'].includes(n.origem)) return false;
+                const msgLower = String(n.mensagem || '').toLowerCase();
+                if (msgLower.includes('enviou o exercício intitulado') || msgLower.includes('já está disponível na área de exercícios')) {
+                    return false;
+                }
+
+                // Se o aluno por acaso tiver o mesmo nome de um professor e a notificação não for da sua própria conta
+                const destLower = String(n.destinatarioNome || '').trim().toLowerCase();
+                const meuLoginLower = String(userDono?.login || '').trim().toLowerCase();
+                if (nomesProfessores.has(destLower) && destLower !== meuLoginLower && !n.destinatarioId) {
+                    if (n.origem === 'tarefa' && !msgLower.includes('agendou') && !msgLower.includes('atualizou') && !msgLower.includes('modificações')) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        });
+
+        // 4. Traduz qualquer remetente para o Nome Escolhido e Foto Atual
+        const notificacoesCuradas = notificacoesIsoladas.map(n => {
             const remBruto = String(n.remetenteNome || '').trim();
             const matchApelido = remBruto.match(/^(.*?)\s*\(@([^)]+)\)\s*$/);
             const parteNomeCompleto = matchApelido ? matchApelido[1].trim().toLowerCase() : remBruto.toLowerCase();
@@ -891,10 +967,7 @@ router.get('/notificacoes/:nomeDono', verificarToken, async (req, res) => {
                 };
             }
             if (matchApelido) {
-                return {
-                    ...n,
-                    remetenteNome: matchApelido[2].trim()
-                };
+                return { ...n, remetenteNome: matchApelido[2].trim() };
             }
             return n;
         });
@@ -1219,21 +1292,35 @@ router.post('/entregas', verificarToken, async (req, res) => {
                 tipo: { $in: ['Professor', 'Gestor'] }
             }).toArray();
 
-            if (professoresEGestores.length > 0) {
+          if (professoresEGestores.length > 0) {
                 const nomesDestinatarios = [];
                 const notificacoesArray = professoresEGestores.map(prof => {
                     const nomeProf = prof.nome || prof.login;
                     if (nomeProf) nomesDestinatarios.push(nomeProf);
                     return {
-                        id: crypto.randomUUID(), escolaId: escolaId, destinatarioNome: nomeProf, remetenteNome: nomeAluno,
+                        id: crypto.randomUUID(),
+                        escolaId: escolaId,
+                        destinatarioId: String(prof.id || ''),
+                        destinatarioTipo: prof.tipo || 'Professor',
+                        destinatarioNome: nomeProf,
+                        remetenteNome: nomeAluno,
                         mensagem: `da turma de <strong>${turmaNome}</strong>, enviou o exercício intitulado <strong>"${tituloTarefa}"</strong> e já está disponível na área de exercícios. Confira 👀`,
-                        origem: 'tarefa', origemId: novaEntrega.eventoId, destinoNome: turmaNome, lida: false, data: new Date().toISOString()
+                        origem: 'tarefa',
+                        origemId: novaEntrega.eventoId,
+                        destinoNome: turmaNome,
+                        lida: false,
+                        data: new Date().toISOString()
                     };
                 }).filter(n => n.destinatarioNome);
 
                 if (notificacoesArray.length > 0) {
                     await database.collection('workspace_notificacoes').insertMany(notificacoesArray);
-                    workspaceStream.emit('evento_realtime', { type: 'NOVA_NOTIFICACAO', destinatarios: nomesDestinatarios, escolaId: escolaId });
+                    workspaceStream.emit('evento_realtime', {
+                        type: 'NOVA_NOTIFICACAO',
+                        destinatarios: nomesDestinatarios,
+                        destinatariosTipo: 'Professor',
+                        escolaId: escolaId
+                    });
                 }
             }
         } catch (erroNoti) { console.error("Aviso: Falha ao notificar professores sobre a entrega.", erroNoti); }
