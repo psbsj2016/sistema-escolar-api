@@ -287,18 +287,89 @@ router.post('/solo', verificarToken, async (req, res) => {
     }
 });
 
+// 0. Rota para Listar Todos os Guerreiros Ativos da Escola (Com ou Sem Foto de Perfil!)
+router.get('/guerreiros', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const usuarios = await db.collection('usuarios').find({}).toArray();
+        const alunos = await db.collection('alunos').find({}).toArray();
+
+        const ehAlunoAtivo = (aluno) => {
+            if (!aluno) return false;
+            const st = String(aluno.status || 'Ativo').trim().toLowerCase();
+            if (st.includes('cancel') || st.includes('tranc') || st.includes('exclu') || st.includes('inativ') || st.includes('desist')) {
+                return false;
+            }
+            return st === 'ativo' || st === '';
+        };
+
+        const idsAlunosInativos = new Set(
+            alunos.filter(a => !ehAlunoAtivo(a)).map(a => String(a.id))
+        );
+
+        const mapaGuerreiros = new Map();
+
+        // 1. Adiciona utilizadores com conta ativa
+        usuarios.forEach(u => {
+            if (u.alunoRefId && idsAlunosInativos.has(String(u.alunoRefId))) return;
+            const fichaAluno = alunos.find(a =>
+                (u.alunoRefId && String(a.id) === String(u.alunoRefId)) ||
+                (u.id && String(a.id) === String(u.id))
+            );
+            if (fichaAluno && !ehAlunoAtivo(fichaAluno)) return;
+
+            const nomeExibicao = String(u.nome || (fichaAluno && fichaAluno.nome) || u.login || '').trim();
+            if (!nomeExibicao) return;
+
+            const chave = nomeExibicao.toLowerCase();
+            mapaGuerreiros.set(chave, {
+                id: String(u.id || ''),
+                alunoRefId: u.alunoRefId ? String(u.alunoRefId) : (fichaAluno?.id ? String(fichaAluno.id) : null),
+                nome: nomeExibicao,
+                login: String(u.login || '').trim(),
+                avatar: u.avatar || (fichaAluno && fichaAluno.avatar) || null,
+                tipo: u.tipo || 'Aluno'
+            });
+        });
+
+        // 2. Garante também alunos ativos da coleção 'alunos' caso ainda não estejam mapeados
+        alunos.filter(ehAlunoAtivo).forEach(a => {
+            const nomeAl = String(a.nome || a.login || '').trim();
+            if (!nomeAl) return;
+            const chave = nomeAl.toLowerCase();
+            if (!mapaGuerreiros.has(chave)) {
+                const jaMapeadoPorRef = Array.from(mapaGuerreiros.values()).some(g => g.alunoRefId === String(a.id) || g.id === String(a.id));
+                if (!jaMapeadoPorRef) {
+                    mapaGuerreiros.set(chave, {
+                        id: String(a.id || ''),
+                        alunoRefId: String(a.id || ''),
+                        nome: nomeAl,
+                        login: String(a.login || '').trim(),
+                        avatar: a.avatar || null,
+                        tipo: 'Aluno'
+                    });
+                }
+            }
+        });
+
+        res.status(200).json({ success: true, guerreiros: Array.from(mapaGuerreiros.values()) });
+    } catch (error) {
+        res.status(500).json({ success: false, guerreiros: [] });
+    }
+});
+
 // 1. Rota para Procurar Duelo Aleatório
 router.post('/procurar', verificarToken, async (req, res) => {
     try {
         const { alunoId, alunoNome, escolaId, limiteMinutos } = req.body;
+        const escolaAlvo = escolaId || 'DEFAULT';
         const db = await connectDB();
         
         const salaEspera = await db.collection('workspace_arenas').findOne({
-            escolaId: escolaId, tipo: 'aleatorio', status: 'aguardando', 'jogador1.id': { $ne: alunoId }
+            escolaId: { $in: [escolaAlvo, 'DEFAULT'] }, tipo: 'aleatorio', status: 'aguardando', 'jogador1.id': { $ne: alunoId }
         });
 
         if (salaEspera) {
-            // 🚀 O NOVO SORTEADOR
             const cenarioSorteado = sortearCenarioNivelado(null);
 
             await db.collection('workspace_arenas').updateOne(
@@ -307,8 +378,8 @@ router.post('/procurar', verificarToken, async (req, res) => {
                     status: 'em_curso', 
                     jogador2: { id: alunoId, nome: alunoNome },
                     iniciadoEm: new Date().toISOString(),
-                    cenario: cenarioSorteado.t, // Puxa o texto (.t)
-                    cenarioObj: cenarioSorteado // 🚀 Guarda o objeto rico
+                    cenario: cenarioSorteado.t,
+                    cenarioObj: cenarioSorteado
                 }}
             );
 
@@ -317,17 +388,17 @@ router.post('/procurar', verificarToken, async (req, res) => {
                     type: 'ARENA_MATCH_ENCONTRADO',
                     salaId: salaEspera.id,
                     destinatarios: [salaEspera.jogador1.nome, alunoNome],
-                    destinatariosIds: [salaEspera.jogador1.id, alunoId],
-                    escolaId: escolaId,
+                    destinatariosIds: [salaEspera.jogador1.id, alunoId].filter(Boolean),
+                    escolaId: escolaAlvo,
                     limiteMinutos: salaEspera.limiteMinutos,
                     cenario: cenarioSorteado.t,
-                    cenarioObj: cenarioSorteado // 🚀 Envia o objeto rico para o Frontend
+                    cenarioObj: cenarioSorteado
                 });
             }
             return res.status(200).json({ success: true, salaId: salaEspera.id, mensagem: 'Oponente encontrado!' });
         } else {
             const novaSala = {
-                id: crypto.randomUUID(), escolaId: escolaId, tipo: 'aleatorio', status: 'aguardando',
+                id: crypto.randomUUID(), escolaId: escolaAlvo, tipo: 'aleatorio', status: 'aguardando',
                 jogador1: { id: alunoId, nome: alunoNome }, jogador2: null,
                 limiteMinutos: parseInt(limiteMinutos) || 50, criadoEm: new Date().toISOString()
             };
@@ -337,39 +408,83 @@ router.post('/procurar', verificarToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Erro ao aceder à Arena.' }); }
 });
 
-// 2. Rota para Convidar um Colega Específico (Blindada)
+// 2. Rota para Convidar um Colega Específico (Blindada com Cruzamento Usuarios + Alunos e EscolaId Default)
 router.post('/convidar', verificarToken, async (req, res) => {
     try {
         const { alunoId, alunoNome, colegaNome, escolaId, limiteMinutos } = req.body;
+        const escolaAlvo = escolaId || 'DEFAULT';
         const db = await connectDB();
 
-        // 🚀 CORREÇÃO 1: Procura de forma mais abrangente na coleção de Utilizadores
-        let userAlvo = await db.collection('usuarios').findOne({
-            $or: [
-                { nome: new RegExp(`^${colegaNome.trim()}$`, 'i') },
-                { login: new RegExp(`^${colegaNome.trim()}$`, 'i') }
-            ]
+        const nomeBusca = String(colegaNome || '').trim();
+        if (!nomeBusca) return res.status(400).json({ error: 'Informe o nome do colega.' });
+
+        const nomeEscapado = nomeBusca.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regexExato = new RegExp(`^\\s*${nomeEscapado}\\s*$`, 'i');
+        const regexParcial = new RegExp(nomeEscapado, 'i');
+
+        // 1. Procura primeiro por correspondência exata em usuarios e alunos
+        let userConta = await db.collection('usuarios').findOne({
+            $or: [{ nome: regexExato }, { login: regexExato }, { id: nomeBusca }]
+        });
+        let fichaAluno = await db.collection('alunos').findOne({
+            $or: [{ nome: regexExato }, { login: regexExato }, { id: nomeBusca }]
         });
 
-        // 🚀 CORREÇÃO 2: Se não achar, procura na coleção de Alunos (cobre alunos sem login ativo)
-        if (!userAlvo) {
-            userAlvo = await db.collection('alunos').findOne({
-                $or: [
-                    { nome: new RegExp(`^${colegaNome.trim()}$`, 'i') },
-                    { login: new RegExp(`^${colegaNome.trim()}$`, 'i') }
-                ]
+        // 2. Se não achou exato, procura por correspondência parcial
+        if (!userConta && !fichaAluno) {
+            userConta = await db.collection('usuarios').findOne({
+                $or: [{ nome: regexParcial }, { login: regexParcial }]
             });
+            if (!userConta) {
+                fichaAluno = await db.collection('alunos').findOne({
+                    $or: [{ nome: regexParcial }, { login: regexParcial }]
+                });
+            }
         }
 
+        // 3. Se achou apenas a ficha do aluno, localiza a conta de login correspondente em 'usuarios'
+        if (!userConta && fichaAluno) {
+            userConta = await db.collection('usuarios').findOne({
+                $or: [
+                    { alunoRefId: String(fichaAluno.id) },
+                    { id: String(fichaAluno.id) },
+                    ...(fichaAluno.login ? [{ login: new RegExp(`^\\s*${String(fichaAluno.login).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i') }] : [])
+                ]
+            });
+        } else if (userConta && !fichaAluno && userConta.alunoRefId) {
+            fichaAluno = await db.collection('alunos').findOne({ id: String(userConta.alunoRefId) });
+        }
+
+        const userAlvo = userConta || fichaAluno;
         if (!userAlvo) return res.status(404).json({ error: 'Guerreiro não encontrado! Selecione um nome sugerido na lista.' });
 
-        const nomeColegaReal = userAlvo.nome || userAlvo.login;
+        const nomeColegaReal = (userConta && userConta.nome) ? userConta.nome : (userAlvo.nome || userAlvo.login);
+        const idPrincipalAlvo = userConta ? String(userConta.id) : String(userAlvo.id);
+
+        const destinatariosNomes = Array.from(new Set([
+            nomeColegaReal,
+            userConta?.nome,
+            userConta?.login,
+            fichaAluno?.nome,
+            fichaAluno?.login
+        ].filter(Boolean)));
+
+        const destinatariosIds = Array.from(new Set([
+            idPrincipalAlvo,
+            userConta?.id ? String(userConta.id) : null,
+            userConta?.alunoRefId ? String(userConta.alunoRefId) : null,
+            fichaAluno?.id ? String(fichaAluno.id) : null
+        ].filter(Boolean)));
 
         const novaSala = {
-            id: crypto.randomUUID(), escolaId: escolaId, tipo: 'convite', status: 'aguardando',
-            jogador1: { id: alunoId, nome: alunoNome },
-            jogador2: { id: String(userAlvo.id), nome: nomeColegaReal },
-            limiteMinutos: parseInt(limiteMinutos) || 50, criadoEm: new Date().toISOString()
+            id: crypto.randomUUID(),
+            escolaId: escolaAlvo,
+            tipo: 'convite',
+            status: 'aguardando',
+            jogador1: { id: String(alunoId), nome: alunoNome },
+            jogador2: { id: idPrincipalAlvo, nome: nomeColegaReal },
+            limiteMinutos: parseInt(limiteMinutos) || 50,
+            criadoEm: new Date().toISOString()
         };
 
         await db.collection('workspace_arenas').insertOne(novaSala);
@@ -379,13 +494,13 @@ router.post('/convidar', verificarToken, async (req, res) => {
                 type: 'ARENA_CONVITE_RECEBIDO',
                 salaId: novaSala.id,
                 remetenteNome: alunoNome,
-                destinatarios: [nomeColegaReal],
-                destinatariosIds: [String(userAlvo.id)], // BLINDAGEM
-                escolaId: escolaId,
+                destinatarios: destinatariosNomes,
+                destinatariosIds: destinatariosIds,
+                escolaId: escolaAlvo,
                 limiteMinutos: novaSala.limiteMinutos
             });
         }
-        res.status(201).json({ success: true, salaId: novaSala.id, mensagem: 'Convite enviado!' });
+        res.status(201).json({ success: true, salaId: novaSala.id, nomeConvidado: nomeColegaReal, mensagem: 'Convite enviado!' });
     } catch (error) { res.status(500).json({ error: 'Erro ao enviar convite.' }); }
 });
 
@@ -393,13 +508,13 @@ router.post('/convidar', verificarToken, async (req, res) => {
 router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
     try {
         const { alunoId, alunoNome, escolaId } = req.body;
+        const escolaAlvo = escolaId || 'DEFAULT';
         const salaId = req.params.salaId;
         const db = await connectDB();
 
         const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
         if (!sala) return res.status(404).json({ error: 'Sala não encontrada.' });
 
-        // 🚀 O NOVO SORTEADOR
         const cenarioSorteado = sortearCenarioNivelado(null);
 
         await db.collection('workspace_arenas').updateOne(
@@ -407,8 +522,8 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
             { $set: { 
                 status: 'em_curso', 'jogador2.id': alunoId, 'jogador2.nome': alunoNome, 
                 iniciadoEm: new Date().toISOString(), 
-                cenario: cenarioSorteado.t, // Puxa o texto (.t)
-                cenarioObj: cenarioSorteado // 🚀 Guarda o objeto rico
+                cenario: cenarioSorteado.t,
+                cenarioObj: cenarioSorteado
             } }
         );
 
@@ -416,12 +531,12 @@ router.post('/:salaId/aceitar', verificarToken, async (req, res) => {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ARENA_MATCH_ENCONTRADO',
                 salaId: salaId,
-                destinatarios: [sala.jogador1.nome, alunoNome],
-                destinatariosIds: [sala.jogador1.id, alunoId], 
-                escolaId: escolaId,
+                destinatarios: [sala.jogador1.nome, alunoNome].filter(Boolean),
+                destinatariosIds: [String(sala.jogador1.id), String(alunoId)].filter(Boolean), 
+                escolaId: escolaAlvo,
                 limiteMinutos: sala.limiteMinutos,
                 cenario: cenarioSorteado.t,
-                cenarioObj: cenarioSorteado // 🚀 Envia o objeto rico para o Frontend
+                cenarioObj: cenarioSorteado
             });
         }
         res.status(200).json({ success: true });
