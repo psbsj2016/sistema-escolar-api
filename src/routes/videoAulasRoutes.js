@@ -704,4 +704,40 @@ router.post('/live/encerrar', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 8. CANAL EM TEMPO REAL DO MINI CHAT E PROJEÇÃO DE LOUSA NA CHAMADA
+// ============================================================================
+router.post('/live/evento', verificarToken, async (req, res) => {
+    try {
+        const { salaCodigo, escolaId, subtipo, autorNome, autorRole, texto, lousaAtiva } = req.body || {};
+        const db = await connectDB();
+
+        // Se o professor ativou ou desativou a Projeção da Lousa, guarda no estado da live ativa
+        if (subtipo === 'PROJETAR_LOUSA') {
+            await db.collection('workspace_video_lives').updateMany(
+                { ativa: true },
+                { $set: { lousaProjetada: Boolean(lousaAtiva) } }
+            );
+        }
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'VIDEO_LIVE_EVENTO',
+                salaCodigo: salaCodigo || '',
+                subtipo: subtipo || 'CHAT',
+                autorNome: autorNome || 'Participante',
+                autorRole: autorRole || 'aluno',
+                texto: texto || '',
+                lousaAtiva: Boolean(lousaAtiva),
+                horario: new Date().toISOString(),
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao transmitir evento na live.' });
+    }
+});
+
 module.exports = router;
