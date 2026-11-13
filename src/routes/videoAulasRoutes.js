@@ -77,6 +77,28 @@ const gerarSlugAssunto = (texto) => {
         .replace(/^-+|-+$/g, '') || 'geral';
 };
 
+// 🛡️ Verifica no banco de dados se o utilizador logado é Professor, Gestor ou Secretaria (NUNCA Aluno!)
+async function verificarSeEhProfessorOuGestor(db, req) {
+    try {
+        const idToken = req.userId || req.query.userId || req.body?.autorId || '';
+        if (idToken) {
+            const u = await db.collection('usuarios').findOne({ id: String(idToken) });
+            if (u) {
+                const tipoLimpo = String(u.tipo || 'Gestor').trim().toLowerCase();
+                if (tipoLimpo === 'aluno' || u.alunoRefId) return false;
+                return true; // É Gestor, Professor, Secretaria ou Dono
+            }
+            // Se o ID estiver apenas na coleção de alunos, é Aluno
+            const al = await db.collection('alunos').findOne({ id: String(idToken) });
+            if (al) return false;
+        }
+        const roleParam = String(req.query.role || req.body?.role || '').trim().toLowerCase();
+        return roleParam === 'professor' || roleParam === 'gestor' || roleParam === 'secretaria';
+    } catch (e) {
+        return false;
+    }
+}
+
 // ============================================================================
 // 1. ASSINATURA DIRETA CLOUDINARY + UPLOAD DE VÍDEO-AULAS SEM TRAVAMENTO
 // ============================================================================
@@ -179,7 +201,15 @@ router.get('/catalogo', verificarToken, async (req, res) => {
         const escolaId = req.query.escolaId || 'DEFAULT';
         const userId = req.query.userId || '';
         const alunoRefId = req.query.alunoRefId || '';
-        const role = String(req.query.role || 'aluno').toLowerCase();
+        const isGestorOuProf = await verificarSeEhProfessorOuGestor(db, req);
+        const role = isGestorOuProf ? 'professor' : 'aluno';
+
+        // ⏱️ Limpeza automática: Encerra lives que já ultrapassaram o limite máximo de 4 horas (240 min)
+        const limiteQuatroHorasAtras = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+        await db.collection('workspace_video_lives').updateMany(
+            { ativa: true, iniciadaEm: { $lt: limiteQuatroHorasAtras } },
+            { $set: { ativa: false, encerradaEm: new Date().toISOString(), motivoEncerramento: 'Limite de 4h atingido' } }
+        );
 
         const filtroEscola = (escolaId && escolaId !== 'DEFAULT')
             ? { $in: [escolaId, 'DEFAULT', null] }
@@ -281,8 +311,9 @@ router.get('/catalogo', verificarToken, async (req, res) => {
             ? await db.collection('turmas').find({}).project({ id: 1, nome: 1 }).toArray()
             : [];
 
-        res.status(200).json({
+       res.status(200).json({
             success: true,
+            permissaoGestao: isGestorOuProf,
             videos: videos,
             sequencias: Object.values(mapaAssuntos),
             liveAtiva: liveAtivaParaUsuario,
@@ -549,11 +580,16 @@ router.post('/videos/:id/interagir', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 7. SALA AO VIVO (ESTILO MEET / TEAMS) COM GRAVAÇÃO AUTOMÁTICA
+// 7. SALA AO VIVO (EXCLUSIVA PARA PROFESSOR/GESTOR CRIAR • ATÉ 4H SEGUIDAS)
 // ============================================================================
 router.post('/live/iniciar', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
+        const podeCriarLive = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podeCriarLive) {
+            return res.status(403).json({ error: 'Apenas Professores e Gestores podem iniciar uma transmissão ao vivo.' });
+        }
+
         const b = req.body || {};
         const escolaId = b.escolaId || 'DEFAULT';
 
@@ -563,7 +599,8 @@ router.post('/live/iniciar', verificarToken, async (req, res) => {
             { $set: { ativa: false, encerradaEm: new Date().toISOString() } }
         );
 
-        const codigoSalaMeet = `WS_Live_${escolaId}_${Date.now().toString(36)}`.replace(/[^a-zA-Z0-9_]/g, '');
+        const codigoSalaMeet = `PlayClass_${escolaId}_${Date.now().toString(36)}`.replace(/[^a-zA-Z0-9_]/g, '');
+        const expiraEm = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(); // Até 4 horas seguidas
 
         const novaLive = {
             id: 'live_' + crypto.randomUUID(),
@@ -576,7 +613,9 @@ router.post('/live/iniciar', verificarToken, async (req, res) => {
             codigoSala: codigoSalaMeet,
             linkExternoOpcional: b.linkExterno ? String(b.linkExterno).trim() : null,
             ativa: true,
-            iniciadaEm: new Date().toISOString()
+            duracaoMaximaHoras: 4,
+            iniciadaEm: new Date().toISOString(),
+            expiraEm: expiraEm
         };
 
         await db.collection('workspace_video_lives').insertOne(novaLive);
@@ -593,6 +632,43 @@ router.post('/live/iniciar', verificarToken, async (req, res) => {
         res.status(201).json({ success: true, live: novaLive });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao iniciar sala ao vivo.' });
+    }
+});
+
+router.post('/live/encerrar', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const podeEncerrar = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podeEncerrar) {
+            return res.status(403).json({ error: 'Apenas o Professor ou Gestor pode encerrar a transmissão.' });
+        }
+
+        const { liveId, escolaId } = req.body || {};
+
+        if (liveId) {
+            await db.collection('workspace_video_lives').updateOne(
+                { id: liveId },
+                { $set: { ativa: false, encerradaEm: new Date().toISOString() } }
+            );
+        } else {
+            await db.collection('workspace_video_lives').updateMany(
+                { ativa: true },
+                { $set: { ativa: false, encerradaEm: new Date().toISOString() } }
+            );
+        }
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'VIDEO_LIVE_STATUS',
+                ativa: false,
+                live: null,
+                escolaId: escolaId || 'DEFAULT'
+            });
+        }
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao encerrar transmissão.' });
     }
 });
 
