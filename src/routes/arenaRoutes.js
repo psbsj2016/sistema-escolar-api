@@ -253,6 +253,174 @@ router.post('/desafio-direto/recusar', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
+// 🗣️ NOVO AMBIENTE: SALA DE PRÁTICA LIVRE EM GRUPO (SEM CONTEXTO • ATÉ 5 PESSOAS)
+// ============================================================================
+router.post('/grupo-livre/criar', verificarToken, async (req, res) => {
+    try {
+        const { alunoId, alunoNome, colegasNomes = [], escolaId, limiteMinutos } = req.body;
+        const escolaAlvo = escolaId || 'DEFAULT';
+        const db = await connectDB();
+
+        const listaNomesLimpa = Array.isArray(colegasNomes)
+            ? Array.from(new Set(colegasNomes.map(n => String(n || '').trim()).filter(Boolean))).slice(0, 4)
+            : [];
+
+        if (listaNomesLimpa.length === 0) {
+            return res.status(400).json({ error: 'Adicione pelo menos 1 colega (máximo 4 colegas + você = 5 pessoas).' });
+        }
+
+        const destinatariosNomes = new Set();
+        const destinatariosIds = new Set();
+
+        for (const nomeBusca of listaNomesLimpa) {
+            const esc = nomeBusca.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regexExato = new RegExp(`^\\s*${esc}\\s*$`, 'i');
+            const regexParcial = new RegExp(esc, 'i');
+
+            let u = await db.collection('usuarios').findOne({ $or: [{ nome: regexExato }, { login: regexExato }] });
+            let a = await db.collection('alunos').findOne({ $or: [{ nome: regexExato }, { login: regexExato }] });
+
+            if (!u && !a) {
+                u = await db.collection('usuarios').findOne({ $or: [{ nome: regexParcial }, { login: regexParcial }] });
+                if (!u) a = await db.collection('alunos').findOne({ $or: [{ nome: regexParcial }, { login: regexParcial }] });
+            }
+            if (!u && a) {
+                u = await db.collection('usuarios').findOne({ $or: [{ alunoRefId: String(a.id) }, { id: String(a.id) }] });
+            }
+
+            if (u || a) {
+                if (u?.nome) destinatariosNomes.add(u.nome.trim());
+                if (u?.login) destinatariosNomes.add(u.login.trim());
+                if (a?.nome) destinatariosNomes.add(a.nome.trim());
+                if (u?.id) destinatariosIds.add(String(u.id));
+                if (u?.alunoRefId) destinatariosIds.add(String(u.alunoRefId));
+                if (a?.id) destinatariosIds.add(String(a.id));
+            } else {
+                destinatariosNomes.add(nomeBusca);
+            }
+        }
+
+        const salaId = 'livre-' + Date.now() + '-' + crypto.randomUUID().substring(0, 6);
+        const cenarioLivreObj = {
+            id: 'livre_aberto',
+            t: 'Prática Livre em Grupo (Sem Contexto Fixo)',
+            p1: 'Participante',
+            p2: 'Participante',
+            livre: true
+        };
+
+        const novaSala = {
+            id: salaId,
+            escolaId: escolaAlvo,
+            tipo: 'grupo_livre',
+            status: 'em_curso',
+            maxParticipantes: 5,
+            jogador1: { id: String(alunoId), nome: alunoNome, papel: 'Prática Livre' },
+            jogador2: null,
+            participantes: [
+                { id: String(alunoId), nome: alunoNome, papel: 'Prática Livre' }
+            ],
+            convidados: listaNomesLimpa,
+            papeisDefinidos: true,
+            limiteMinutos: parseInt(limiteMinutos, 10) || 30,
+            iniciadoEm: new Date().toISOString(),
+            cenario: '🗣️ PRÁTICA LIVRE EM GRUPO (Sem Contexto Fixo)',
+            cenarioObj: cenarioLivreObj,
+            historico: []
+        };
+
+        await db.collection('workspace_arenas').insertOne(novaSala);
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_CONVITE_GRUPO',
+                salaId: salaId,
+                remetenteNome: alunoNome,
+                destinatarios: Array.from(destinatariosNomes),
+                destinatariosIds: Array.from(destinatariosIds),
+                limiteMinutos: novaSala.limiteMinutos,
+                cenarioObj: cenarioLivreObj,
+                escolaId: escolaAlvo
+            });
+        }
+
+        res.status(201).json({
+            success: true,
+            salaId: salaId,
+            limiteMinutos: novaSala.limiteMinutos,
+            cenarioObj: cenarioLivreObj,
+            participantes: novaSala.participantes
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao criar sala de prática livre.' });
+    }
+});
+
+router.post('/grupo-livre/:salaId/entrar', verificarToken, async (req, res) => {
+    try {
+        const salaId = req.params.salaId;
+        const { alunoId, alunoNome, escolaId } = req.body;
+        const escolaAlvo = escolaId || 'DEFAULT';
+        const db = await connectDB();
+
+        const sala = await db.collection('workspace_arenas').findOne({ id: salaId });
+        if (!sala || sala.status === 'finalizado' || sala.status === 'cancelado') {
+            return res.status(404).json({ error: 'Esta sala de treino já foi encerrada.' });
+        }
+
+        const participantesAtuais = Array.isArray(sala.participantes) && sala.participantes.length > 0
+            ? [...sala.participantes]
+            : [sala.jogador1, sala.jogador2].filter(Boolean);
+
+        const jaEstaNaSala = participantesAtuais.some(p =>
+            String(p.id) === String(alunoId) ||
+            String(p.nome || '').trim().toLowerCase() === String(alunoNome || '').trim().toLowerCase()
+        );
+
+        if (!jaEstaNaSala) {
+            if (participantesAtuais.length >= 5) {
+                return res.status(400).json({ error: 'A sala já atingiu o limite máximo de 5 pessoas!' });
+            }
+            participantesAtuais.push({
+                id: String(alunoId),
+                nome: alunoNome,
+                papel: 'Prática Livre'
+            });
+        }
+
+        const updateFields = { participantes: participantesAtuais };
+        if (!sala.jogador2 && String(sala.jogador1?.id) !== String(alunoId)) {
+            updateFields.jogador2 = { id: String(alunoId), nome: alunoNome, papel: 'Prática Livre' };
+        }
+
+        await db.collection('workspace_arenas').updateOne(
+            { id: salaId },
+            { $set: updateFields }
+        );
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ARENA_GRUPO_ATUALIZADO',
+                salaId: salaId,
+                participantes: participantesAtuais,
+                novoMembro: alunoNome,
+                escolaId: escolaAlvo
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            salaId: salaId,
+            limiteMinutos: sala.limiteMinutos,
+            cenarioObj: sala.cenarioObj || { id: 'livre_aberto', t: 'Prática Livre em Grupo', livre: true },
+            participantes: participantesAtuais
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao entrar na sala de grupo.' });
+    }
+});
+
+// ============================================================================
 // 🤖 MODO SOLO: TREINO CONTRA A IA (PvE)
 // ============================================================================
 router.post('/solo', verificarToken, async (req, res) => {
@@ -816,7 +984,9 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
             };
         }
 
-        const jogadoresReais = [sala.jogador1, sala.jogador2].filter(j => j && j.id);
+        const jogadoresReais = (Array.isArray(sala.participantes) && sala.participantes.length > 0)
+            ? sala.participantes.filter(j => j && j.id)
+            : [sala.jogador1, sala.jogador2].filter(j => j && j.id);
         const jogadoresCorrigidosParaFrontend = [];
 
         for (const jogadorReal of jogadoresReais) {
@@ -861,10 +1031,11 @@ router.post('/:salaId/avaliar', verificarToken, async (req, res) => {
         resultadoAvaliacao.jogadores = jogadoresCorrigidosParaFrontend;
         await db.collection('workspace_arenas').updateOne({ id: salaId }, { $set: { status: 'finalizado', resultado: resultadoAvaliacao, dataFim: new Date().toISOString() } });
 
-        if (global.workspaceStream) {
+     if (global.workspaceStream) {
+            const nomesTodos = jogadoresReais.map(j => j.nome).filter(Boolean);
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ARENA_RESULTADO_FINAL', salaId: salaId, resultado: resultadoAvaliacao,
-                destinatarios: [sala.jogador1.nome, sala.jogador2?.nome].filter(Boolean), escolaId: escolaId
+                destinatarios: nomesTodos, escolaId: escolaId || 'DEFAULT'
             });
         }
         res.status(200).json({ success: true, resultado: resultadoAvaliacao });
