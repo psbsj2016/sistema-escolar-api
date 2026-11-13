@@ -27,7 +27,14 @@ router.get(['/workspace-lousa', '/workspace-lousa.html'], (req, res) => {
     const pathDist = path.join(__dirname, '../dist/workspace-lousa.html');
     const pathFront = path.join(__dirname, '../frontend/workspace-lousa.html');
     
-   res.sendFile(pathFront); // força usar o frontend/workspace-lousa.html corrigido
+    res.sendFile(pathFront); // força usar o frontend/workspace-lousa.html corrigido
+});
+
+router.get(['/workspace-aulas-video', '/workspace-aulas-video.html'], (req, res) => {
+    const pathFront = path.join(__dirname, '../frontend/workspace-aulas-video.html');
+    const pathDist = path.join(__dirname, '../dist/workspace-aulas-video.html');
+    if (fs.existsSync(pathFront)) return res.sendFile(pathFront);
+    return res.sendFile(pathDist);
 });
 
 // ============================================================================
