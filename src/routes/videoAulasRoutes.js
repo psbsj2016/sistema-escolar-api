@@ -78,8 +78,43 @@ const gerarSlugAssunto = (texto) => {
 };
 
 // ============================================================================
-// 1. UPLOAD DE VÍDEO-AULAS E GRAVAÇÕES DE LIVE PARA A NUVEM
+// 1. ASSINATURA DIRETA CLOUDINARY + UPLOAD DE VÍDEO-AULAS SEM TRAVAMENTO
 // ============================================================================
+
+// 🚀 Rota A: Gera assinatura segura para o navegador enviar o vídeo DIRETO ao Cloudinary (Sem limite de MB da Vercel!)
+router.get('/assinatura-upload', verificarToken, (req, res) => {
+    try {
+        const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+        const apiKey = process.env.CLOUDINARY_API_KEY;
+        const apiSecret = process.env.CLOUDINARY_API_SECRET;
+
+        if (!cloudName || !apiKey || !apiSecret) {
+            return res.status(500).json({ success: false, error: 'Credenciais do Cloudinary não configuradas no servidor.' });
+        }
+
+        const timestamp = Math.round(new Date().getTime() / 1000);
+        const paramsToSign = {
+             timestamp: timestamp,
+             folder: PASTA_NUVEM_VIDEOS
+        };
+
+        const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
+
+        res.status(200).json({
+            success: true,
+            cloudName,
+            apiKey,
+            timestamp,
+            signature,
+            folder: PASTA_NUVEM_VIDEOS
+        });
+    } catch (error) {
+        console.error('🚨 Erro ao gerar assinatura Cloudinary:', error);
+        res.status(500).json({ success: false, error: 'Falha ao autorizar upload na nuvem.' });
+    }
+});
+
+// 🚀 Rota B: Fallback de upload pelo servidor (usando uploader.upload padrão que não trava)
 router.post('/upload-video', verificarToken, (req, res) => {
     const processador = uploadVideo.single('video');
 
@@ -106,24 +141,12 @@ router.post('/upload-video', verificarToken, (req, res) => {
                 .replace(/[^a-zA-Z0-9.\-_]/g, '_');
             const publicId = `aula_${Date.now()}_${nomeSeguro.split('.')[0]}`;
 
-            // Usa upload_large para suportar vídeos longos e gravações de aulas ao vivo com segurança
-            const resultado = await new Promise((resolve, reject) => {
-                cloudinary.uploader.upload_large(
-                    caminhoTemp,
-                    {
-                        folder: PASTA_NUVEM_VIDEOS,
-                        resource_type: 'video',
-                        public_id: publicId,
-                        chunk_size: 6000000
-                    },
-                    (error, result) => {
-                        if (error) reject(error);
-                        else resolve(result);
-                    }
-                );
+            const resultado = await cloudinary.uploader.upload(caminhoTemp, {
+                folder: PASTA_NUVEM_VIDEOS,
+                resource_type: 'video',
+                public_id: publicId
             });
 
-            // Gera miniatura automática a partir do vídeo no Cloudinary (troca a extensão final por .jpg)
             let miniaturaAuto = null;
             if (resultado.secure_url && resultado.secure_url.includes('/video/upload/')) {
                 miniaturaAuto = resultado.secure_url.replace(/\.(mp4|webm|mov|mkv|ogg)$/i, '.jpg');
@@ -138,7 +161,7 @@ router.post('/upload-video', verificarToken, (req, res) => {
             });
         } catch (erroUpload) {
             console.error('🚨 Erro ao enviar vídeo para o Cloudinary:', erroUpload);
-            res.status(500).json({ error: 'Erro ao guardar o vídeo na nuvem.' });
+            res.status(500).json({ error: 'Erro ao guardar o vídeo na nuvem: ' + (erroUpload.message || 'Falha desconhecida') });
         } finally {
             if (caminhoTemp && fs.existsSync(caminhoTemp)) {
                 try { fs.unlinkSync(caminhoTemp); } catch (e) {}
