@@ -1,4 +1,4 @@
-// backend/routes/videoAulasRoutes.js - Motor Exclusivo de Vídeo-Aulas, Playlists e Lives (Estilo YouTube + Meet)
+// src/routes/videoAulasRoutes.js - Motor Exclusivo de Vídeo-Aulas, Playlists, Links Criptografados e Histórico de Lives
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
@@ -11,8 +11,9 @@ const os = require('os');
 // ⚙️ PARÂMETROS AJUSTÁVEIS
 const LIMITE_MB_VIDEO = 800;
 const PASTA_NUVEM_VIDEOS = 'workspace_video_aulas';
+const SEGREDO_LINK_LIVE = process.env.JWT_SECRET || 'playclass_meet_crypto_key_2026';
 
-// 🛡️ Filtro de Alunos Ativos (Mesmo padrão de segurança do WorkSpace)
+// 🛡️ Filtro de Alunos Ativos
 const ehAlunoAtivo = (aluno) => {
     if (!aluno) return false;
     const st = String(aluno.status || 'Ativo').trim().toLowerCase();
@@ -20,6 +21,15 @@ const ehAlunoAtivo = (aluno) => {
         return false;
     }
     return st === 'ativo' || st === '';
+};
+
+const normalizarTexto = (str) => String(str || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+
+// 🔐 Gerador de Token Único Criptografado para Links Diretos de Live
+const gerarTokenLiveCriptografado = (escolaId, destino) => {
+    const semente = `${escolaId}_${destino}_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
+    const hash = crypto.createHmac('sha256', SEGREDO_LINK_LIVE).update(semente).digest('hex').slice(0, 22);
+    return `lvk_${hash}`;
 };
 
 // ⏱️ Proteção contra Timeout em Uploads Grandes (15 minutos)
@@ -40,7 +50,6 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// 💾 Armazenamento Temporário em Disco para não esgotar a memória RAM do servidor
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         cb(null, os.tmpdir());
@@ -66,7 +75,6 @@ const verificarToken = async (req, res, next) => {
     next();
 };
 
-// Helper para criar código identificador (Slug) de cada Assunto/Playlist para os links extraídos
 const gerarSlugAssunto = (texto) => {
     return String(texto || 'geral')
         .normalize("NFD")
@@ -77,7 +85,7 @@ const gerarSlugAssunto = (texto) => {
         .replace(/^-+|-+$/g, '') || 'geral';
 };
 
-// 🛡️ Verifica no banco de dados se o utilizador logado é Professor, Gestor ou Secretaria (NUNCA Aluno!)
+// 🛡️ Verifica no banco de dados se o utilizador logado é Professor, Gestor ou Secretaria
 async function verificarSeEhProfessorOuGestor(db, req) {
     try {
         const idToken = req.userId || req.query.userId || req.body?.autorId || '';
@@ -86,9 +94,8 @@ async function verificarSeEhProfessorOuGestor(db, req) {
             if (u) {
                 const tipoLimpo = String(u.tipo || 'Gestor').trim().toLowerCase();
                 if (tipoLimpo === 'aluno' || u.alunoRefId) return false;
-                return true; // É Gestor, Professor, Secretaria ou Dono
+                return true;
             }
-            // Se o ID estiver apenas na coleção de alunos, é Aluno
             const al = await db.collection('alunos').findOne({ id: String(idToken) });
             if (al) return false;
         }
@@ -99,11 +106,84 @@ async function verificarSeEhProfessorOuGestor(db, req) {
     }
 }
 
-// ============================================================================
-// 1. ASSINATURA DIRETA CLOUDINARY + UPLOAD DE VÍDEO-AULAS SEM TRAVAMENTO
-// ============================================================================
+// 🎯 Descobre com precisão todas as Turmas (IDs e Nomes) às quais o Aluno pertence
+async function obterTurmasDoAluno(db, userId, alunoRefId) {
+    const chavesTurma = new Set();
+    try {
+        const idsBusca = [userId, alunoRefId].filter(x => x && x !== 'undefined' && x !== 'null').map(String);
+        if (idsBusca.length === 0) return [];
 
-// 🚀 Rota A: Gera assinatura segura para o navegador enviar o vídeo DIRETO ao Cloudinary (Sem limite de MB da Vercel!)
+        const contaUser = await db.collection('usuarios').findOne({
+            $or: [{ id: { $in: idsBusca } }, { alunoRefId: { $in: idsBusca } }]
+        });
+
+        const idsFicha = [...idsBusca];
+        if (contaUser?.alunoRefId) idsFicha.push(String(contaUser.alunoRefId));
+        if (contaUser?.id) idsFicha.push(String(contaUser.id));
+
+        let fichaAluno = await db.collection('alunos').findOne({ id: { $in: idsFicha } });
+        if (!fichaAluno && contaUser && (contaUser.nome || contaUser.login)) {
+            const nomeAlvo = String(contaUser.nome || contaUser.login).trim();
+            fichaAluno = await db.collection('alunos').findOne({
+                nome: new RegExp(`^\\s*${nomeAlvo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i')
+            });
+        }
+
+        const extrairValor = (v) => {
+            if (!v) return;
+            if (Array.isArray(v)) v.forEach(extrairValor);
+            else if (typeof v === 'object') {
+                if (v.id) chavesTurma.add(normalizarTexto(v.id));
+                if (v.nome) chavesTurma.add(normalizarTexto(v.nome));
+            } else {
+                chavesTurma.add(normalizarTexto(v));
+            }
+        };
+
+        if (contaUser) {
+            extrairValor(contaUser.turma);
+            extrairValor(contaUser.turmaId);
+            extrairValor(contaUser.turmas);
+        }
+        if (fichaAluno) {
+            extrairValor(fichaAluno.turma);
+            extrairValor(fichaAluno.turmaId);
+            extrairValor(fichaAluno.turmas);
+        }
+
+        if (chavesTurma.size > 0) {
+            const todasTurmas = await db.collection('turmas').find({}).project({ id: 1, nome: 1 }).toArray();
+            todasTurmas.forEach(t => {
+                const idNorm = normalizarTexto(t.id);
+                const nomeNorm = normalizarTexto(t.nome);
+                if (chavesTurma.has(idNorm) || chavesTurma.has(nomeNorm)) {
+                    if (idNorm) chavesTurma.add(idNorm);
+                    if (nomeNorm) chavesTurma.add(nomeNorm);
+                }
+            });
+        }
+    } catch (e) {}
+    return Array.from(chavesTurma).filter(Boolean);
+}
+
+// 🔒 Verifica se um vídeo ou Live está liberado para o aluno com base na turma escolhida
+function itemLiberadoParaTurmasDoAluno(item, turmasDoAlunoNorm) {
+    if (!item) return false;
+    const destNorm = normalizarTexto(item.destino || '');
+    const destNomeNorm = normalizarTexto(item.destinoNome || '');
+
+    if (destNorm === 'global' || destNorm === 'todas as turmas' || destNorm === 'publico geral') {
+        return true;
+    }
+    if (!Array.isArray(turmasDoAlunoNorm) || turmasDoAlunoNorm.length === 0) {
+        return false;
+    }
+    return (destNorm && turmasDoAlunoNorm.includes(destNorm)) || (destNomeNorm && turmasDoAlunoNorm.includes(destNomeNorm));
+}
+
+// ============================================================================
+// 1. ASSINATURA DIRETA CLOUDINARY + UPLOAD DE VÍDEO-AULAS
+// ============================================================================
 router.get('/assinatura-upload', verificarToken, (req, res) => {
     try {
         const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
@@ -115,52 +195,29 @@ router.get('/assinatura-upload', verificarToken, (req, res) => {
         }
 
         const timestamp = Math.round(new Date().getTime() / 1000);
-        const paramsToSign = {
-             timestamp: timestamp,
-             folder: PASTA_NUVEM_VIDEOS
-        };
-
+        const paramsToSign = { timestamp, folder: PASTA_NUVEM_VIDEOS };
         const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
 
-        res.status(200).json({
-            success: true,
-            cloudName,
-            apiKey,
-            timestamp,
-            signature,
-            folder: PASTA_NUVEM_VIDEOS
-        });
+        res.status(200).json({ success: true, cloudName, apiKey, timestamp, signature, folder: PASTA_NUVEM_VIDEOS });
     } catch (error) {
-        console.error('🚨 Erro ao gerar assinatura Cloudinary:', error);
         res.status(500).json({ success: false, error: 'Falha ao autorizar upload na nuvem.' });
     }
 });
 
-// 🚀 Rota B: Fallback de upload pelo servidor (usando uploader.upload padrão que não trava)
 router.post('/upload-video', verificarToken, (req, res) => {
     const processador = uploadVideo.single('video');
-
     processador(req, res, async (err) => {
         if (res.headersSent) return;
         if (err) {
-            if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({ error: `O vídeo excede o limite de ${LIMITE_MB_VIDEO}MB.` });
-            }
+            if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: `O vídeo excede o limite de ${LIMITE_MB_VIDEO}MB.` });
             return res.status(500).json({ error: 'Falha ao receber o ficheiro de vídeo no servidor.' });
         }
-
-        if (!req.file) {
-            return res.status(400).json({ error: 'Nenhum ficheiro de vídeo recebido.' });
-        }
+        if (!req.file) return res.status(400).json({ error: 'Nenhum ficheiro de vídeo recebido.' });
 
         const caminhoTemp = req.file.path;
-
         try {
             const nomeOriginal = req.file.originalname || `aula_${Date.now()}.mp4`;
-            const nomeSeguro = String(nomeOriginal)
-                .normalize("NFD")
-                .replace(/[\u0300-\u036f]/g, "")
-                .replace(/[^a-zA-Z0-9.\-_]/g, '_');
+            const nomeSeguro = String(nomeOriginal).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9.\-_]/g, '_');
             const publicId = `aula_${Date.now()}_${nomeSeguro.split('.')[0]}`;
 
             const resultado = await cloudinary.uploader.upload(caminhoTemp, {
@@ -182,7 +239,6 @@ router.post('/upload-video', verificarToken, (req, res) => {
                 nomeOriginal: req.file.originalname
             });
         } catch (erroUpload) {
-            console.error('🚨 Erro ao enviar vídeo para o Cloudinary:', erroUpload);
             res.status(500).json({ error: 'Erro ao guardar o vídeo na nuvem: ' + (erroUpload.message || 'Falha desconhecida') });
         } finally {
             if (caminhoTemp && fs.existsSync(caminhoTemp)) {
@@ -193,21 +249,21 @@ router.post('/upload-video', verificarToken, (req, res) => {
 });
 
 // ============================================================================
-// 2. LISTAR CATÁLOGO COMPLETO (VÍDEOS, SEQUÊNCIAS POR ASSUNTO E LIVE ATIVA)
+// 2. LISTAR CATÁLOGO COMPLETO (COM FILTRO ESTRITO DE TURMA + HISTÓRICO)
 // ============================================================================
 router.get('/catalogo', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const escolaId = req.query.escolaId || 'DEFAULT';
-        const userId = req.query.userId || '';
+        const userId = req.query.userId || req.userId || '';
         const alunoRefId = req.query.alunoRefId || '';
-        const isGestorOuProf = await verificarSeEhProfessorOuGestor(db, req);
-        const role = isGestorOuProf ? 'professor' : 'aluno';
 
-        // ⏱️ Limpeza automática: Encerra lives que já ultrapassaram o limite máximo de 4 horas (240 min)
+        const isGestorOuProf = await verificarSeEhProfessorOuGestor(db, req);
+
+        // Encerra automaticamente lives que já ultrapassaram 4 horas (240 min)
         const limiteQuatroHorasAtras = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
         await db.collection('workspace_video_lives').updateMany(
-            { ativa: true, iniciadaEm: { $lt: limiteQuatroHorasAtras } },
+            { ativa: true, inicioUsoEm: { $lt: limiteQuatroHorasAtras } },
             { $set: { ativa: false, encerradaEm: new Date().toISOString(), motivoEncerramento: 'Limite de 4h atingido' } }
         );
 
@@ -215,133 +271,84 @@ router.get('/catalogo', verificarToken, async (req, res) => {
             ? { $in: [escolaId, 'DEFAULT', null] }
             : { $exists: true };
 
-        let filtroTurma = { escolaId: filtroEscola };
-
-        // Se for Aluno, filtra apenas os vídeos e lives destinados às turmas dele ou 'global'
-        let minhasTurmas = [];
-        if (role === 'aluno' && (userId || alunoRefId)) {
-            const idsBusca = [userId, alunoRefId].filter(x => x && x !== 'undefined');
-            const contaUser = idsBusca.length
-                ? await db.collection('usuarios').findOne({ $or: [{ id: { $in: idsBusca } }, { alunoRefId: { $in: idsBusca } }] })
-                : null;
-            const fichaAluno = idsBusca.length
-                ? await db.collection('alunos').findOne({
-                    $or: [
-                        { id: { $in: idsBusca } },
-                        ...(contaUser?.alunoRefId ? [{ id: String(contaUser.alunoRefId) }] : [])
-                    ]
-                })
-                : null;
-
-            const extrair = (v) => {
-                if (!v) return;
-                if (Array.isArray(v)) v.forEach(extrair);
-                else if (typeof v === 'object') {
-                    if (v.id) minhasTurmas.push(String(v.id).trim());
-                    if (v.nome) minhasTurmas.push(String(v.nome).trim());
-                } else {
-                    minhasTurmas.push(String(v).trim());
-                }
-            };
-
-            if (contaUser) { extrair(contaUser.turma); extrair(contaUser.turmas); }
-            if (fichaAluno) { extrair(fichaAluno.turma); extrair(fichaAluno.turmaId); extrair(fichaAluno.turmas); }
-            minhasTurmas = Array.from(new Set(minhasTurmas.filter(Boolean)));
-
-            if (minhasTurmas.length > 0) {
-                filtroTurma = {
-                    escolaId: filtroEscola,
-                    $or: [
-                        { destino: 'global' },
-                        { destino: { $in: ['global', ...minhasTurmas] } },
-                        { destinoNome: { $in: ['Todas as Turmas', 'Público Geral', 'Global', ...minhasTurmas] } }
-                    ]
-                };
-            }
-        }
-
-        const videos = await db.collection('workspace_video_aulas')
-            .find(filtroTurma)
+        const todosVideosEscola = await db.collection('workspace_video_aulas')
+            .find({ escolaId: filtroEscola })
             .sort({ assuntoSlug: 1, ordem: 1, dataCriacao: -1 })
             .toArray();
 
-        // Agrupa automaticamente os vídeos em Sequências / Playlists por Assunto
+        let minhasTurmasNorm = [];
+        let videos = todosVideosEscola;
+
+        if (!isGestorOuProf) {
+            minhasTurmasNorm = await obterTurmasDoAluno(db, userId, alunoRefId);
+            videos = todosVideosEscola.filter(v => itemLiberadoParaTurmasDoAluno(v, minhasTurmasNorm));
+        }
+
         const mapaAssuntos = {};
         videos.forEach(v => {
             const nomeAssunto = String(v.assunto || 'Aulas Gerais').trim();
             const slug = v.assuntoSlug || gerarSlugAssunto(nomeAssunto);
             if (!mapaAssuntos[slug]) {
-                mapaAssuntos[slug] = {
-                    slug: slug,
-                    assunto: nomeAssunto,
-                    capa: v.miniatura || null,
-                    totalVideos: 0,
-                    videos: []
-                };
+                mapaAssuntos[slug] = { slug, assunto: nomeAssunto, capa: v.miniatura || null, totalVideos: 0, videos: [] };
             }
-            if (!mapaAssuntos[slug].capa && v.miniatura) {
-                mapaAssuntos[slug].capa = v.miniatura;
-            }
+            if (!mapaAssuntos[slug].capa && v.miniatura) mapaAssuntos[slug].capa = v.miniatura;
             mapaAssuntos[slug].videos.push(v);
             mapaAssuntos[slug].totalVideos = mapaAssuntos[slug].videos.length;
         });
 
-        // Ordena cada sequência pela ordem numérica da aula (Aula 1, Aula 2, Aula 3...)
         Object.values(mapaAssuntos).forEach(pl => {
             pl.videos.sort((a, b) => (Number(a.ordem) || 999) - (Number(b.ordem) || 999));
         });
 
-        // Verifica se há uma Transmissão Ao Vivo (Live) ativa para esta escola/turma
         const livesAtivas = await db.collection('workspace_video_lives')
             .find({ ativa: true, escolaId: filtroEscola })
-            .sort({ iniciadaEm: -1 })
+            .sort({ inicioUsoEm: -1, criadaEm: -1 })
             .toArray();
 
         const liveAtivaParaUsuario = livesAtivas.find(lv => {
-            if (role !== 'aluno') return true;
-            if (!lv.destino || lv.destino === 'global') return true;
-            return minhasTurmas.some(t =>
-                t.toLowerCase() === String(lv.destino).toLowerCase() ||
-                t.toLowerCase() === String(lv.destinoNome || '').toLowerCase()
-            );
+            if (isGestorOuProf) return true;
+            return itemLiberadoParaTurmasDoAluno(lv, minhasTurmasNorm);
         }) || null;
 
-        // Lista as turmas da escola para o seletor do Professor
-        const turmasEscola = role !== 'aluno'
+        const turmasEscola = isGestorOuProf
             ? await db.collection('turmas').find({}).project({ id: 1, nome: 1 }).toArray()
             : [];
 
-       res.status(200).json({
+        const historicoLives = isGestorOuProf
+            ? await db.collection('workspace_video_lives').find({ escolaId: filtroEscola }).sort({ criadaEm: -1 }).limit(60).toArray()
+            : [];
+
+        res.status(200).json({
             success: true,
             permissaoGestao: isGestorOuProf,
+            minhasTurmas: minhasTurmasNorm,
             videos: videos,
             sequencias: Object.values(mapaAssuntos),
             liveAtiva: liveAtivaParaUsuario,
-            turmas: turmasEscola
+            turmas: turmasEscola,
+            historicoLives: historicoLives
         });
     } catch (error) {
-        console.error('🚨 Erro ao carregar catálogo de vídeo-aulas:', error);
         res.status(500).json({ success: false, error: 'Erro ao carregar catálogo de vídeo-aulas.' });
     }
 });
 
 // ============================================================================
-// 3. PUBLICAR NOVA VÍDEO-AULA OU GRAVAÇÃO DE LIVE
+// 3. PUBLICAR, EDITAR E APAGAR VÍDEO-AULAS
 // ============================================================================
 router.post('/videos', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const b = req.body || {};
+        const podePublicar = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podePublicar) return res.status(403).json({ error: 'Apenas Professores e Gestores podem publicar vídeo-aulas.' });
 
-        if (!b.titulo || !b.urlVideo) {
-            return res.status(400).json({ error: 'O título e o vídeo são obrigatórios.' });
-        }
+        const b = req.body || {};
+        if (!b.titulo || !b.urlVideo) return res.status(400).json({ error: 'O título e o vídeo são obrigatórios.' });
 
         const assuntoLimpo = String(b.assunto || 'Aulas Gerais').trim();
         const assuntoSlug = gerarSlugAssunto(assuntoLimpo);
         const escolaId = b.escolaId || 'DEFAULT';
 
-        // Se não enviou número de ordem na sequência, calcula automaticamente o próximo número dentro daquele assunto
         let ordemSequencia = parseInt(b.ordem, 10);
         if (!ordemSequencia || isNaN(ordemSequencia)) {
             const qtdNoAssunto = await db.collection('workspace_video_aulas').countDocuments({ assuntoSlug });
@@ -373,106 +380,26 @@ router.post('/videos', verificarToken, async (req, res) => {
 
         await db.collection('workspace_video_aulas').insertOne(novoVideo);
 
-        // Dispara evento em tempo real e notificação para os alunos da turma
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'VIDEO_AULA_NOVA',
-                video: novoVideo,
+                video: { id: novoVideo.id, destino: novoVideo.destino, destinoNome: novoVideo.destinoNome },
                 escolaId: 'DEFAULT'
             });
         }
 
-        try {
-            const alunosAtivos = (await db.collection('alunos').find({}).toArray()).filter(ehAlunoAtivo);
-            const destinoLower = String(novoVideo.destino).toLowerCase();
-            const destinoNomeLower = String(novoVideo.destinoNome).toLowerCase();
-
-            const alunosAlvo = destinoLower === 'global'
-                ? alunosAtivos
-                : alunosAtivos.filter(a => {
-                    const turmasA = Array.isArray(a.turmas) ? a.turmas : [a.turma, a.turmaId];
-                    return turmasA.some(t => t && (String(t).toLowerCase() === destinoLower || String(t).toLowerCase() === destinoNomeLower));
-                });
-
-            if (alunosAlvo.length > 0) {
-                const nomesDest = [];
-                const prefixoMsg = novoVideo.isGravacaoLive
-                    ? `disponibilizou a gravação da aula ao vivo: "${novoVideo.titulo}"`
-                    : `publicou uma nova vídeo-aula em [${novoVideo.assunto}]: "${novoVideo.titulo}"`;
-
-                const notifs = alunosAlvo.map(al => {
-                    const nomeAl = al.nome || al.login;
-                    if (nomeAl) nomesDest.push(nomeAl);
-                    return {
-                        id: crypto.randomUUID(),
-                        escolaId: escolaId,
-                        destinatarioTipo: 'Aluno',
-                        destinatarioNome: nomeAl,
-                        remetenteNome: novoVideo.autorNome,
-                        mensagem: prefixoMsg,
-                        origem: 'video_aula',
-                        origemId: novoVideo.id,
-                        destinoNome: novoVideo.assunto,
-                        lida: false,
-                        data: new Date().toISOString()
-                    };
-                }).filter(n => n.destinatarioNome);
-
-                if (notifs.length > 0) {
-                    await db.collection('workspace_notificacoes').insertMany(notifs);
-                    if (global.workspaceStream) {
-                        global.workspaceStream.emit('evento_realtime', {
-                            type: 'NOVA_NOTIFICACAO',
-                            destinatarios: nomesDest,
-                            destinatariosTipo: 'Aluno',
-                            escolaId: escolaId
-                        });
-                    }
-                }
-            }
-        } catch (errNoti) {}
-
         res.status(201).json({ success: true, video: novoVideo });
     } catch (error) {
-        console.error('🚨 Erro ao publicar vídeo-aula:', error);
         res.status(500).json({ error: 'Erro ao guardar a vídeo-aula.' });
-    }
-});
-
-// ============================================================================
-// 4. EDITAR E APAGAR VÍDEO-AULA
-// ============================================================================
-router.put('/videos/:id', verificarToken, async (req, res) => {
-    try {
-        const db = await connectDB();
-        const b = req.body || {};
-        const assuntoLimpo = String(b.assunto || 'Aulas Gerais').trim();
-
-        const camposAtualizar = {
-            titulo: String(b.titulo || '').trim(),
-            descricao: String(b.descricao || '').trim(),
-            assunto: assuntoLimpo,
-            assuntoSlug: gerarSlugAssunto(assuntoLimpo),
-            ordem: parseInt(b.ordem, 10) || 1,
-            destino: b.destino || 'global',
-            destinoNome: b.destinoNome || 'Todas as Turmas'
-        };
-        if (b.urlVideo) camposAtualizar.urlVideo = String(b.urlVideo).trim();
-
-        await db.collection('workspace_video_aulas').updateOne(
-            { id: req.params.id },
-            { $set: camposAtualizar }
-        );
-
-        res.status(200).json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: 'Erro ao atualizar vídeo-aula.' });
     }
 });
 
 router.delete('/videos/:id', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
+        const podeApagar = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podeApagar) return res.status(403).json({ error: 'Sem permissão.' });
+
         await db.collection('workspace_video_aulas').deleteOne({ id: req.params.id });
         res.status(200).json({ success: true });
     } catch (error) {
@@ -481,52 +408,7 @@ router.delete('/videos/:id', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 5. RESOLVER LINK EXTRAÍDO (VÍDEO INDIVIDUAL OU SEQUÊNCIA POR ASSUNTO)
-// ============================================================================
-router.get('/compartilhado/:tipo/:alvo', verificarToken, async (req, res) => {
-    try {
-        const db = await connectDB();
-        const { tipo, alvo } = req.params;
-
-        if (tipo === 'video') {
-            const video = await db.collection('workspace_video_aulas').findOne({ id: alvo });
-            if (!video) return res.status(404).json({ error: 'Vídeo-aula não encontrada.' });
-
-            // Busca também toda a sequência do mesmo assunto para montar a fila lateral
-            const sequencia = await db.collection('workspace_video_aulas')
-                .find({ assuntoSlug: video.assuntoSlug })
-                .sort({ ordem: 1, dataCriacao: 1 })
-                .toArray();
-
-            return res.status(200).json({ success: true, tipo: 'video', videoPrincipal: video, sequencia });
-        }
-
-        // Quando o link é de uma sequência completa de determinado assunto (Playlist)
-        const slugBusca = gerarSlugAssunto(alvo);
-        const sequencia = await db.collection('workspace_video_aulas')
-            .find({ $or: [{ assuntoSlug: slugBusca }, { assunto: new RegExp(`^\\s*${alvo}\\s*$`, 'i') }] })
-            .sort({ ordem: 1, dataCriacao: 1 })
-            .toArray();
-
-        if (!sequencia.length) {
-            return res.status(404).json({ error: 'Sequência de aulas não encontrada.' });
-        }
-
-        res.status(200).json({
-            success: true,
-            tipo: 'sequencia',
-            assunto: sequencia[0].assunto,
-            assuntoSlug: sequencia[0].assuntoSlug,
-            videoPrincipal: sequencia[0],
-            sequencia: sequencia
-        });
-    } catch (error) {
-        res.status(500).json({ error: 'Erro ao abrir link de vídeo-aula.' });
-    }
-});
-
-// ============================================================================
-// 6. INTERATIVIDADE (COMENTÁRIOS / DÚVIDAS, LIKES E AULA CONCLUÍDA)
+// 4. INTERATIVIDADE (COMENTÁRIOS, LIKES E CONCLUSÃO)
 // ============================================================================
 router.post('/videos/:id/interagir', verificarToken, async (req, res) => {
     try {
@@ -541,7 +423,6 @@ router.post('/videos/:id/interagir', verificarToken, async (req, res) => {
             await db.collection('workspace_video_aulas').updateOne({ id: videoId }, { $inc: { visualizacoes: 1 } });
             return res.status(200).json({ success: true });
         }
-
         if (acao === 'like' && userId) {
             let likes = Array.isArray(video.likes) ? [...video.likes] : [];
             if (likes.includes(userId)) likes = likes.filter(id => id !== userId);
@@ -549,7 +430,6 @@ router.post('/videos/:id/interagir', verificarToken, async (req, res) => {
             await db.collection('workspace_video_aulas').updateOne({ id: videoId }, { $set: { likes } });
             return res.status(200).json({ success: true, likes });
         }
-
         if (acao === 'concluir' && userId) {
             let concluidos = Array.isArray(video.concluidosPor) ? [...video.concluidosPor] : [];
             if (concluidos.includes(userId)) concluidos = concluidos.filter(id => id !== userId);
@@ -557,7 +437,6 @@ router.post('/videos/:id/interagir', verificarToken, async (req, res) => {
             await db.collection('workspace_video_aulas').updateOne({ id: videoId }, { $set: { concluidosPor: concluidos } });
             return res.status(200).json({ success: true, concluidosPor: concluidos });
         }
-
         if (acao === 'comentar' && textoComentario) {
             const novoCom = {
                 id: 'com_' + crypto.randomUUID(),
@@ -566,13 +445,9 @@ router.post('/videos/:id/interagir', verificarToken, async (req, res) => {
                 texto: String(textoComentario).trim(),
                 data: new Date().toISOString()
             };
-            await db.collection('workspace_video_aulas').updateOne(
-                { id: videoId },
-                { $push: { comentarios: novoCom } }
-            );
+            await db.collection('workspace_video_aulas').updateOne({ id: videoId }, { $push: { comentarios: novoCom } });
             return res.status(201).json({ success: true, comentario: novoCom });
         }
-
         res.status(400).json({ error: 'Ação inválida.' });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao registar interação.' });
@@ -580,80 +455,150 @@ router.post('/videos/:id/interagir', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 7. SALA AO VIVO (EXCLUSIVA PARA PROFESSOR/GESTOR CRIAR • ATÉ 4H SEGUIDAS)
+// 5. GERAR LINK CRIPTOGRAFADO, INICIAR LIVE, ENCERRAR E HISTÓRICO COMPLETO
 // ============================================================================
-router.post('/live/iniciar', verificarToken, async (req, res) => {
+
+// 🔐 Gera e guarda a Live + Link Criptografado ANTES de iniciar (Regista Horário de Criação)
+router.post('/live/gerar-link', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const podeCriarLive = await verificarSeEhProfessorOuGestor(db, req);
-        if (!podeCriarLive) {
-            return res.status(403).json({ error: 'Apenas Professores e Gestores podem iniciar uma transmissão ao vivo.' });
-        }
+        const podeCriar = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podeCriar) return res.status(403).json({ error: 'Apenas Professores e Gestores podem gerar links de live.' });
 
         const b = req.body || {};
         const escolaId = b.escolaId || 'DEFAULT';
+        const destino = b.destino || 'global';
+        const destinoNome = b.destinoNome || 'Todas as Turmas';
+        const tokenCriptografado = gerarTokenLiveCriptografado(escolaId, destino);
+        const codigoSalaMeet = `PlayClass_${escolaId}_${tokenCriptografado}`.replace(/[^a-zA-Z0-9_]/g, '');
+        const agoraIso = new Date().toISOString();
 
-        // Encerra lives antigas que tenham ficado abertas
-        await db.collection('workspace_video_lives').updateMany(
-            { escolaId: escolaId, ativa: true },
-            { $set: { ativa: false, encerradaEm: new Date().toISOString() } }
-        );
-
-        const codigoSalaMeet = `PlayClass_${escolaId}_${Date.now().toString(36)}`.replace(/[^a-zA-Z0-9_]/g, '');
-        const expiraEm = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(); // Até 4 horas seguidas
-
-        const novaLive = {
+        const registoLive = {
             id: 'live_' + crypto.randomUUID(),
             escolaId: escolaId,
             titulo: String(b.titulo || 'Aula Ao Vivo').trim(),
             assunto: String(b.assunto || 'Aulas Ao Vivo Gravadas').trim(),
-            destino: b.destino || 'global',
-            destinoNome: b.destinoNome || 'Todas as Turmas',
+            destino: destino,
+            destinoNome: destinoNome,
             professorNome: b.professorNome || 'Professor',
             codigoSala: codigoSalaMeet,
-            linkExternoOpcional: b.linkExterno ? String(b.linkExterno).trim() : null,
-            ativa: true,
+            tokenCriptografado: tokenCriptografado,
+            ativa: false,
             duracaoMaximaHoras: 4,
-            iniciadaEm: new Date().toISOString(),
-            expiraEm: expiraEm
+            criadaEm: agoraIso,
+            inicioUsoEm: null,
+            encerradaEm: null
         };
 
-        await db.collection('workspace_video_lives').insertOne(novaLive);
+        await db.collection('workspace_video_lives').insertOne(registoLive);
+        res.status(201).json({ success: true, live: registoLive });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao gerar link criptografado da live.' });
+    }
+});
+
+// 🔴 Inicia efetivamente a Sala Ao Vivo (Regista Horário de Início de Uso)
+router.post('/live/iniciar', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const podeCriarLive = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podeCriarLive) return res.status(403).json({ error: 'Apenas Professores e Gestores podem iniciar uma transmissão.' });
+
+        const b = req.body || {};
+        const escolaId = b.escolaId || 'DEFAULT';
+        const agoraIso = new Date().toISOString();
+        const expiraEm = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+
+        // Fecha outras lives que estivessem ativas anteriormente
+        await db.collection('workspace_video_lives').updateMany(
+            { escolaId: escolaId, ativa: true },
+            { $set: { ativa: false, encerradaEm: agoraIso } }
+        );
+
+        let liveAtivada = null;
+
+        // Se o professor já tinha gerado o link criptografado antes, ativa esse mesmo registo e grava o inicioUsoEm!
+        if (b.liveId || b.tokenCriptografado) {
+            const filtroPrevia = b.liveId ? { id: b.liveId } : { tokenCriptografado: b.tokenCriptografado };
+            const previa = await db.collection('workspace_video_lives').findOne(filtroPrevia);
+            if (previa) {
+                const camposUpdate = {
+                    titulo: String(b.titulo || previa.titulo || 'Aula Ao Vivo').trim(),
+                    assunto: String(b.assunto || previa.assunto || 'Aulas Ao Vivo Gravadas').trim(),
+                    destino: b.destino || previa.destino || 'global',
+                    destinoNome: b.destinoNome || previa.destinoNome || 'Todas as Turmas',
+                    ativa: true,
+                    inicioUsoEm: previa.inicioUsoEm || agoraIso,
+                    iniciadaEm: agoraIso,
+                    encerradaEm: null,
+                    expiraEm: expiraEm
+                };
+                await db.collection('workspace_video_lives').updateOne({ id: previa.id }, { $set: camposUpdate });
+                liveAtivada = { ...previa, ...camposUpdate };
+            }
+        }
+
+        // Caso tenha clicado diretamente em Iniciar Transmissão sem gerar link antes, cria tudo na hora
+        if (!liveAtivada) {
+            const destino = b.destino || 'global';
+            const tokenCriptografado = gerarTokenLiveCriptografado(escolaId, destino);
+            const codigoSalaMeet = `PlayClass_${escolaId}_${tokenCriptografado}`.replace(/[^a-zA-Z0-9_]/g, '');
+
+            liveAtivada = {
+                id: 'live_' + crypto.randomUUID(),
+                escolaId: escolaId,
+                titulo: String(b.titulo || 'Aula Ao Vivo').trim(),
+                assunto: String(b.assunto || 'Aulas Ao Vivo Gravadas').trim(),
+                destino: destino,
+                destinoNome: b.destinoNome || 'Todas as Turmas',
+                professorNome: b.professorNome || 'Professor',
+                codigoSala: codigoSalaMeet,
+                tokenCriptografado: tokenCriptografado,
+                ativa: true,
+                duracaoMaximaHoras: 4,
+                criadaEm: agoraIso,
+                inicioUsoEm: agoraIso,
+                iniciadaEm: agoraIso,
+                encerradaEm: null,
+                expiraEm: expiraEm
+            };
+            await db.collection('workspace_video_lives').insertOne(liveAtivada);
+        }
 
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'VIDEO_LIVE_STATUS',
                 ativa: true,
-                live: novaLive,
+                live: liveAtivada,
                 escolaId: 'DEFAULT'
             });
         }
 
-        res.status(201).json({ success: true, live: novaLive });
+        res.status(201).json({ success: true, live: liveAtivada });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao iniciar sala ao vivo.' });
     }
 });
 
+// ⏹️ Encerra a Sala Ao Vivo (Regista Horário de Término)
 router.post('/live/encerrar', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
         const podeEncerrar = await verificarSeEhProfessorOuGestor(db, req);
-        if (!podeEncerrar) {
-            return res.status(403).json({ error: 'Apenas o Professor ou Gestor pode encerrar a transmissão.' });
-        }
+        if (!podeEncerrar) return res.status(403).json({ error: 'Apenas o Professor ou Gestor pode encerrar a transmissão.' });
 
         const { liveId, escolaId } = req.body || {};
+        const agoraIso = new Date().toISOString();
 
         if (liveId) {
             await db.collection('workspace_video_lives').updateOne(
                 { id: liveId },
-                { $set: { ativa: false, encerradaEm: new Date().toISOString() } }
+                { $set: { ativa: false, encerradaEm: agoraIso } }
             );
         } else {
             await db.collection('workspace_video_lives').updateMany(
                 { ativa: true },
-                { $set: { ativa: false, encerradaEm: new Date().toISOString() } }
+                { $set: { ativa: false, encerradaEm: agoraIso } }
             );
         }
 
@@ -666,71 +611,110 @@ router.post('/live/encerrar', verificarToken, async (req, res) => {
             });
         }
 
-        res.status(200).json({ success: true });
+        res.status(200).json({ success: true, encerradaEm: agoraIso });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao encerrar transmissão.' });
     }
 });
 
-router.post('/live/encerrar', verificarToken, async (req, res) => {
+// 📜 Consultar Histórico de Lives e Links Gerados (Criação, Início de Uso e Término)
+router.get('/live/historico', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
-        const { liveId, escolaId } = req.body || {};
+        const podeVer = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podeVer) return res.status(403).json({ error: 'Acesso restrito.' });
 
-        if (liveId) {
-            await db.collection('workspace_video_lives').updateOne(
-                { id: liveId },
-                { $set: { ativa: false, encerradaEm: new Date().toISOString() } }
-            );
-        } else {
-            await db.collection('workspace_video_lives').updateMany(
-                { ativa: true },
-                { $set: { ativa: false, encerradaEm: new Date().toISOString() } }
-            );
-        }
+        const historico = await db.collection('workspace_video_lives')
+            .find({})
+            .sort({ criadaEm: -1, iniciadaEm: -1 })
+            .limit(80)
+            .toArray();
 
-        if (global.workspaceStream) {
-            global.workspaceStream.emit('evento_realtime', {
-                type: 'VIDEO_LIVE_STATUS',
-                ativa: false,
-                live: null,
-                escolaId: escolaId || 'DEFAULT'
-            });
-        }
+        res.status(200).json({ success: true, historico });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao carregar histórico de lives.' });
+    }
+});
 
+// 🗑️ Excluir registo do Histórico de Lives
+router.delete('/live/historico/:id', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const podeApagar = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podeApagar) return res.status(403).json({ error: 'Sem permissão.' });
+
+        await db.collection('workspace_video_lives').deleteOne({ id: req.params.id });
         res.status(200).json({ success: true });
     } catch (error) {
-        res.status(500).json({ error: 'Erro ao encerrar transmissão.' });
+        res.status(500).json({ error: 'Erro ao apagar item do histórico.' });
+    }
+});
+
+// 🔐 Validar Acesso via Link Criptografado (#live-lvk_...) com Bloqueio Estrito de Turma
+router.get('/live/acesso/:token', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const tokenLimpo = String(req.params.token || '').trim();
+        const userId = req.query.userId || req.userId || '';
+        const alunoRefId = req.query.alunoRefId || '';
+
+        const live = await db.collection('workspace_video_lives').findOne({
+            $or: [{ tokenCriptografado: tokenLimpo }, { id: tokenLimpo }, { codigoSala: tokenLimpo }]
+        });
+
+        if (!live) {
+            return res.status(404).json({ success: false, error: 'Link de transmissão inválido ou não encontrado.' });
+        }
+
+        const isGestorOuProf = await verificarSeEhProfessorOuGestor(db, req);
+        if (!isGestorOuProf) {
+            const minhasTurmasNorm = await obterTurmasDoAluno(db, userId, alunoRefId);
+            if (!itemLiberadoParaTurmasDoAluno(live, minhasTurmasNorm)) {
+                return res.status(403).json({
+                    success: false,
+                    bloqueadoPorTurma: true,
+                    error: `Acesso restrito: Esta transmissão é exclusiva para a turma "${live.destinoNome || 'selecionada'}".`
+                });
+            }
+        }
+
+        res.status(200).json({ success: true, live });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Erro ao validar link da live.' });
     }
 });
 
 // ============================================================================
-// 8. CANAL EM TEMPO REAL DO MINI CHAT E PROJEÇÃO DE LOUSA NA CHAMADA
+// 6. CANAL EM TEMPO REAL (MINI CHAT, REAÇÕES, MICROFONE E PROJEÇÃO DE LOUSA)
 // ============================================================================
 router.post('/live/evento', verificarToken, async (req, res) => {
     try {
-        const { salaCodigo, escolaId, subtipo, autorNome, autorRole, texto, lousaAtiva } = req.body || {};
+        const b = req.body || {};
         const db = await connectDB();
 
-        // Se o professor ativou ou desativou a Projeção da Lousa, guarda no estado da live ativa
-        if (subtipo === 'PROJETAR_LOUSA') {
+        if (b.subtipo === 'PROJETAR_LOUSA') {
             await db.collection('workspace_video_lives').updateMany(
                 { ativa: true },
-                { $set: { lousaProjetada: Boolean(lousaAtiva) } }
+                { $set: { lousaProjetada: Boolean(b.lousaAtiva) } }
             );
         }
 
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'VIDEO_LIVE_EVENTO',
-                salaCodigo: salaCodigo || '',
-                subtipo: subtipo || 'CHAT',
-                autorNome: autorNome || 'Participante',
-                autorRole: autorRole || 'aluno',
-                texto: texto || '',
-                lousaAtiva: Boolean(lousaAtiva),
+                id: b.id || ('ev_' + crypto.randomUUID()),
+                salaCodigo: b.salaCodigo || '',
+                subtipo: b.subtipo || 'CHAT',
+                autorId: b.autorId || '',
+                autorNome: b.autorNome || 'Participante',
+                autorRole: b.autorRole || 'aluno',
+                peerId: b.peerId || '',
+                texto: b.texto || '',
+                emoji: b.emoji || '',
+                lousaAtiva: Boolean(b.lousaAtiva),
+                micAtivo: Boolean(b.micAtivo),
                 horario: new Date().toISOString(),
-                escolaId: escolaId || 'DEFAULT'
+                escolaId: b.escolaId || 'DEFAULT'
             });
         }
 
