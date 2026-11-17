@@ -380,10 +380,18 @@ router.post('/videos', verificarToken, async (req, res) => {
 
         await db.collection('workspace_video_aulas').insertOne(novoVideo);
 
-        if (global.workspaceStream) {
+      if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'VIDEO_AULA_NOVA',
-                video: { id: novoVideo.id, destino: novoVideo.destino, destinoNome: novoVideo.destinoNome },
+                video: {
+                    id: novoVideo.id,
+                    titulo: novoVideo.titulo,
+                    assunto: novoVideo.assunto,
+                    destino: novoVideo.destino,
+                    destinoNome: novoVideo.destinoNome,
+                    autorId: novoVideo.autorId,
+                    autorNome: novoVideo.autorNome
+                },
                 escolaId: 'DEFAULT'
             });
         }
