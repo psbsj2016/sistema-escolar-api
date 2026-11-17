@@ -23,14 +23,19 @@ const path = require('path');
 const fs = require('fs');
 
 router.get(['/workspace-lousa', '/workspace-lousa.html'], (req, res) => {
-    // 🚀 O servidor procura primeiro na pasta compilada (produção), senão cai para o frontend
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     const pathDist = path.join(__dirname, '../dist/workspace-lousa.html');
     const pathFront = path.join(__dirname, '../frontend/workspace-lousa.html');
-    
-    res.sendFile(pathFront); // força usar o frontend/workspace-lousa.html corrigido
+    if (fs.existsSync(pathFront)) return res.sendFile(pathFront);
+    return res.sendFile(pathDist);
 });
 
 router.get(['/workspace-aulas-video', '/workspace-aulas-video.html'], (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     const pathFront = path.join(__dirname, '../frontend/workspace-aulas-video.html');
     const pathDist = path.join(__dirname, '../dist/workspace-aulas-video.html');
     if (fs.existsSync(pathFront)) return res.sendFile(pathFront);
