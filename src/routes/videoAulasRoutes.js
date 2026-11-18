@@ -1,4 +1,4 @@
-// src/routes/videoAulasRoutes.js - Motor Exclusivo de Vídeo-Aulas, Playlists, Links Criptografados e Histórico de Lives
+// src/routes/videoAulasRoutes.js - Motor Exclusivo de Vídeo-Aulas, Playlists, Links Criptografados, Agendamento e Portaria de Lives
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
@@ -249,7 +249,7 @@ router.post('/upload-video', verificarToken, (req, res) => {
 });
 
 // ============================================================================
-// 2. LISTAR CATÁLOGO COMPLETO (COM FILTRO ESTRITO DE TURMA + HISTÓRICO)
+// 2. LISTAR CATÁLOGO COMPLETO (COM FILTRO ESTRITO DE TURMA + AGENDAMENTOS + PORTARIA)
 // ============================================================================
 router.get('/catalogo', verificarToken, async (req, res) => {
     try {
@@ -318,6 +318,11 @@ router.get('/catalogo', verificarToken, async (req, res) => {
             ? await db.collection('workspace_video_lives').find({ escolaId: filtroEscola }).sort({ criadaEm: -1 }).limit(60).toArray()
             : [];
 
+        // 📅 Filtra as lives agendadas (links criados que ainda não foram encerrados) para o seletor rápido do Estúdio
+        const livesAgendadas = isGestorOuProf
+            ? historicoLives.filter(lv => !lv.ativa && !lv.encerradaEm)
+            : [];
+
         res.status(200).json({
             success: true,
             permissaoGestao: isGestorOuProf,
@@ -325,6 +330,7 @@ router.get('/catalogo', verificarToken, async (req, res) => {
             videos: videos,
             sequencias: Object.values(mapaAssuntos),
             liveAtiva: liveAtivaParaUsuario,
+            livesAgendadas: livesAgendadas,
             turmas: turmasEscola,
             historicoLives: historicoLives
         });
@@ -380,7 +386,7 @@ router.post('/videos', verificarToken, async (req, res) => {
 
         await db.collection('workspace_video_aulas').insertOne(novoVideo);
 
-      if (global.workspaceStream) {
+        if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'VIDEO_AULA_NOVA',
                 video: {
@@ -463,10 +469,10 @@ router.post('/videos/:id/interagir', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 5. GERAR LINK CRIPTOGRAFADO, INICIAR LIVE, ENCERRAR E HISTÓRICO COMPLETO
+// 5. AGENDAMENTO DE LINK CRIPTOGRAFADO, PORTARIA COM ACEITE E HISTÓRICO DE LIVES
 // ============================================================================
 
-// 🔐 Gera e guarda a Live + Link Criptografado ANTES de iniciar (Regista Horário de Criação)
+// 🔐 Gera e guarda a Live Agendada + Link Criptografado ANTES de iniciar (e opcionalmente cria na Sala de Acessos!)
 router.post('/live/gerar-link', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -477,6 +483,8 @@ router.post('/live/gerar-link', verificarToken, async (req, res) => {
         const escolaId = b.escolaId || 'DEFAULT';
         const destino = b.destino || 'global';
         const destinoNome = b.destinoNome || 'Todas as Turmas';
+        const tituloLimpo = String(b.titulo || 'Aula Ao Vivo').trim();
+        const dataAgendada = b.dataAgendada ? String(b.dataAgendada).trim() : null;
         const tokenCriptografado = gerarTokenLiveCriptografado(escolaId, destino);
         const codigoSalaMeet = `PlayClass_${escolaId}_${tokenCriptografado}`.replace(/[^a-zA-Z0-9_]/g, '');
         const agoraIso = new Date().toISOString();
@@ -484,14 +492,18 @@ router.post('/live/gerar-link', verificarToken, async (req, res) => {
         const registoLive = {
             id: 'live_' + crypto.randomUUID(),
             escolaId: escolaId,
-            titulo: String(b.titulo || 'Aula Ao Vivo').trim(),
+            titulo: tituloLimpo,
             assunto: String(b.assunto || 'Aulas Ao Vivo Gravadas').trim(),
             destino: destino,
             destinoNome: destinoNome,
             professorNome: b.professorNome || 'Professor',
+            autorId: b.autorId || '',
             codigoSala: codigoSalaMeet,
             tokenCriptografado: tokenCriptografado,
+            dataAgendada: dataAgendada,
             ativa: false,
+            alunosAutorizados: [],
+            pedidosEntrada: [],
             duracaoMaximaHoras: 4,
             criadaEm: agoraIso,
             inicioUsoEm: null,
@@ -499,13 +511,89 @@ router.post('/live/gerar-link', verificarToken, async (req, res) => {
         };
 
         await db.collection('workspace_video_lives').insertOne(registoLive);
-        res.status(201).json({ success: true, live: registoLive });
+
+        // ⚡ SUGESTÃO 3: Se o professor marcou "Publicar também na Sala de Acessos", cria automaticamente o cartão lá!
+        let sessaoSalaAcessos = null;
+        if (b.criarNaSalaAcessos && b.linkCompleto) {
+            const dataParaSalaAcessos = dataAgendada || new Date(Date.now() + 3600000).toISOString().slice(0, 16);
+            sessaoSalaAcessos = {
+                id: 'av_' + crypto.randomUUID(),
+                titulo: tituloLimpo,
+                tipo: 'online',
+                tempo: null,
+                dataAgendada: dataParaSalaAcessos,
+                linkSala: String(b.linkCompleto).trim(),
+                questoes: [],
+                instrucoes: '',
+                escolaId: escolaId,
+                autorNome: b.professorNome || 'Professor',
+                destino: destino,
+                destinoNome: destinoNome,
+                tentativas: 1,
+                liveTokenRef: tokenCriptografado,
+                dataCriacao: agoraIso,
+                ultimaAtualizacao: agoraIso,
+                status: 'ativa'
+            };
+            await db.collection('workspace_avaliacoes').insertOne(sessaoSalaAcessos);
+
+            // Notifica os alunos da turma sobre o agendamento na Sala de Acessos
+            try {
+                const alunosBrutos = await db.collection('alunos').find({ escolaId: escolaId }).toArray();
+                const alunos = alunosBrutos.filter(ehAlunoAtivo);
+                const alunosAlvo = destino === 'global'
+                    ? alunos
+                    : alunos.filter(a => {
+                        const minhasTurmas = Array.isArray(a.turmas) ? a.turmas : [a.turma, a.turmaId];
+                        return minhasTurmas.some(t => normalizarTexto(t) === normalizarTexto(destino) || normalizarTexto(t) === normalizarTexto(destinoNome));
+                    });
+
+                if (alunosAlvo.length > 0) {
+                    const nomesDestinatarios = [];
+                    const notificacoesArray = alunosAlvo.map(aluno => {
+                        const nomeAluno = aluno.nome || aluno.login;
+                        if (nomeAluno) nomesDestinatarios.push(nomeAluno);
+                        return {
+                            id: 'notif_' + crypto.randomUUID(),
+                            escolaId: escolaId,
+                            destinatarioNome: nomeAluno,
+                            remetenteNome: b.professorNome || 'Professor',
+                            mensagem: `agendou o link da aula online: "${tituloLimpo}"`,
+                            origem: 'online',
+                            origemId: sessaoSalaAcessos.id,
+                            destinoNome: destinoNome,
+                            dataEvento: dataParaSalaAcessos,
+                            lida: false,
+                            data: agoraIso
+                        };
+                    }).filter(n => n.destinatarioNome);
+
+                    if (notificacoesArray.length > 0) {
+                        await db.collection('workspace_notificacoes').insertMany(notificacoesArray);
+                        if (global.workspaceStream) {
+                            global.workspaceStream.emit('evento_realtime', {
+                                type: 'NOVA_NOTIFICACAO',
+                                destinatarios: nomesDestinatarios,
+                                escolaId: escolaId
+                            });
+                            global.workspaceStream.emit('evento_realtime', {
+                                type: 'SALA_UPDATE',
+                                turmaId: sessaoSalaAcessos.id,
+                                escolaId: escolaId
+                            });
+                        }
+                    }
+                }
+            } catch (errNoti) {}
+        }
+
+        res.status(201).json({ success: true, live: registoLive, sessaoSalaAcessos });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao gerar link criptografado da live.' });
     }
 });
 
-// 🔴 Inicia efetivamente a Sala Ao Vivo (Regista Horário de Início de Uso)
+// 🔴 Inicia efetivamente a Sala Ao Vivo (Ativa o link agendado ou cria um novo na hora)
 router.post('/live/iniciar', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -525,7 +613,7 @@ router.post('/live/iniciar', verificarToken, async (req, res) => {
 
         let liveAtivada = null;
 
-        // Se o professor já tinha gerado o link criptografado antes, ativa esse mesmo registo e grava o inicioUsoEm!
+        // Se o professor escolheu um link agendado ou tinha gerado o link antes, ativa esse mesmo registo!
         if (b.liveId || b.tokenCriptografado) {
             const filtroPrevia = b.liveId ? { id: b.liveId } : { tokenCriptografado: b.tokenCriptografado };
             const previa = await db.collection('workspace_video_lives').findOne(filtroPrevia);
@@ -536,6 +624,8 @@ router.post('/live/iniciar', verificarToken, async (req, res) => {
                     destino: b.destino || previa.destino || 'global',
                     destinoNome: b.destinoNome || previa.destinoNome || 'Todas as Turmas',
                     ativa: true,
+                    alunosAutorizados: Array.isArray(previa.alunosAutorizados) ? previa.alunosAutorizados : [],
+                    pedidosEntrada: Array.isArray(previa.pedidosEntrada) ? previa.pedidosEntrada : [],
                     inicioUsoEm: previa.inicioUsoEm || agoraIso,
                     iniciadaEm: agoraIso,
                     encerradaEm: null,
@@ -560,9 +650,13 @@ router.post('/live/iniciar', verificarToken, async (req, res) => {
                 destino: destino,
                 destinoNome: b.destinoNome || 'Todas as Turmas',
                 professorNome: b.professorNome || 'Professor',
+                autorId: b.autorId || '',
                 codigoSala: codigoSalaMeet,
                 tokenCriptografado: tokenCriptografado,
+                dataAgendada: b.dataAgendada || null,
                 ativa: true,
+                alunosAutorizados: [],
+                pedidosEntrada: [],
                 duracaoMaximaHoras: 4,
                 criadaEm: agoraIso,
                 inicioUsoEm: agoraIso,
@@ -588,7 +682,171 @@ router.post('/live/iniciar', verificarToken, async (req, res) => {
     }
 });
 
-// ⏹️ Encerra a Sala Ao Vivo (Regista Horário de Término)
+// 🙋‍♂️ PORTARIA DA LIVE (PARTE A): Aluno pede permissão para entrar na chamada ao vivo
+router.post('/live/pedir-entrada', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const b = req.body || {};
+        const userId = String(b.userId || '').trim();
+        const alunoRefId = String(b.alunoRefId || '').trim();
+        const userName = String(b.userName || 'Aluno').trim();
+        const liveId = b.liveId || '';
+        const codigoSala = b.codigoSala || '';
+
+        if (!userId) return res.status(400).json({ error: 'Utilizador não identificado.' });
+
+        const live = await db.collection('workspace_video_lives').findOne({
+            $or: [
+                ...(liveId ? [{ id: liveId }] : []),
+                ...(codigoSala ? [{ codigoSala: codigoSala }] : []),
+                { ativa: true }
+            ]
+        });
+
+        if (!live || !live.ativa) {
+            return res.status(404).json({ success: false, error: 'Nenhuma transmissão ativa encontrada neste momento.' });
+        }
+
+        // Verifica se pertence à turma da live
+        const minhasTurmasNorm = await obterTurmasDoAluno(db, userId, alunoRefId);
+        if (!itemLiberadoParaTurmasDoAluno(live, minhasTurmasNorm)) {
+            return res.status(403).json({
+                success: false,
+                error: `Esta transmissão pertence exclusivamente à turma "${live.destinoNome || 'selecionada'}".`
+            });
+        }
+
+        const autorizados = Array.isArray(live.alunosAutorizados) ? live.alunosAutorizados.map(String) : [];
+
+        // 🛡️ SUGESTÃO 2 (Passe Livre Anti-Queda): Se o professor já aceitou este aluno nesta sessão, entra direto no F5!
+        if (autorizados.includes(userId) || (alunoRefId && autorizados.includes(alunoRefId))) {
+            return res.status(200).json({ success: true, status: 'autorizado', live });
+        }
+
+        // Busca foto atualizada do aluno para mostrar no cartão de pedido do professor
+        let avatarAluno = null;
+        const contaUser = await db.collection('usuarios').findOne({
+            $or: [{ id: userId }, ...(alunoRefId ? [{ alunoRefId: alunoRefId }] : [])]
+        });
+        if (contaUser && contaUser.avatar) avatarAluno = contaUser.avatar;
+
+        const pedidosAtuais = Array.isArray(live.pedidosEntrada) ? [...live.pedidosEntrada] : [];
+        const jaPediu = pedidosAtuais.some(p => String(p.userId) === userId);
+
+        const novoPedido = {
+            userId: userId,
+            alunoRefId: alunoRefId,
+            userName: (contaUser && contaUser.nome) ? contaUser.nome : userName,
+            avatar: avatarAluno,
+            horario: new Date().toISOString()
+        };
+
+        if (!jaPediu) {
+            pedidosAtuais.push(novoPedido);
+            await db.collection('workspace_video_lives').updateOne(
+                { id: live.id },
+                { $set: { pedidosEntrada: pedidosAtuais } }
+            );
+        }
+
+        // Emite aviso em tempo real para o ecrã do Professor tocar e mostrar os botões [✅ Aceitar] / [✕ Recusar]
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'VIDEO_LIVE_EVENTO',
+                subtipo: 'PEDIDO_ENTRADA',
+                salaCodigo: live.codigoSala,
+                liveId: live.id,
+                pedido: novoPedido,
+                pedidosEntrada: pedidosAtuais,
+                escolaId: live.escolaId || 'DEFAULT'
+            });
+        }
+
+        res.status(200).json({ success: true, status: 'aguardando', pedido: novoPedido });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Erro ao solicitar entrada na aula.' });
+    }
+});
+
+// 👨‍🏫 PORTARIA DA LIVE (PARTE B): Professor Aceita, Recusa ou Aceita Todos os alunos na Sala de Espera
+router.post('/live/responder-entrada', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const podeGerir = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podeGerir) return res.status(403).json({ error: 'Apenas o Professor pode autorizar a entrada.' });
+
+        const { liveId, codigoSala, alunoId, acao } = req.body || {};
+        const live = await db.collection('workspace_video_lives').findOne({
+            $or: [
+                ...(liveId ? [{ id: liveId }] : []),
+                ...(codigoSala ? [{ codigoSala: codigoSala }] : []),
+                { ativa: true }
+            ]
+        });
+
+        if (!live) return res.status(404).json({ error: 'Sala ao vivo não encontrada.' });
+
+        let autorizados = Array.isArray(live.alunosAutorizados) ? [...live.alunosAutorizados.map(String)] : [];
+        let pedidos = Array.isArray(live.pedidosEntrada) ? [...live.pedidosEntrada] : [];
+        let alunosLiberadosAgora = [];
+
+        if (acao === 'aceitar_todos') {
+            // ✅ SUGESTÃO 1: Libera todos os alunos que estão na fila de espera com 1 clique!
+            pedidos.forEach(p => {
+                if (p.userId && !autorizados.includes(String(p.userId))) {
+                    autorizados.push(String(p.userId));
+                }
+                if (p.alunoRefId && !autorizados.includes(String(p.alunoRefId))) {
+                    autorizados.push(String(p.alunoRefId));
+                }
+                if (p.userId) alunosLiberadosAgora.push(String(p.userId));
+            });
+            pedidos = [];
+        } else if (acao === 'aceitar' && alunoId) {
+            const alvoStr = String(alunoId);
+            const pedidoAlvo = pedidos.find(p => String(p.userId) === alvoStr || String(p.alunoRefId) === alvoStr);
+            if (!autorizados.includes(alvoStr)) autorizados.push(alvoStr);
+            if (pedidoAlvo?.alunoRefId && !autorizados.includes(String(pedidoAlvo.alunoRefId))) {
+                autorizados.push(String(pedidoAlvo.alunoRefId));
+            }
+            pedidos = pedidos.filter(p => String(p.userId) !== alvoStr && String(p.alunoRefId) !== alvoStr);
+            alunosLiberadosAgora.push(alvoStr);
+        } else if (acao === 'recusar' && alunoId) {
+            const alvoStr = String(alunoId);
+            pedidos = pedidos.filter(p => String(p.userId) !== alvoStr && String(p.alunoRefId) !== alvoStr);
+        }
+
+        await db.collection('workspace_video_lives').updateOne(
+            { id: live.id },
+            { $set: { alunosAutorizados: autorizados, pedidosEntrada: pedidos } }
+        );
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'VIDEO_LIVE_EVENTO',
+                subtipo: 'RESPOSTA_ENTRADA',
+                salaCodigo: live.codigoSala,
+                liveId: live.id,
+                acao: acao,
+                alunoId: alunoId ? String(alunoId) : null,
+                alunosLiberadosAgora: alunosLiberadosAgora,
+                alunosAutorizados: autorizados,
+                pedidosEntrada: pedidos,
+                escolaId: live.escolaId || 'DEFAULT'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            alunosAutorizados: autorizados,
+            pedidosEntrada: pedidos
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao responder solicitação de entrada.' });
+    }
+});
+
+// ⏹️ Encerra a Sala Ao Vivo (Regista Horário de Término e limpa fila de espera)
 router.post('/live/encerrar', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
@@ -601,12 +859,12 @@ router.post('/live/encerrar', verificarToken, async (req, res) => {
         if (liveId) {
             await db.collection('workspace_video_lives').updateOne(
                 { id: liveId },
-                { $set: { ativa: false, encerradaEm: agoraIso } }
+                { $set: { ativa: false, encerradaEm: agoraIso, pedidosEntrada: [] } }
             );
         } else {
             await db.collection('workspace_video_lives').updateMany(
                 { ativa: true },
-                { $set: { ativa: false, encerradaEm: agoraIso } }
+                { $set: { ativa: false, encerradaEm: agoraIso, pedidosEntrada: [] } }
             );
         }
 
@@ -625,7 +883,7 @@ router.post('/live/encerrar', verificarToken, async (req, res) => {
     }
 });
 
-// 📜 Consultar Histórico de Lives e Links Gerados (Criação, Início de Uso e Término)
+// 📜 Consultar Histórico de Lives e Links Gerados (Criação, Agendamento, Início de Uso e Término)
 router.get('/live/historico', verificarToken, async (req, res) => {
     try {
         const db = await connectDB();
