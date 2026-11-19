@@ -167,8 +167,17 @@ async function obterTurmasDoAluno(db, userId, alunoRefId) {
 }
 
 // 🔒 Verifica se um vídeo ou Live está liberado para o aluno com base na turma escolhida
-function itemLiberadoParaTurmasDoAluno(item, turmasDoAlunoNorm) {
+// 🔒 Verifica se um vídeo ou Live está liberado para o aluno (por Turma OU por Convite Direto do Professor!)
+function itemLiberadoParaTurmasDoAluno(item, turmasDoAlunoNorm, userIdsAluno = []) {
     if (!item) return false;
+
+    // 🎟️ Se o professor convidou este aluno diretamente para a live, libera independente da turma!
+    const convidados = Array.isArray(item.alunosConvidados) ? item.alunosConvidados.map(String) : [];
+    const idsLimpos = (Array.isArray(userIdsAluno) ? userIdsAluno : []).filter(Boolean).map(String);
+    if (convidados.length > 0 && idsLimpos.some(id => convidados.includes(id))) {
+        return true;
+    }
+
     const destNorm = normalizarTexto(item.destino || '');
     const destNomeNorm = normalizarTexto(item.destinoNome || '');
 
@@ -305,9 +314,9 @@ router.get('/catalogo', verificarToken, async (req, res) => {
             .sort({ inicioUsoEm: -1, criadaEm: -1 })
             .toArray();
 
-        const liveAtivaParaUsuario = livesAtivas.find(lv => {
+       const liveAtivaParaUsuario = livesAtivas.find(lv => {
             if (isGestorOuProf) return true;
-            return itemLiberadoParaTurmasDoAluno(lv, minhasTurmasNorm);
+            return itemLiberadoParaTurmasDoAluno(lv, minhasTurmasNorm, [userId, alunoRefId]);
         }) || null;
 
         const turmasEscola = isGestorOuProf
@@ -709,7 +718,7 @@ router.post('/live/pedir-entrada', verificarToken, async (req, res) => {
 
         // Verifica se pertence à turma da live
         const minhasTurmasNorm = await obterTurmasDoAluno(db, userId, alunoRefId);
-        if (!itemLiberadoParaTurmasDoAluno(live, minhasTurmasNorm)) {
+       if (!itemLiberadoParaTurmasDoAluno(live, minhasTurmasNorm, [userId, alunoRefId])) {
             return res.status(403).json({
                 success: false,
                 error: `Esta transmissão pertence exclusivamente à turma "${live.destinoNome || 'selecionada'}".`
@@ -935,7 +944,7 @@ router.get('/live/acesso/:token', verificarToken, async (req, res) => {
         const isGestorOuProf = await verificarSeEhProfessorOuGestor(db, req);
         if (!isGestorOuProf) {
             const minhasTurmasNorm = await obterTurmasDoAluno(db, userId, alunoRefId);
-            if (!itemLiberadoParaTurmasDoAluno(live, minhasTurmasNorm)) {
+            if (!itemLiberadoParaTurmasDoAluno(live, minhasTurmasNorm, [userId, alunoRefId])) {
                 return res.status(403).json({
                     success: false,
                     bloqueadoPorTurma: true,
@@ -987,6 +996,154 @@ router.post('/live/evento', verificarToken, async (req, res) => {
         res.status(200).json({ success: true });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao transmitir evento na live.' });
+    }
+});
+
+// ============================================================================
+// 7. CONVITE DIRETO DE ALUNOS PARA A LIVE (INDEPENDENTE DA TURMA)
+// ============================================================================
+
+// 📋 Lista todos os alunos ativos da escola indicando quem está Online agora (para o Menu ☰ -> Adicionar Aluno)
+router.get('/live/alunos-convidaveis', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const podeConvidar = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podeConvidar) return res.status(403).json({ error: 'Apenas Professores e Gestores podem convidar alunos.' });
+
+        const escolaId = req.query.escolaId;
+        const filtro = (escolaId && escolaId !== 'DEFAULT')
+            ? { escolaId: { $in: [escolaId, 'DEFAULT', null] } }
+            : {};
+
+        const alunosBrutos = await db.collection('alunos').find(filtro).toArray();
+        const alunosAtivos = alunosBrutos.filter(ehAlunoAtivo);
+        const usuarios = await db.collection('usuarios').find(filtro).toArray();
+
+        const agoraMs = Date.now();
+        const JANELA_ONLINE_MS = 35 * 1000; // Mesma janela de presença do radar do WorkSpace
+        const mapaUnicos = new Map();
+
+        alunosAtivos.forEach(aluno => {
+            const contaUser = usuarios.find(u =>
+                (u.alunoRefId && String(u.alunoRefId) === String(aluno.id)) ||
+                (u.id && String(u.id) === String(aluno.id))
+            );
+            const ultimoAcesso = contaUser?.ultimoAcesso || null;
+            const isOnline = Boolean(ultimoAcesso && !isNaN(new Date(ultimoAcesso).getTime()) && (agoraMs - new Date(ultimoAcesso).getTime()) <= JANELA_ONLINE_MS);
+
+            const idChave = String(contaUser?.id || aluno.id);
+            const nomeFinal = String(contaUser?.nome || aluno.nome || contaUser?.login || 'Aluno').trim();
+            const turmaFinal = Array.isArray(aluno.turmas) && aluno.turmas.length > 0
+                ? aluno.turmas.join(', ')
+                : (aluno.turma || contaUser?.turma || 'Sem turma');
+
+            mapaUnicos.set(idChave, {
+                userId: contaUser?.id ? String(contaUser.id) : String(aluno.id),
+                alunoRefId: String(aluno.id),
+                nome: nomeFinal,
+                turma: turmaFinal,
+                avatar: contaUser?.avatar || aluno.avatar || null,
+                isOnline: isOnline,
+                ultimoAcesso: ultimoAcesso
+            });
+        });
+
+        // Garante que contas do tipo 'Aluno' em usuarios sem vínculo em alunos também apareçam
+        usuarios.forEach(u => {
+            if (String(u.tipo || '').toLowerCase() !== 'aluno') return;
+            const idChave = String(u.id || '');
+            if (!idChave || mapaUnicos.has(idChave)) return;
+            if (u.alunoRefId && alunosBrutos.some(a => String(a.id) === String(u.alunoRefId) && !ehAlunoAtivo(a))) return;
+
+            const ultimoAcesso = u.ultimoAcesso || null;
+            const isOnline = Boolean(ultimoAcesso && !isNaN(new Date(ultimoAcesso).getTime()) && (agoraMs - new Date(ultimoAcesso).getTime()) <= JANELA_ONLINE_MS);
+
+            mapaUnicos.set(idChave, {
+                userId: idChave,
+                alunoRefId: u.alunoRefId ? String(u.alunoRefId) : '',
+                nome: String(u.nome || u.login || 'Aluno').trim(),
+                turma: u.turma || 'Aluno',
+                avatar: u.avatar || null,
+                isOnline: isOnline,
+                ultimoAcesso: ultimoAcesso
+            });
+        });
+
+        // Ordena colocando quem está 🟢 Online no topo e depois em ordem alfabética
+        const listaOrdenada = Array.from(mapaUnicos.values()).sort((a, b) => {
+            if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+            return a.nome.localeCompare(b.nome, 'pt-BR');
+        });
+
+        res.status(200).json({ success: true, alunos: listaOrdenada });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Erro ao listar alunos para convite.' });
+    }
+});
+
+// 📡 Envia Convite em Tela Grande para o Aluno entrar diretamente na Live (fura bloqueio de turma e portaria!)
+router.post('/live/convidar-aluno', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const podeConvidar = await verificarSeEhProfessorOuGestor(db, req);
+        if (!podeConvidar) return res.status(403).json({ error: 'Apenas Professores e Gestores podem convidar alunos.' });
+
+        const { liveId, codigoSala, alunoUserId, alunoRefId, alunoNome, professorNome, escolaId } = req.body || {};
+        if (!alunoUserId && !alunoRefId) {
+            return res.status(400).json({ error: 'Selecione um aluno válido para convidar.' });
+        }
+
+        const live = await db.collection('workspace_video_lives').findOne({
+            $or: [
+                ...(liveId ? [{ id: liveId }] : []),
+                ...(codigoSala ? [{ codigoSala: codigoSala }] : []),
+                { ativa: true }
+            ]
+        });
+
+        if (!live || !live.ativa) {
+            return res.status(404).json({ error: 'Nenhuma aula ao vivo ativa encontrada neste momento.' });
+        }
+
+        const idsConvidado = [alunoUserId, alunoRefId].filter(Boolean).map(String);
+        const convidadosAtuais = Array.isArray(live.alunosConvidados) ? live.alunosConvidados.map(String) : [];
+        const autorizadosAtuais = Array.isArray(live.alunosAutorizados) ? live.alunosAutorizados.map(String) : [];
+
+        const novosConvidados = Array.from(new Set([...convidadosAtuais, ...idsConvidado]));
+        const novosAutorizados = Array.from(new Set([...autorizadosAtuais, ...idsConvidado]));
+
+        await db.collection('workspace_video_lives').updateOne(
+            { id: live.id },
+            { $set: { alunosConvidados: novosConvidados, alunosAutorizados: novosAutorizados } }
+        );
+
+        const payloadConvite = {
+            type: 'CONVITE_LIVE_DIRETO',
+            escolaId: live.escolaId || escolaId || 'DEFAULT',
+            destinatarioIds: idsConvidado,
+            destinatarioNome: String(alunoNome || '').trim(),
+            liveId: live.id,
+            tokenCriptografado: live.tokenCriptografado || live.codigoSala || live.id,
+            tituloLive: live.titulo || 'Aula Ao Vivo',
+            professorNome: professorNome || live.professorNome || 'Professor',
+            destinoNome: live.destinoNome || 'Aula Ao Vivo',
+            horario: new Date().toISOString()
+        };
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', payloadConvite);
+            if (payloadConvite.escolaId !== 'DEFAULT') {
+                global.workspaceStream.emit('evento_realtime', { ...payloadConvite, escolaId: 'DEFAULT' });
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            alunosConvidados: novosConvidados,
+            alunosAutorizados: novosAutorizados
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao enviar convite direto ao aluno.' });
     }
 });
 
