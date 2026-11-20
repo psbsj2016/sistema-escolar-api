@@ -34,12 +34,15 @@ app.set('trust proxy', 1);
 // Segurança e CORS
 app.use(helmet({ crossOriginResourcePolicy: false }));
 
+// ⚙️ PARÂMETRO AJUSTÁVEL: Adicione aqui qualquer novo subdomínio autorizado a conversar com a API
 const dominiosPermitidos = [
-    'https://www.sistemaptt.com.br', 
-    'https://sistemaptt.com.br', 
-    'http://localhost:3000', 
-    'http://localhost:5173', 
-    'http://127.0.0.1:5500', 
+    'https://www.sistemaptt.com.br',
+    'https://sistemaptt.com.br',
+    'https://workspace.sistemaptt.com.br',
+    'https://www.workspace.sistemaptt.com.br',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5500',
     'null',
     'https://sistema-escolar-api-k3o8.onrender.com'
 ];
@@ -51,7 +54,7 @@ app.use(cors({
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true 
+    credentials: true
 }));
 
 app.use((req, res, next) => {
@@ -99,14 +102,14 @@ app.use('/master', masterRoutes);   // Login do Admin Master
 // =========================================================
 // 🛡️ GUARDA DE SEGURANÇA (A partir daqui, só entra logado!)
 // =========================================================
-app.use(verifyJWT); 
+app.use(verifyJWT);
 
 
 // =========================================================
 // 🔒 ROTAS PROTEGIDAS (Exigem token válido)
 // =========================================================
 app.use('/escola', escolaRoutes);
-app.use('/usuarios', usuariosRoutes); 
+app.use('/usuarios', usuariosRoutes);
 app.use('/auditoria', auditoriaRoutes);
 
 // 🚀 As rotas específicas TÊM de vir antes da rota geral do workspace!
@@ -114,7 +117,7 @@ app.use('/workspace/avaliacoes', avaliacoesRoutes);
 app.use('/workspace/biblioteca', bibliotecaRoutes);
 app.use('/workspace/arena', arenaRoutes);
 app.use('/workspace/video-aulas', videoAulasRoutes);
-app.use('/workspace', workspaceRoutes); 
+app.use('/workspace', workspaceRoutes);
 
 // 🔥 O ESPELHO MÁGICO PARA PRODUÇÃO (Resolve os erros 403 da App e Notificações)
 const apiRouter = express.Router();
@@ -135,7 +138,7 @@ apiRouter.use('/', dataRoutes);
 app.use('/api', apiRouter);
 
 // CRUD principal no final para não colidir
-app.use('/', dataRoutes); 
+app.use('/', dataRoutes);
 
 // =========================================================
 // ⏰ LIGAR O MOTOR DE AUTOMAÇÃO DE SEGUNDO PLANO
