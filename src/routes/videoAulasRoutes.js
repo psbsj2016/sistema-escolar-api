@@ -12,6 +12,17 @@ const os = require('os');
 const LIMITE_MB_VIDEO = 800;
 const PASTA_NUVEM_VIDEOS = 'workspace_video_aulas';
 const SEGREDO_LINK_LIVE = process.env.JWT_SECRET || 'playclass_meet_crypto_key_2026';
+const JANELA_PRESENCA_LIVE_MS = 65 * 1000; // Remove automaticamente quem caiu sem avisar após 65s
+
+// 🧹 Remove participantes cujo último sinal de vida (heartbeat) já expirou
+function limparParticipantesExpirados(lista, agoraMs = Date.now()) {
+    if (!Array.isArray(lista)) return [];
+    return lista.filter(p => {
+        if (!p || !p.peerId) return false;
+        const ultimo = Number(p.ultimoSinalMs || 0);
+        return ultimo > 0 && (agoraMs - ultimo) <= JANELA_PRESENCA_LIVE_MS;
+    });
+}
 
 // 🛡️ Filtro de Alunos Ativos
 const ehAlunoAtivo = (aluno) => {
@@ -635,6 +646,7 @@ router.post('/live/iniciar', verificarToken, async (req, res) => {
                     ativa: true,
                     alunosAutorizados: Array.isArray(previa.alunosAutorizados) ? previa.alunosAutorizados : [],
                     pedidosEntrada: Array.isArray(previa.pedidosEntrada) ? previa.pedidosEntrada : [],
+                    participantesAtivos: [],
                     inicioUsoEm: previa.inicioUsoEm || agoraIso,
                     iniciadaEm: agoraIso,
                     encerradaEm: null,
@@ -666,6 +678,7 @@ router.post('/live/iniciar', verificarToken, async (req, res) => {
                 ativa: true,
                 alunosAutorizados: [],
                 pedidosEntrada: [],
+                participantesAtivos: [],
                 duracaoMaximaHoras: 4,
                 criadaEm: agoraIso,
                 inicioUsoEm: agoraIso,
@@ -865,15 +878,15 @@ router.post('/live/encerrar', verificarToken, async (req, res) => {
         const { liveId, escolaId } = req.body || {};
         const agoraIso = new Date().toISOString();
 
-        if (liveId) {
+       if (liveId) {
             await db.collection('workspace_video_lives').updateOne(
                 { id: liveId },
-                { $set: { ativa: false, encerradaEm: agoraIso, pedidosEntrada: [] } }
+                { $set: { ativa: false, encerradaEm: agoraIso, pedidosEntrada: [], participantesAtivos: [] } }
             );
         } else {
             await db.collection('workspace_video_lives').updateMany(
                 { ativa: true },
-                { $set: { ativa: false, encerradaEm: agoraIso, pedidosEntrada: [] } }
+                { $set: { ativa: false, encerradaEm: agoraIso, pedidosEntrada: [], participantesAtivos: [] } }
             );
         }
 
@@ -960,7 +973,7 @@ router.get('/live/acesso/:token', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 6. CANAL EM TEMPO REAL (MINI CHAT, REAÇÕES, MICROFONE E PROJEÇÃO DE LOUSA)
+// 6. CANAL EM TEMPO REAL (CHAT, REAÇÕES, MIC, CÂMARA, LOUSA E PRESENÇA DA SALA)
 // ============================================================================
 router.post('/live/evento', verificarToken, async (req, res) => {
     try {
@@ -972,6 +985,44 @@ router.post('/live/evento', verificarToken, async (req, res) => {
                 { ativa: true },
                 { $set: { lousaProjetada: Boolean(b.lousaAtiva) } }
             );
+        }
+
+        // 🔄 Mantém o status de Microfone, Câmara e Saída sincronizado na lista oficial de participantes da Live
+        if (b.salaCodigo && ['STATUS_MIC', 'STATUS_CAM', 'SAIU_ALUNO'].includes(b.subtipo)) {
+            const live = await db.collection('workspace_video_lives').findOne({ codigoSala: b.salaCodigo, ativa: true });
+            if (live) {
+                const agoraMs = Date.now();
+                let lista = limparParticipantesExpirados(live.participantesAtivos, agoraMs);
+                const autorIdStr = String(b.autorId || '').trim();
+                const peerIdStr = String(b.peerId || '').trim();
+                const nomeNorm = normalizarTexto(b.autorNome || b.nome || '');
+
+                if (b.subtipo === 'SAIU_ALUNO') {
+                    lista = lista.filter(p =>
+                        !(autorIdStr && String(p.userId) === autorIdStr) &&
+                        !(peerIdStr && String(p.peerId) === peerIdStr) &&
+                        !(nomeNorm && !autorIdStr && !peerIdStr && normalizarTexto(p.nome) === nomeNorm)
+                    );
+                } else {
+                    lista = lista.map(p => {
+                        const mesmo = (autorIdStr && String(p.userId) === autorIdStr) ||
+                                      (peerIdStr && String(p.peerId) === peerIdStr) ||
+                                      (nomeNorm && !autorIdStr && !peerIdStr && normalizarTexto(p.nome) === nomeNorm);
+                        if (!mesmo) return p;
+                        return {
+                            ...p,
+                            micAtivo: b.subtipo === 'STATUS_MIC' ? (b.texto === 'ATIVO' || Boolean(b.micAtivo)) : Boolean(p.micAtivo),
+                            camAtiva: b.subtipo === 'STATUS_CAM' ? (b.texto === 'ATIVA' || Boolean(b.camAtiva)) : Boolean(p.camAtiva),
+                            ultimoSinalMs: agoraMs
+                        };
+                    });
+                }
+
+                await db.collection('workspace_video_lives').updateOne(
+                    { id: live.id },
+                    { $set: { participantesAtivos: lista } }
+                );
+            }
         }
 
         if (global.workspaceStream) {
@@ -988,6 +1039,7 @@ router.post('/live/evento', verificarToken, async (req, res) => {
                 emoji: b.emoji || '',
                 lousaAtiva: Boolean(b.lousaAtiva),
                 micAtivo: Boolean(b.micAtivo),
+                camAtiva: Boolean(b.camAtiva),
                 horario: new Date().toISOString(),
                 escolaId: b.escolaId || 'DEFAULT'
             });
@@ -996,6 +1048,110 @@ router.post('/live/evento', verificarToken, async (req, res) => {
         res.status(200).json({ success: true });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao transmitir evento na live.' });
+    }
+});
+
+// 👥 REGISTO OFICIAL DE PRESENÇA NA SALA AO VIVO (Permite que todos os Alunos e o Professor vejam quem está na Live!)
+router.post('/live/presenca', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const b = req.body || {};
+        const acao = String(b.acao || 'entrar').toLowerCase(); // 'entrar' | 'heartbeat' | 'status' | 'sair'
+        const userId = String(b.userId || '').trim();
+        const peerId = String(b.peerId || '').trim();
+        const nome = String(b.nome || 'Participante').trim();
+        const role = String(b.role || 'aluno').toLowerCase();
+
+        const live = await db.collection('workspace_video_lives').findOne({
+            $or: [
+                ...(b.liveId ? [{ id: b.liveId }] : []),
+                ...(b.codigoSala ? [{ codigoSala: b.codigoSala }] : []),
+                { ativa: true }
+            ]
+        });
+
+        if (!live || !live.ativa) {
+            return res.status(200).json({ success: false, participantes: [] });
+        }
+
+        const agoraMs = Date.now();
+        const listaAnterior = Array.isArray(live.participantesAtivos) ? live.participantesAtivos : [];
+        let participantes = limparParticipantesExpirados(listaAnterior, agoraMs);
+        const houveExpiracao = participantes.length !== listaAnterior.length;
+
+        const mesmoParticipante = (p) => {
+            if (userId && p.userId && String(p.userId) === userId) return true;
+            if (peerId && p.peerId && String(p.peerId) === peerId) return true;
+            return false;
+        };
+
+        if (acao === 'sair') {
+            participantes = participantes.filter(p => !mesmoParticipante(p));
+        } else if (peerId) {
+            const existente = participantes.find(mesmoParticipante);
+            const registroAtualizado = {
+                userId: userId || peerId,
+                peerId: peerId,
+                nome: nome,
+                role: role,
+                micAtivo: b.micAtivo !== undefined ? Boolean(b.micAtivo) : Boolean(existente?.micAtivo),
+                camAtiva: b.camAtiva !== undefined ? Boolean(b.camAtiva) : Boolean(existente?.camAtiva),
+                entrouEm: existente?.entrouEm || new Date(agoraMs).toISOString(),
+                ultimoSinalMs: agoraMs
+            };
+
+            participantes = participantes.filter(p => !mesmoParticipante(p));
+            participantes.push(registroAtualizado);
+        }
+
+        await db.collection('workspace_video_lives').updateOne(
+            { id: live.id },
+            { $set: { participantesAtivos: participantes } }
+        );
+
+        // Só dispara evento em tempo real quando alguém entra, sai, muda status ou expira (evita spam no heartbeat)
+        const deveNotificarSala = (acao !== 'heartbeat') || houveExpiracao;
+        if (deveNotificarSala && global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'VIDEO_LIVE_EVENTO',
+                subtipo: 'LISTA_PARTICIPANTES',
+                salaCodigo: live.codigoSala,
+                liveId: live.id,
+                acao: acao,
+                atorUserId: userId,
+                atorPeerId: peerId,
+                participantes: participantes,
+                escolaId: live.escolaId || b.escolaId || 'DEFAULT'
+            });
+        }
+
+        res.status(200).json({ success: true, participantes });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Erro ao atualizar presença na live.' });
+    }
+});
+
+// 📋 Consulta rápida da lista atual de participantes ativos na sala
+router.get('/live/participantes', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const { liveId, codigoSala } = req.query || {};
+        const live = await db.collection('workspace_video_lives').findOne({
+            $or: [
+                ...(liveId ? [{ id: liveId }] : []),
+                ...(codigoSala ? [{ codigoSala: codigoSala }] : []),
+                { ativa: true }
+            ]
+        });
+
+        if (!live || !live.ativa) {
+            return res.status(200).json({ success: true, participantes: [] });
+        }
+
+        const participantes = limparParticipantesExpirados(live.participantesAtivos, Date.now());
+        res.status(200).json({ success: true, participantes });
+    } catch (error) {
+        res.status(500).json({ success: false, participantes: [] });
     }
 });
 
