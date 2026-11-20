@@ -3233,7 +3233,7 @@ function limparJogadoresInativos3D() {
     }
 }
 
-// 💰 Sincroniza e unifica o saldo DOVRYX (DRX) entre o Baú do Inglês e a Cidade 3D
+// 💰 Sincroniza e unifica o saldo DOVRYX (DRX) entre o Baú do Inglês e a Cidade 3D (usando sempre o registo mais recente)
 async function obterOuCriarProgressoSpaces(db, userIdInput) {
     const uid = userIdInput ? String(userIdInput).trim() : 'demo_user';
     let doc = await db.collection('workspace_spaces_progresso').findOne({ userId: uid });
@@ -3246,7 +3246,9 @@ async function obterOuCriarProgressoSpaces(db, userIdInput) {
         : null;
 
     if (!doc) {
-        const saldoInicial = drxNoBau !== null ? Math.max(500, drxNoBau) : 1250;
+        // ⚙️ PARÂMETRO AJUSTÁVEL: Saldo inicial para alunos que nunca jogaram nem no Baú nem no Spaces
+        const SALDO_INICIAL_NOVO_ALUNO = 500;
+        const saldoInicial = drxNoBau !== null ? Math.max(0, drxNoBau) : SALDO_INICIAL_NOVO_ALUNO;
         const novoDoc = {
             userId: uid,
             totalXP: saldoInicial,
@@ -3281,10 +3283,25 @@ async function obterOuCriarProgressoSpaces(db, userIdInput) {
         doc = await db.collection('workspace_spaces_progresso').findOne({ userId: uid });
         if (!doc) doc = novoDoc;
     } else if (drxNoBau !== null && drxNoBau !== doc.totalXP) {
-        // Mantém o maior/mais recente saldo unificado entre Baú e Cidade
-        const saldoUnificado = Math.max(Number(doc.totalXP) ? Number(doc.totalXP) : 0, drxNoBau);
-        doc.totalXP = saldoUnificado;
-        doc.dovryx = saldoUnificado;
+        // Compara qual coleção foi atualizada por último para nunca desfazer uma compra na Cidade 3D
+        const tsSpaces = doc.lastActivity ? new Date(doc.lastActivity).getTime() : 0;
+        const tsBau = statsBau?.ultimaAtividade ? new Date(statsBau.ultimaAtividade).getTime() : 0;
+
+        if (tsBau > tsSpaces) {
+            doc.totalXP = drxNoBau;
+            doc.dovryx = drxNoBau;
+            await db.collection('workspace_spaces_progresso').updateOne(
+                { userId: uid },
+                { $set: { totalXP: drxNoBau, dovryx: drxNoBau } }
+            ).catch(() => {});
+        } else {
+            const saldoSpaces = typeof doc.totalXP === 'number' ? doc.totalXP : 0;
+            doc.dovryx = saldoSpaces;
+            await db.collection('workspace_ingles_stats').updateOne(
+                { userId: uid },
+                { $set: { "coins.bronze": saldoSpaces } }
+            ).catch(() => {});
+        }
     }
     return doc;
 }
@@ -3421,17 +3438,19 @@ router.put('/english-spaces/progress/customization', async (req, res) => {
             ).catch(() => {});
         }
 
+       const camposUpdateSpaces = {
+            avatarConfig: configAtual,
+            totalXP: novoDRX,
+            dovryx: novoDRX,
+            lastActivity: new Date().toISOString()
+        };
+        if (b.ownerName && String(b.ownerName).trim()) {
+            camposUpdateSpaces.ownerName = String(b.ownerName).trim();
+        }
+
         await db.collection('workspace_spaces_progresso').updateOne(
             { userId: uid },
-            {
-                $set: {
-                    ownerName: b.ownerName ? String(b.ownerName) : undefined,
-                    avatarConfig: configAtual,
-                    totalXP: novoDRX,
-                    dovryx: novoDRX,
-                    lastActivity: new Date().toISOString()
-                }
-            },
+            { $set: camposUpdateSpaces },
             { upsert: true }
         );
 
