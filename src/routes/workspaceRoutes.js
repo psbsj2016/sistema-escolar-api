@@ -3884,13 +3884,32 @@ router.post('/english-spaces/ai/chat', async (req, res) => {
     }
 });
 
-// 9. ROTAS MULTIPLAYER DA CIDADE 3D (SINCRONIZA AVATAR, VEÍCULOS E CASA)
+// 9. ROTAS MULTIPLAYER DA CIDADE 3D (SINCRONIZA AVATAR, PETS, VEÍCULOS, TORRES E TOUR GUIADO)
+const _toursGuiadosPorEscola = new Map();
+
+function obterTourAtivoEscola(escolaId) {
+    const chave = String(escolaId || 'DEFAULT').trim();
+    const tour = _toursGuiadosPorEscola.get(chave);
+    if (!tour || !tour.active) return null;
+    // Expira automaticamente após 2 horas sem atualização
+    if (Date.now() - (tour.updatedAt || 0) > 2 * 60 * 60 * 1000) {
+        _toursGuiadosPorEscola.delete(chave);
+        return null;
+    }
+    return tour;
+}
+
 router.get('/english-spaces/world/state', async (req, res) => {
     try {
         limparJogadoresInativos3D();
-        res.status(200).json({ success: true, players: Array.from(_mundo3DJogadores.values()) });
+        const escolaId = String(req.query.escolaId || 'DEFAULT').trim();
+        res.status(200).json({
+            success: true,
+            players: Array.from(_mundo3DJogadores.values()),
+            activeTour: obterTourAtivoEscola(escolaId)
+        });
     } catch (e) {
-        res.status(200).json({ success: true, players: [] });
+        res.status(200).json({ success: true, players: [], activeTour: null });
     }
 });
 
@@ -3899,10 +3918,12 @@ router.post('/english-spaces/world/move', async (req, res) => {
         limparJogadoresInativos3D();
         const b = req.body ? req.body : {};
         const userId = String(b.userId ? b.userId : '').trim();
-        if (!userId) return res.status(200).json({ success: true, players: [] });
+        const escolaId = String(b.escolaId ? b.escolaId : 'DEFAULT').trim();
+        if (!userId) return res.status(200).json({ success: true, players: [], activeTour: obterTourAtivoEscola(escolaId) });
 
         const estadoJogador = {
             userId,
+            escolaId,
             nome: String(b.nome ? b.nome : 'Student').trim(),
             avatar: b.avatar ? b.avatar : null,
             role: String(b.role ? b.role : 'EXPLORER').trim(),
@@ -3912,26 +3933,115 @@ router.post('/english-spaces/world/move', async (req, res) => {
             petType: b.petType ? String(b.petType) : null,
             equippedVehicle: b.equippedVehicle ? String(b.equippedVehicle) : null,
             houseStage: typeof b.houseStage === 'number' ? b.houseStage : 1,
-            x: Number(b.x) ? Number(b.x) : 0,
-            z: Number(b.z) ? Number(b.z) : 0,
-            rotY: Number(b.rotY) ? Number(b.rotY) : 0,
+            x: Number(b.x) || 0,
+            y: Number(b.y) || 0,
+            z: Number(b.z) || 0,
+            rotY: Number(b.rotY) || 0,
             spaceId: String(b.spaceId ? b.spaceId : 'street').trim(),
+            torreAtual: b.torreAtual ? String(b.torreAtual).trim() : null,
+            andarTorreAtual: Number(b.andarTorreAtual) || 1,
             updatedAt: Date.now()
         };
 
         _mundo3DJogadores.set(userId, estadoJogador);
 
+        // Mantém a posição do tour sempre sincronizada com a posição ao vivo do professor
+        const tourAtual = obterTourAtivoEscola(escolaId);
+        if (tourAtual && tourAtual.teacherId === userId) {
+            tourAtual.x = estadoJogador.x;
+            tourAtual.y = estadoJogador.y;
+            tourAtual.z = estadoJogador.z;
+            tourAtual.rotY = estadoJogador.rotY;
+            tourAtual.spaceId = estadoJogador.spaceId;
+            tourAtual.torreAtual = estadoJogador.torreAtual;
+            tourAtual.andarTorreAtual = estadoJogador.andarTorreAtual;
+            tourAtual.updatedAt = Date.now();
+        }
+
         if (global.workspaceStream) {
             global.workspaceStream.emit('evento_realtime', {
                 type: 'ES_WORLD_MOVE',
                 player: estadoJogador,
-                escolaId: 'DEFAULT'
+                escolaId
             });
         }
 
-        res.status(200).json({ success: true, players: Array.from(_mundo3DJogadores.values()) });
+        res.status(200).json({
+            success: true,
+            players: Array.from(_mundo3DJogadores.values()),
+            activeTour: obterTourAtivoEscola(escolaId)
+        });
     } catch (e) {
-        res.status(200).json({ success: true, players: [] });
+        res.status(200).json({ success: true, players: [], activeTour: null });
+    }
+});
+
+// 🎓 MODO TOUR GUIADO DO PROFESSOR (START, CALL_HERE, ANNOUNCE, FOLLOW_TOGGLE, BONUS_DRX, STOP)
+router.post('/english-spaces/world/tour', async (req, res) => {
+    try {
+        const b = req.body ? req.body : {};
+        const escolaId = String(b.escolaId || 'DEFAULT').trim();
+        const action = String(b.action || '').trim().toUpperCase();
+        const teacherId = String(b.teacherId || '').trim();
+        const teacherName = String(b.teacherName || 'Professor').trim();
+
+        if (!teacherId || !action) {
+            return res.status(400).json({ success: false, error: 'Dados incompletos do tour.' });
+        }
+
+        if (action === 'STOP') {
+            _toursGuiadosPorEscola.delete(escolaId);
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ES_WORLD_TOUR',
+                    action: 'STOP',
+                    tour: { active: false, teacherId },
+                    timestamp: Date.now(),
+                    escolaId
+                });
+            }
+            return res.status(200).json({ success: true, tour: null });
+        }
+
+        const anterior = obterTourAtivoEscola(escolaId);
+        const tourAtualizado = {
+            active: true,
+            escolaId,
+            teacherId,
+            teacherName,
+            followEnabled: typeof b.followEnabled === 'boolean'
+                ? b.followEnabled
+                : (anterior ? Boolean(anterior.followEnabled) : true),
+            message: b.message !== undefined
+                ? String(b.message).trim().slice(0, 140)
+                : (anterior?.message || 'Follow me around English City!'),
+            x: Number(b.x) || 0,
+            y: Number(b.y) || 0,
+            z: Number(b.z) || 0,
+            rotY: Number(b.rotY) || 0,
+            spaceId: String(b.spaceId || 'street').trim(),
+            torreAtual: b.torreAtual ? String(b.torreAtual).trim() : null,
+            andarTorreAtual: Number(b.andarTorreAtual) || 1,
+            updatedAt: Date.now()
+        };
+
+        _toursGuiadosPorEscola.set(escolaId, tourAtualizado);
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ES_WORLD_TOUR',
+                action,
+                tour: tourAtualizado,
+                bonusAmount: Number(b.bonusAmount) || 0,
+                bonusId: b.bonusId ? String(b.bonusId) : null,
+                timestamp: Date.now(),
+                escolaId
+            });
+        }
+
+        res.status(200).json({ success: true, tour: tourAtualizado });
+    } catch (e) {
+        res.status(200).json({ success: false });
     }
 });
 
