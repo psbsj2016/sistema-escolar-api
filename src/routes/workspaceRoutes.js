@@ -4093,4 +4093,308 @@ router.post('/english-spaces/world/leave', async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🎤🏘️⚔️ ETAPA 8: GAME SHOW MULTIPLAYER, CASAS NA NUVEM E DUELO 1v1 (SSE)
+// ============================================================================
+const _gameShowPorEscola = new Map();
+
+const GAMESHOW_SERVER_QUESTIONS = [
+    { q: 'Which sentence is in the Simple Past?', a: 'I went to London yesterday.', b: 'I go to London yesterday.', c: 'I going to London.', correct: 'A' },
+    { q: 'What does "Break a leg!" mean?', a: 'Be careful!', b: 'Good luck!', c: 'Run faster!', correct: 'B' },
+    { q: 'Complete: "She ____ lived here since 2022."', a: 'have', b: 'is', c: 'has', correct: 'C' },
+    { q: 'What is the opposite of "Expensive"?', a: 'Cheap', b: 'Heavy', c: 'Crowded', correct: 'A' },
+    { q: 'Complete: "If it rains, I ____ stay home."', a: 'would', b: 'will', c: 'did', correct: 'B' },
+    { q: 'Which word means "Bagagem de mão"?', a: 'Boarding pass', b: 'Aisle seat', c: 'Carry-on', correct: 'C' },
+    { q: 'Complete: "How ____ have you studied English?"', a: 'long', b: 'many', c: 'much', correct: 'A' },
+    { q: 'What does the phrasal verb "Give up" mean?', a: 'Wake up early', b: 'Quit / Stop trying', c: 'Celebrate', correct: 'B' },
+    { q: 'Choose the correct comparative:', a: 'More better', b: 'Gooder', c: 'Better', correct: 'C' },
+    { q: 'Complete: "They ____ watching a movie right now."', a: 'is', b: 'are', c: 'was', correct: 'B' },
+    { q: 'Complete: "I look forward to ____ from you."', a: 'hearing', b: 'hear', c: 'heard', correct: 'A' },
+    { q: 'What does "Deadline" mean?', a: 'A phone line', b: 'Final time limit', c: 'A quiet room', correct: 'B' }
+];
+
+const DUEL_QUESTIONS_POOL = [
+    { q: 'Choose the past tense of "BUY":', opts: ['Buyed', 'Bought', 'Brought'], correct: 1 },
+    { q: 'Complete: "She ____ to school every day."', opts: ['goes', 'go', 'going'], correct: 0 },
+    { q: 'What is the opposite of "Crowded"?', opts: ['Noisy', 'Heavy', 'Empty'], correct: 2 },
+    { q: 'Complete: "Have you ____ been to London?"', opts: ['ever', 'yesterday', 'yet'], correct: 0 },
+    { q: 'What does "Carry-on" mean at the airport?', opts: ['Boarding gate', 'Hand luggage', 'Window seat'], correct: 1 },
+    { q: 'Choose the correct plural of "Child":', opts: ['Childs', 'Childrens', 'Children'], correct: 2 },
+    { q: 'Complete: "I am interested ____ learning English."', opts: ['in', 'on', 'at'], correct: 0 },
+    { q: 'What does "Figure out" mean?', opts: ['Give up', 'Understand / Solve', 'Wake up'], correct: 1 },
+    { q: 'Complete: "This book is ____ than that one."', opts: ['more good', 'gooder', 'better'], correct: 2 },
+    { q: 'How do you ask politely for the check?', opts: ['Could we have the bill, please?', 'Give me check!', 'Where money?'], correct: 0 }
+];
+
+// 1. Salvar móveis e depósito do proprietário no MongoDB
+router.put('/english-spaces/progress/furniture', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const b = req.body || {};
+        const uid = String(b.userId || '').trim();
+        const escolaId = String(b.escolaId || 'DEFAULT').trim();
+        if (!uid) return res.status(400).json({ success: false });
+
+        const customFurniture = Array.isArray(b.customFurniture) ? b.customFurniture.slice(0, 60) : [];
+        const furnitureStorage = Array.isArray(b.furnitureStorage) ? b.furnitureStorage.slice(0, 80) : [];
+
+        const updateDoc = {
+            customFurniture,
+            furnitureStorage,
+            escolaId,
+            lastActivity: new Date().toISOString()
+        };
+        if (b.ownerName && String(b.ownerName).trim()) {
+            updateDoc.ownerName = String(b.ownerName).trim();
+        }
+
+        await db.collection('workspace_spaces_progresso').updateOne(
+            { userId: uid },
+            { $set: updateDoc },
+            { upsert: true }
+        );
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ES_HOUSE_UPDATE',
+                userId: uid,
+                escolaId
+            });
+        }
+
+        res.status(200).json({ success: true });
+    } catch (e) {
+        res.status(200).json({ success: false });
+    }
+});
+
+// 2. Listar casas mobiliadas da comunidade + móveis do próprio aluno
+router.get('/english-spaces/world/houses', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const uid = String(req.query.userId || '').trim();
+
+        const [perfis, usuarios, meuDoc] = await Promise.all([
+            db.collection('workspace_spaces_progresso').find({}).sort({ lastActivity: -1 }).limit(16).toArray(),
+            db.collection('usuarios').find({}).toArray(),
+            uid ? db.collection('workspace_spaces_progresso').findOne({ userId: uid }) : Promise.resolve(null)
+        ]);
+
+        const mapaNomes = {};
+        usuarios.forEach(u => {
+            if (u.id) mapaNomes[String(u.id)] = u.nome || u.login || 'Student';
+        });
+
+        const houses = perfis.map((p, idx) => ({
+            userId: p.userId,
+            ownerName: mapaNomes[String(p.userId)] || p.ownerName || `Student ${idx + 1}`,
+            stage: (p.avatarConfig && typeof p.avatarConfig.houseStage === 'number') ? p.avatarConfig.houseStage : 1,
+            furniture: Array.isArray(p.customFurniture) ? p.customFurniture : [],
+            likes: Array.isArray(p.houseLikes) ? p.houseLikes : []
+        }));
+
+        const myHouse = meuDoc ? {
+            furniture: Array.isArray(meuDoc.customFurniture) ? meuDoc.customFurniture : [],
+            storage: Array.isArray(meuDoc.furnitureStorage) ? meuDoc.furnitureStorage : [],
+            likes: Array.isArray(meuDoc.houseLikes) ? meuDoc.houseLikes : []
+        } : null;
+
+        res.status(200).json({ success: true, houses, myHouse });
+    } catch (e) {
+        res.status(200).json({ success: true, houses: [], myHouse: null });
+    }
+});
+
+// 3. Curtir / Descurtir a decoração da casa de um colega
+router.post('/english-spaces/world/houses/like', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const b = req.body || {};
+        const ownerUserId = String(b.ownerUserId || '').trim();
+        const likerId = String(b.likerId || '').trim();
+        const likerName = String(b.likerName || 'Student').trim();
+        const escolaId = String(b.escolaId || 'DEFAULT').trim();
+        if (!ownerUserId || !likerId) return res.status(400).json({ success: false });
+
+        const doc = await db.collection('workspace_spaces_progresso').findOne({ userId: ownerUserId });
+        let likes = Array.isArray(doc?.houseLikes) ? [...doc.houseLikes] : [];
+        let liked = false;
+
+        if (likes.includes(likerId)) {
+            likes = likes.filter(id => id !== likerId);
+        } else {
+            likes.push(likerId);
+            liked = true;
+        }
+
+        await db.collection('workspace_spaces_progresso').updateOne(
+            { userId: ownerUserId },
+            { $set: { houseLikes: likes } },
+            { upsert: true }
+        );
+
+        if (global.workspaceStream) {
+            global.workspaceStream.emit('evento_realtime', {
+                type: 'ES_HOUSE_LIKE',
+                ownerUserId,
+                likerId,
+                likerName,
+                liked,
+                likes,
+                escolaId
+            });
+        }
+
+        res.status(200).json({ success: true, liked, likes });
+    } catch (e) {
+        res.status(200).json({ success: false });
+    }
+});
+
+// 4. Game Show Multiplayer Sincronizado + Pódio ao Vivo
+router.post('/english-spaces/world/gameshow', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const escolaId = String(b.escolaId || 'DEFAULT').trim();
+        const action = String(b.action || '').toUpperCase();
+
+        if (!_gameShowPorEscola.has(escolaId)) {
+            _gameShowPorEscola.set(escolaId, { scores: {}, lastRound: null });
+        }
+        const sala = _gameShowPorEscola.get(escolaId);
+
+        if (action === 'START') {
+            const qCustom = b.customQuestion;
+            const question = (qCustom && qCustom.q && qCustom.a && qCustom.b && qCustom.c && qCustom.correct)
+                ? { q: String(qCustom.q).slice(0, 120), a: String(qCustom.a).slice(0, 80), b: String(qCustom.b).slice(0, 80), c: String(qCustom.c).slice(0, 80), correct: String(qCustom.correct).toUpperCase() }
+                : GAMESHOW_SERVER_QUESTIONS[Math.floor(Math.random() * GAMESHOW_SERVER_QUESTIONS.length)];
+
+            const round = {
+                roundId: 'gs_' + Date.now(),
+                question,
+                duration: 12,
+                hostName: String(b.hostName || 'Host').trim(),
+                startedAt: Date.now()
+            };
+            sala.lastRound = round;
+
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ES_GAMESHOW_EVENT',
+                    action: 'START',
+                    round,
+                    escolaId
+                });
+            }
+            return res.status(200).json({ success: true, round });
+        }
+
+        if (action === 'SUBMIT') {
+            const uid = String(b.userId || '').trim();
+            const nome = String(b.nome || 'Student').trim();
+            if (uid) {
+                if (!sala.scores[uid]) sala.scores[uid] = { nome, pts: 0 };
+                sala.scores[uid].nome = nome;
+                if (b.acertou) sala.scores[uid].pts += 100;
+            }
+            const podium = Object.values(sala.scores)
+                .sort((x, y) => y.pts - x.pts)
+                .slice(0, 3);
+
+            const correct = sala.lastRound?.question?.correct || '';
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ES_GAMESHOW_EVENT',
+                    action: 'PODIUM',
+                    correct,
+                    podium,
+                    escolaId
+                });
+            }
+            return res.status(200).json({ success: true, podium });
+        }
+
+        res.status(200).json({ success: true });
+    } catch (e) {
+        res.status(200).json({ success: false });
+    }
+});
+
+// 5. Duelo Rápido 1v1 na Rua (CHALLENGE, ACCEPT, DECLINE, ANSWER)
+router.post('/english-spaces/world/duel', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const escolaId = String(b.escolaId || 'DEFAULT').trim();
+        const action = String(b.action || '').toUpperCase();
+
+        if (action === 'CHALLENGE') {
+            const duelId = 'duel_' + Date.now();
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ES_WORLD_DUEL',
+                    action: 'CHALLENGE',
+                    duelId,
+                    challengerId: String(b.challengerId || ''),
+                    challengerName: String(b.challengerName || 'Student'),
+                    targetId: String(b.targetId || ''),
+                    targetName: String(b.targetName || 'Student'),
+                    escolaId
+                });
+            }
+            return res.status(200).json({ success: true, duelId });
+        }
+
+        if (action === 'DECLINE') {
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ES_WORLD_DUEL',
+                    action: 'DECLINE',
+                    duelId: b.duelId,
+                    challengerId: String(b.challengerId || ''),
+                    targetName: String(b.targetName || 'Student'),
+                    escolaId
+                });
+            }
+            return res.status(200).json({ success: true });
+        }
+
+        if (action === 'ACCEPT') {
+            const questions = [...DUEL_QUESTIONS_POOL].sort(() => Math.random() - 0.5).slice(0, 3);
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ES_WORLD_DUEL',
+                    action: 'START',
+                    duelId: b.duelId || ('duel_' + Date.now()),
+                    challengerId: String(b.challengerId || ''),
+                    challengerName: String(b.challengerName || 'Student'),
+                    targetId: String(b.targetId || ''),
+                    targetName: String(b.targetName || 'Student'),
+                    questions,
+                    escolaId
+                });
+            }
+            return res.status(200).json({ success: true });
+        }
+
+        if (action === 'ANSWER') {
+            if (global.workspaceStream) {
+                global.workspaceStream.emit('evento_realtime', {
+                    type: 'ES_WORLD_DUEL',
+                    action: 'ANSWER',
+                    duelId: b.duelId,
+                    userId: String(b.userId || ''),
+                    score: Number(b.score) || 0,
+                    finished: Boolean(b.finished),
+                    escolaId
+                });
+            }
+            return res.status(200).json({ success: true });
+        }
+
+        res.status(200).json({ success: true });
+    } catch (e) {
+        res.status(200).json({ success: false });
+    }
+});
+
 module.exports = router;
