@@ -4397,4 +4397,222 @@ router.post('/english-spaces/world/duel', async (req, res) => {
     }
 });
 
+// ============================================================================
+// 📊 ETAPA 9: TELEMETRIA DE FLUÊNCIA E RELATÓRIO PEDAGÓGICO DO PROFESSOR
+// ============================================================================
+
+// 1. Grava frases faladas, correções do Coach IA e métricas de fluência do aluno no MongoDB
+router.post('/english-spaces/progress/fluency-log', async (req, res) => {
+    try {
+        const db = await connectDB();
+        const b = req.body || {};
+        const uid = String(b.userId || '').trim();
+        if (!uid) return res.status(200).json({ success: false });
+
+        const escolaId = String(b.escolaId || 'DEFAULT').trim();
+        const doc = await db.collection('workspace_spaces_progresso').findOne({ userId: uid });
+        const stats = (doc && doc.fluencyStats && typeof doc.fluencyStats === 'object')
+            ? { ...doc.fluencyStats }
+            : {
+                spokenTurns: 0,
+                deliveriesDone: 0,
+                houseToursDone: 0,
+                flashEventsWon: 0,
+                stamps: [],
+                recentUtterances: [],
+                grammarTips: []
+            };
+
+        if (b.spokenPhrase && String(b.spokenPhrase).trim()) {
+            stats.spokenTurns = (Number(stats.spokenTurns) || 0) + 1;
+            const utts = Array.isArray(stats.recentUtterances) ? [...stats.recentUtterances] : [];
+            utts.unshift({
+                text: String(b.spokenPhrase).trim().slice(0, 180),
+                spaceId: String(b.spaceId || 'street').trim(),
+                source: String(b.source || '3D').trim(),
+                at: Date.now()
+            });
+            stats.recentUtterances = utts.slice(0, 25);
+        }
+
+        if (b.grammarTip && String(b.grammarTip).trim()) {
+            const tips = Array.isArray(stats.grammarTips) ? [...stats.grammarTips] : [];
+            tips.unshift({
+                tip: String(b.grammarTip).trim().slice(0, 220),
+                zone: String(b.spaceId || 'street').trim(),
+                at: Date.now()
+            });
+            stats.grammarTips = tips.slice(0, 30);
+        }
+
+        if (b.incDelivery) stats.deliveriesDone = (Number(stats.deliveriesDone) || 0) + 1;
+        if (b.incHouseTour) stats.houseToursDone = (Number(stats.houseToursDone) || 0) + 1;
+        if (b.incFlashWin) stats.flashEventsWon = (Number(stats.flashEventsWon) || 0) + 1;
+
+        if (Array.isArray(b.stampsList)) {
+            stats.stamps = Array.from(new Set(b.stampsList.map(x => String(x).trim()).filter(Boolean))).slice(0, 30);
+        }
+
+        const updateFields = {
+            fluencyStats: stats,
+            escolaId,
+            lastActivity: new Date().toISOString()
+        };
+        if (b.ownerName && String(b.ownerName).trim()) {
+            updateFields.ownerName = String(b.ownerName).trim();
+        }
+
+        await db.collection('workspace_spaces_progresso').updateOne(
+            { userId: uid },
+            { $set: updateFields },
+            { upsert: true }
+        );
+
+        res.status(200).json({ success: true });
+    } catch (e) {
+        res.status(200).json({ success: false });
+    }
+});
+
+// 2. Relatório Pedagógico Agregado para o Professor / Gestor
+router.get('/english-spaces/teacher/report', verificarToken, async (req, res) => {
+    try {
+        const db = await connectDB();
+        const escolaId = String(req.query.escolaId || 'DEFAULT').trim();
+        const filtroEscola = escolaId !== 'DEFAULT'
+            ? { $or: [{ escolaId }, { escolaId: 'DEFAULT' }, { escolaId: { $exists: false } }] }
+            : {};
+
+        const [progressos, usuarios, alunosTodos] = await Promise.all([
+            db.collection('workspace_spaces_progresso').find(filtroEscola).toArray(),
+            db.collection('usuarios').find(filtroEscola).toArray(),
+            db.collection('alunos').find(filtroEscola).toArray()
+        ]);
+
+        const idsInativos = new Set(
+            alunosTodos.filter(a => !ehAlunoAtivo(a)).map(a => String(a.id))
+        );
+        const mapaAlunos = {};
+        alunosTodos.forEach(a => {
+            if (a.id) mapaAlunos[String(a.id)] = a;
+        });
+
+        const mapaUsuarios = {};
+        usuarios.forEach(u => {
+            if (u.id) mapaUsuarios[String(u.id)] = u;
+        });
+
+        const calcularPatente = (selos) => {
+            if (selos >= 24) return '👑 City Legend (C1)';
+            if (selos >= 18) return '⭐ Ambassador (B2)';
+            if (selos >= 10) return '🏙️ Citizen (B1)';
+            if (selos >= 4)  return '🧭 Explorer (A2)';
+            return '🎒 Tourist (A1)';
+        };
+
+        const turmasSet = new Set();
+        const dicasMap = new Map();
+        const students = [];
+
+        let totalSpokenTurns = 0;
+        let totalStamps = 0;
+        let totalMissions = 0;
+        let totalDeliveries = 0;
+        let totalHouseTours = 0;
+        let totalFlashWins = 0;
+
+        progressos.forEach(p => {
+            const uid = String(p.userId || '').trim();
+            if (!uid || uid === 'demo_user') return;
+
+            const user = mapaUsuarios[uid];
+            // Ignora professores/gestores e alunos inativos no relatório da turma
+            if (user && (user.tipo === 'Professor' || user.tipo === 'Gestor')) return;
+            if (user?.alunoRefId && idsInativos.has(String(user.alunoRefId))) return;
+
+            const fichaAluno = user?.alunoRefId ? mapaAlunos[String(user.alunoRefId)] : null;
+            const nome = (user && (user.nome || user.login)) || (fichaAluno && fichaAluno.nome) || p.ownerName || 'Aluno';
+
+            let turmaRaw = (fichaAluno && (fichaAluno.turma || (Array.isArray(fichaAluno.turmas) ? fichaAluno.turmas[0] : '')))
+                || (user && (user.turma || (Array.isArray(user.turmas) ? user.turmas[0] : '')))
+                || 'Sem turma';
+            if (typeof turmaRaw === 'object' && turmaRaw !== null) turmaRaw = turmaRaw.nome || turmaRaw.id || 'Sem turma';
+            const turma = String(turmaRaw || 'Sem turma').trim() || 'Sem turma';
+            turmasSet.add(turma);
+
+            const fs = p.fluencyStats || {};
+            const spokenTurns = Number(fs.spokenTurns) || 0;
+            const deliveriesDone = Number(fs.deliveriesDone) || 0;
+            const houseToursDone = Number(fs.houseToursDone) || 0;
+            const flashEventsWon = Number(fs.flashEventsWon) || 0;
+            const stampsCount = Array.isArray(fs.stamps) ? fs.stamps.length : 0;
+            const missions2D = Array.isArray(p.missionsCompleted) ? p.missionsCompleted.length : 0;
+            const recentUtterances = Array.isArray(fs.recentUtterances) ? fs.recentUtterances : [];
+            const grammarTips = Array.isArray(fs.grammarTips) ? fs.grammarTips : [];
+            const dovryx = typeof p.dovryx === 'number' ? p.dovryx : (typeof p.totalXP === 'number' ? p.totalXP : 0);
+
+            totalSpokenTurns += spokenTurns;
+            totalStamps += stampsCount;
+            totalMissions += missions2D;
+            totalDeliveries += deliveriesDone;
+            totalHouseTours += houseToursDone;
+            totalFlashWins += flashEventsWon;
+
+            grammarTips.forEach(g => {
+                const txt = String(g?.tip || '').trim();
+                if (!txt) return;
+                const key = txt.toLowerCase();
+                if (!dicasMap.has(key)) {
+                    dicasMap.set(key, { tip: txt, zone: g.zone || 'city', count: 0, lastAt: g.at || 0 });
+                }
+                const entry = dicasMap.get(key);
+                entry.count++;
+                if ((g.at || 0) > entry.lastAt) entry.lastAt = g.at || 0;
+            });
+
+            students.push({
+                userId: uid,
+                nome,
+                turma,
+                rank: calcularPatente(stampsCount),
+                spokenTurns,
+                stampsCount,
+                missions2D,
+                deliveriesDone,
+                houseToursDone,
+                flashEventsWon,
+                dovryx,
+                recentUtterances,
+                grammarTips,
+                lastActivity: p.lastActivity || p.createdAt || null
+            });
+        });
+
+        students.sort((a, b) => (b.spokenTurns + b.stampsCount * 3) - (a.spokenTurns + a.stampsCount * 3));
+
+        const topGrammarTips = Array.from(dicasMap.values())
+            .sort((a, b) => (b.count - a.count) || (b.lastAt - a.lastAt))
+            .slice(0, 20);
+
+        res.status(200).json({
+            success: true,
+            summary: {
+                totalStudents: students.length,
+                totalSpokenTurns,
+                totalStamps,
+                totalMissions,
+                totalDeliveries,
+                totalHouseTours,
+                totalFlashWins
+            },
+            turmas: Array.from(turmasSet).sort(),
+            topGrammarTips,
+            students
+        });
+    } catch (e) {
+        console.error('Erro em /english-spaces/teacher/report:', e);
+        res.status(200).json({ success: false, error: 'Erro ao montar relatório.' });
+    }
+});
+
 module.exports = router;
