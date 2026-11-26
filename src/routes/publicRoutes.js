@@ -158,25 +158,87 @@ function montarHtmlCarnesOficial(parcelas, nomeAluno, escola) {
     return `<html><head><meta charset="UTF-8">${estilo}</head><body><div class="carnes-container">${carnesHTML}</div></body></html>`;
 }
 
-// 🎨 CONSTRUTOR DO HTML DO CONTRATO COMPLETO
-function montarHtmlContratoOficial(conteudoHTML, escola, dados) {
+// 🔐 FUNÇÃO DETERMINÍSTICA DE HASH SHA-256 (PROVA DE IMUTABILIDADE)
+function gerarHashContrato({ idContrato, escolaId, nome, cpf, email, planoCurso, conteudoHTML, assinaturaAluno, dataUTC }) {
+    const base = [
+        String(idContrato || ''),
+        String(escolaId || ''),
+        String(nome || '').trim().toUpperCase(),
+        String(cpf || '').replace(/\D/g, ''),
+        String(email || '').trim().toLowerCase(),
+        String(planoCurso || '').trim(),
+        String(conteudoHTML || ''),
+        String(assinaturaAluno || ''),
+        String(dataUTC || '')
+    ].join('|');
+    return crypto.createHash('sha256').update(base, 'utf8').digest('hex');
+}
+
+function mascararCPF(cpf) {
+    const dig = String(cpf || '').replace(/\D/g, '');
+    if (dig.length === 11) return `***.${dig.slice(3, 6)}.${dig.slice(6, 9)}-**`;
+    return dig ? '***' + dig.slice(-3) : 'Não informado';
+}
+
+function mascararEmail(email) {
+    const str = String(email || '').trim();
+    const partes = str.split('@');
+    if (partes.length !== 2) return 'Não informado';
+    const inicio = partes[0].slice(0, 2);
+    return `${inicio}***@${partes[1]}`;
+}
+
+function mascararIP(ip) {
+    const str = String(ip || '').trim();
+    if (!str) return 'Não registrado';
+    if (str.includes('.')) {
+        const p = str.split('.');
+        return p.length === 4 ? `${p[0]}.${p[1]}.***.***` : `${str.slice(0, 6)}***`;
+    }
+    return `${str.slice(0, 8)}***`;
+}
+
+// 🎨 CONSTRUTOR DO HTML DO CONTRATO COMPLETO (COM ASSINATURAS, QR CODE E AUDITORIA)
+function montarHtmlContratoOficial(conteudoHTML, escola, dados, metaJuridica = {}) {
     const imgLogo = escola.foto ? `<img src="${escola.foto}" style="max-height:80px; margin-bottom: 5px;">` : `<h2 style="margin:0; color:#2c3e50;">${escola.nome || 'INSTITUIÇÃO'}</h2>`;
     const cnpjDiv = escola.cnpj ? `<div style="font-size: 13px; color: #555; font-weight: bold;">CNPJ: ${escola.cnpj}</div>` : '';
-    
+
     const cabecalhoEscola = `
         <div style="text-align:center; margin-bottom:20px;">
             ${imgLogo}
             ${cnpjDiv}
         </div>
     `;
-    
+
     const dataNascimentoF = dados.nascimento ? dados.nascimento.split('-').reverse().join('/') : 'Não informado';
     const telefone = dados.telefone || dados.whatsapp || dados.celular || 'Não informado';
     const endereco = `${dados.rua || ''}, Nº ${dados.numero || 'S/N'} ${dados.complemento ? ' - ' + dados.complemento : ''}`;
-   
+
     const fusoBR = { timeZone: 'America/Sao_Paulo' };
-    const dataAtual = new Date().toLocaleDateString('pt-BR', fusoBR);
-    const horaAtual = new Date().toLocaleTimeString('pt-BR', fusoBR);
+    const dataRef = metaJuridica.dataUTC ? new Date(metaJuridica.dataUTC) : new Date();
+    const dataAtual = dataRef.toLocaleDateString('pt-BR', fusoBR);
+    const horaAtual = dataRef.toLocaleTimeString('pt-BR', fusoBR);
+
+    const idTransacao = metaJuridica.idContrato || '';
+    const hashSha = metaJuridica.hashSha256 || '';
+    const urlValidacao = idTransacao
+        ? `https://www.sistemaptt.com.br/validar-contrato?id=${encodeURIComponent(idTransacao)}`
+        : 'https://www.sistemaptt.com.br/validar-contrato';
+    const qrValidacaoUrl = `https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=${encodeURIComponent(urlValidacao)}`;
+
+    const assinaturaAlunoImg = metaJuridica.assinaturaAluno
+        ? `<img src="${metaJuridica.assinaturaAluno}" style="max-height:70px; max-width:230px; object-fit:contain; display:block; margin:0 auto 4px auto;">`
+        : `<div style="height:55px;"></div>`;
+
+    const assinaturaInstImg = metaJuridica.assinaturaInstituicao
+        ? `<img src="${metaJuridica.assinaturaInstituicao}" style="max-height:70px; max-width:230px; object-fit:contain; display:block; margin:0 auto 4px auto;">`
+        : `<div style="display:inline-block; border:1px dashed #2c3e50; padding:6px 12px; border-radius:6px; font-size:10px; color:#2c3e50; font-weight:bold; margin-bottom:6px;">
+             ASSINATURA INSTITUCIONAL DIGITAL<br>${escola.nome || 'INSTITUIÇÃO'}${escola.cnpj ? ' • ' + escola.cnpj : ''}
+           </div>`;
+
+    const nomeRep = metaJuridica.representanteNome || escola.representanteNome || escola.nome || 'Instituição';
+    const cargoRep = metaJuridica.representanteCargo || escola.representanteCargo || 'Representante Legal';
+    const aud = metaJuridica.auditoria || {};
 
     return `
         <html>
@@ -186,46 +248,45 @@ function montarHtmlContratoOficial(conteudoHTML, escola, dados) {
                 body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; padding: 0; background: white; }
                 .contrato-container { width: 100%; max-width: 800px; margin: 0 auto; }
                 h1, h2, h3 { color: #2c3e50; }
-                .ficha-box { border: 1px solid #ddd; padding: 20px; border-radius: 8px; background: #fcfcfc; margin-bottom: 30px; }
+                .ficha-box { border: 1px solid #ddd; padding: 20px; border-radius: 8px; background: #fcfcfc; margin-bottom: 24px; }
                 .ficha-titulo { background: #2c3e50; color: white; padding: 8px 15px; border-radius: 5px; font-size: 14px; text-transform: uppercase; margin-top: 0; margin-bottom: 15px; }
-                .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; font-size: 13px; }
+                .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; font-size: 13px; }
                 .linha-dado { border-bottom: 1px dashed #eee; padding-bottom: 5px; }
                 .label { font-weight: bold; color: #666; font-size: 11px; text-transform: uppercase; display: block; }
                 .valor { font-size: 14px; font-weight: bold; color: #222; }
-                .clausulas { font-size: 12px; text-align: justify; line-height: 1.5; margin-top: 30px; }
-                .assinatura-box { margin-top: 50px; text-align: center; page-break-inside: avoid; }
+                .clausulas { font-size: 12px; text-align: justify; line-height: 1.5; margin-top: 22px; }
+                .assinaturas-grid { display: flex; justify-content: space-between; align-items: flex-end; gap: 25px; margin-top: 35px; text-align: center; page-break-inside: avoid; }
+                .assinatura-col { flex: 1; }
+                .linha-ass { border-top: 1px solid #333; padding-top: 6px; font-size: 12px; }
+                .cert-box { margin-top: 26px; border: 1.5px solid #27ae60; background: #f0fdf4; border-radius: 8px; padding: 14px; display: flex; align-items: center; gap: 15px; page-break-inside: avoid; }
+                .cert-dados { flex: 1; font-size: 10.5px; color: #1e293b; line-height: 1.5; word-break: break-all; }
             </style>
         </head>
         <body>
             <div class="contrato-container">
                 ${cabecalhoEscola}
                 <h2 style="text-align: center; margin-bottom: 5px; text-transform: uppercase;">Contrato de Prestação de Serviços Educacionais</h2>
-                <div style="text-align: center; font-size: 12px; color: #666; margin-bottom: 25px;">Documento gerado e aceite digitalmente em ${dataAtual} às ${horaAtual}</div>
-                
+                <div style="text-align: center; font-size: 12px; color: #666; margin-bottom: 22px;">Documento gerado e assinado eletronicamente em ${dataAtual} às ${horaAtual} (Horário de Brasília)</div>
+
                 <div class="ficha-box">
                     <h3 class="ficha-titulo">📝 Ficha de Matrícula e Dados do Contratante</h3>
-                    
                     <div class="grid-2">
                         <div class="linha-dado"><span class="label">Nome Completo</span><span class="valor">${dados.nome || 'Não informado'}</span></div>
                         <div class="linha-dado"><span class="label">E-mail</span><span class="valor">${dados.email || 'Não informado'}</span></div>
                     </div>
-                    
                     <div class="grid-2">
                         <div class="linha-dado"><span class="label">CPF</span><span class="valor">${dados.cpf || 'Não informado'}</span></div>
                         <div class="linha-dado"><span class="label">RG</span><span class="valor">${dados.rg || 'Não informado'}</span></div>
                     </div>
-
                     <div class="grid-2">
                         <div class="linha-dado"><span class="label">Data de Nascimento</span><span class="valor">${dataNascimentoF}</span></div>
                         <div class="linha-dado"><span class="label">Telefone / WhatsApp</span><span class="valor">${telefone}</span></div>
                     </div>
-
-                    <div style="margin-top: 15px;" class="linha-dado">
+                    <div style="margin-top: 12px;" class="linha-dado">
                         <span class="label">Endereço Completo</span>
-                        <span class="valor">${endereco} - Bairro: ${dados.bairro || ''} - ${dados.cidade || ''}/${dados.estado || ''} | CEP: ${dados.cep || ''}</span>
+                        <span class="valor">${endereco} - Bairro: ${dados.bairro || ''} - ${dados.cidade || ''}/${dados.estado || ''}</span>
                     </div>
-
-                    <div class="grid-2" style="margin-top: 15px;">
+                    <div class="grid-2" style="margin-top: 12px;">
                         <div class="linha-dado"><span class="label">Curso / Plano Contratado</span><span class="valor" style="color: #27ae60;">${dados.planoCurso || 'Não informado'}</span></div>
                         <div class="linha-dado"><span class="label">Dia de Vencimento</span><span class="valor">Todo dia ${dados.diaVencimento || '10'}</span></div>
                     </div>
@@ -235,13 +296,35 @@ function montarHtmlContratoOficial(conteudoHTML, escola, dados) {
                     ${conteudoHTML || '<p><em>Nenhuma cláusula contratual adicional foi cadastrada.</em></p>'}
                 </div>
 
-                <div class="assinatura-box">
-                    <p>_______________________________________________________</p>
-                    <p style="font-size: 16px; margin-bottom: 2px;"><b>${dados.nome || 'Aluno'}</b></p>
-                    <p style="font-size: 12px; color: #555; margin-top: 0;">Assinatura do Aluno(a) / Contratante</p>
-                    
-                    <div style="margin-top: 20px; padding: 10px; background: #eafaf1; border: 1px solid #27ae60; border-radius: 5px; display: inline-block; font-size: 11px; color: #1e8449;">
-                        ✅ Aceite Eletrónico Registado (IP Logado e Confirmado via Sistema)
+                <div class="assinaturas-grid">
+                    <div class="assinatura-col">
+                        ${assinaturaAlunoImg}
+                        <div class="linha-ass">
+                            <b>${dados.resp_nome || dados.nome || 'Contratante'}</b><br>
+                            <span style="color:#555; font-size:10.5px;">Assinatura do Responsável / Aluno</span>
+                        </div>
+                    </div>
+                    <div class="assinatura-col">
+                        ${assinaturaInstImg}
+                        <div class="linha-ass">
+                            <b>${nomeRep}</b><br>
+                            <span style="color:#555; font-size:10.5px;">${cargoRep} — Assinatura da Instituição</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="cert-box">
+                    <div style="text-align:center; flex-shrink:0;">
+                        <img src="${qrValidacaoUrl}" style="width:105px; height:105px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; padding:3px;">
+                        <div style="font-size:8.5px; color:#15803d; font-weight:bold; margin-top:3px;">Validar via QR Code</div>
+                    </div>
+                    <div class="cert-dados">
+                        <div style="font-size:12px; font-weight:bold; color:#15803d; margin-bottom:4px;">✅ CERTIFICADO DE ASSINATURA ELETRÔNICA (MP nº 2.200-2/2001 e Lei nº 14.063/2020)</div>
+                        <div><b>ID da Transação:</b> ${idTransacao || 'N/A'}</div>
+                        <div><b>Hash SHA-256 (Integridade):</b> <span style="font-family:monospace;">${hashSha || 'N/A'}</span></div>
+                        <div><b>Data/Hora do Servidor:</b> ${dataAtual} às ${horaAtual} (UTC: ${aud.dataUTC || dataRef.toISOString()})</div>
+                        <div><b>Autenticação de Autoria:</b> ${aud.otpVerificado ? '✅ Código OTP de 6 dígitos confirmado via e-mail' : 'Aceite eletrônico registrado'} • <b>IP:</b> ${aud.ip || 'Registrado'}</div>
+                        <div><b>Conferência Pública:</b> ${urlValidacao}</div>
                     </div>
                 </div>
             </div>
@@ -271,11 +354,182 @@ router.get('/escola/:id', async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🔐 ENVIO DE CÓDIGO OTP DE 6 DÍGITOS POR E-MAIL PARA ASSINATURA DO CONTRATO
+// ============================================================================
+router.post('/enviar-codigo-contrato', async (req, res) => {
+    try {
+        const database = await connectDB();
+        const { escolaId, email, nome } = req.body || {};
+        const emailLimpo = String(email || '').trim().toLowerCase();
+
+        if (!emailLimpo || !emailLimpo.includes('@')) {
+            return res.status(400).json({ success: false, error: 'Informe um e-mail válido para receber o código de assinatura.' });
+        }
+
+        const escola = escolaId
+            ? (await database.collection('escola').findOne({ escolaId: String(escolaId).trim() }) || {})
+            : {};
+
+        const codigo = String(Math.floor(100000 + Math.random() * 900000));
+        const expiraEm = new Date(Date.now() + 15 * 60 * 1000); // Válido por 15 minutos
+
+        await database.collection('otp_contratos').deleteMany({ email: emailLimpo, escolaId: String(escolaId || '') });
+        await database.collection('otp_contratos').insertOne({
+            escolaId: String(escolaId || ''),
+            email: emailLimpo,
+            codigo,
+            usado: false,
+            criadoEm: new Date(),
+            expiraEm
+        });
+
+        const nomeEscola = escola.nome || 'Instituição de Ensino';
+        const resp = await resend.emails.send({
+            from: 'Matriculas <contato@sistemaptt.com.br>',
+            to: emailLimpo,
+            subject: `🔐 Código de Assinatura Eletrônica: ${codigo}`,
+            html: `
+                <div style="font-family:Arial,sans-serif; max-width:520px; margin:0 auto; color:#1e293b; border:1px solid #e2e8f0; border-radius:12px; padding:24px;">
+                    <h2 style="margin:0 0 10px 0; color:#2c3e50;">🔐 Confirmação de Assinatura</h2>
+                    <p style="font-size:14px; line-height:1.5;">Olá, <b>${nome || 'Contratante'}</b>! Use o código abaixo para confirmar a sua autoria e assinar eletronicamente o contrato com <b>${nomeEscola}</b>:</p>
+                    <div style="background:#f1f5f9; border:2px dashed #2563eb; border-radius:10px; padding:18px; text-align:center; font-size:32px; font-weight:900; letter-spacing:8px; color:#1d4ed8; margin:18px 0;">
+                        ${codigo}
+                    </div>
+                    <p style="font-size:12px; color:#64748b; margin:0;">Este código expira em 15 minutos. Se você não solicitou esta matrícula, ignore este e-mail.</p>
+                </div>
+            `
+        });
+
+        if (resp && resp.error) {
+            console.error('Erro Resend OTP contrato:', resp.error);
+            return res.status(500).json({ success: false, error: 'Não foi possível enviar o código para este e-mail.' });
+        }
+
+        res.json({ success: true, message: 'Código de 6 dígitos enviado para o seu e-mail!' });
+    } catch (error) {
+        console.error('Erro em /enviar-codigo-contrato:', error);
+        res.status(500).json({ success: false, error: 'Erro ao gerar código de confirmação.' });
+    }
+});
+
+// ============================================================================
+// 🔍 VALIDAÇÃO PÚBLICA DE CONTRATO POR QR CODE / ID (PROTEGIDA PELA LGPD)
+// ============================================================================
+router.get('/validar-contrato/:id', async (req, res) => {
+    try {
+        const database = await connectDB();
+        const idBusca = String(req.params.id || '').trim();
+        if (!idBusca) {
+            return res.status(400).json({ valid: false, error: 'Código de contrato não informado.' });
+        }
+
+        const contrato = await database.collection('contratos').findOne({ id: idBusca });
+        if (!contrato) {
+            return res.status(404).json({ valid: false, error: 'Nenhum contrato encontrado com este ID de transação.' });
+        }
+
+        const escola = contrato.escolaId
+            ? (await database.collection('escola').findOne({ escolaId: contrato.escolaId }) || {})
+            : {};
+
+        let statusIntegridade = 'HISTORICO'; // Contratos salvos antes do SHA-256
+        let hashConfere = null;
+
+        if (contrato.hashSha256) {
+            const recalculado = gerarHashContrato({
+                idContrato: contrato.id,
+                escolaId: contrato.escolaId,
+                nome: contrato.nomeAluno || contrato.nome,
+                cpf: contrato.cpf,
+                email: contrato.email,
+                planoCurso: contrato.planoCurso,
+                conteudoHTML: contrato.conteudoHTML,
+                assinaturaAluno: contrato.assinaturaAluno || '',
+                dataUTC: contrato.auditoria?.dataUTC || contrato.dataCriacao
+            });
+            hashConfere = (recalculado === contrato.hashSha256);
+            statusIntegridade = hashConfere ? 'INTEGRO' : 'ADULTERADO';
+        }
+
+        const dataRef = contrato.auditoria?.dataUTC || contrato.dataHoraRegistro || contrato.dataCriacao || null;
+        const dataBrasilia = dataRef
+            ? new Date(dataRef).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+            : 'Não informada';
+
+        res.json({
+            valid: statusIntegridade !== 'ADULTERADO',
+            statusIntegridade,
+            idTransacao: contrato.id,
+            statusContrato: contrato.status || 'Assinado',
+            contratante: {
+                nome: contrato.nomeAluno || contrato.nome || 'Não informado',
+                cpfMascarado: mascararCPF(contrato.cpf),
+                emailMascarado: mascararEmail(contrato.email),
+                responsavel: contrato.resp_nome || null
+            },
+            instituicao: {
+                nome: escola.nome || 'Instituição Registrada',
+                cnpj: escola.cnpj || 'Não informado',
+                representante: contrato.representanteNome || escola.representanteNome || null
+            },
+            curso: contrato.planoCurso || contrato.curso || 'Não informado',
+            modalidade: (contrato.modalidade === 'Online' || contrato.modalidade_escolhida === 'Online') ? 'Online (EAD)' : 'Presencial',
+            dataAssinatura: dataBrasilia,
+            auditoria: {
+                hashSha256: contrato.hashSha256 || null,
+                hashConfere,
+                ipParcial: mascararIP(contrato.auditoria?.ip),
+                otpVerificado: Boolean(contrato.auditoria?.otpVerificado),
+                possuiAssinaturaManuscrita: Boolean(contrato.assinaturaAluno),
+                assinaturaModo: contrato.assinaturaAlunoModo || null
+            }
+        });
+    } catch (error) {
+        console.error('Erro em /validar-contrato:', error);
+        res.status(500).json({ valid: false, error: 'Erro interno ao validar o contrato.' });
+    }
+});
+
 router.post('/receber-matricula', async (req, res) => {
     try {
         const database = await connectDB();
         const dadosMatricula = req.body; 
         const { escolaId, nome, email, conteudoHTML, planoCurso, diaVencimento } = dadosMatricula;
+        
+        // 🔐 VALIDAÇÃO DO CÓDIGO OTP DE 6 DÍGITOS (PROVA DE AUTORIA PELO E-MAIL)
+        const emailLimpo = String(email || '').trim().toLowerCase();
+        const codigoOtp = String(dadosMatricula.codigoOtp || '').trim();
+        let otpVerificado = false;
+
+        if (!emailLimpo || !emailLimpo.includes('@')) {
+            return res.status(400).json({ success: false, error: 'Informe um e-mail válido para assinar o contrato.' });
+        }
+        if (!codigoOtp || codigoOtp.length !== 6) {
+            return res.status(400).json({ success: false, error: 'Informe o código de 6 dígitos enviado para o seu e-mail.' });
+        }
+
+        const regOtp = await database.collection('otp_contratos').findOne({
+            email: emailLimpo,
+            escolaId: String(escolaId || ''),
+            codigo: codigoOtp,
+            usado: false
+        });
+        if (!regOtp || new Date(regOtp.expiraEm).getTime() < Date.now()) {
+            return res.status(400).json({ success: false, error: 'Código de confirmação inválido ou expirado. Solicite um novo código.' });
+        }
+
+        await database.collection('otp_contratos').updateOne(
+            { _id: regOtp._id },
+            { $set: { usado: true, usadoEm: new Date() } }
+        );
+        otpVerificado = true;
+
+        const ipReal = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'Não identificado').split(',')[0].trim();
+        const userAgentReal = String(req.headers['user-agent'] || 'Não identificado').slice(0, 260);
+        const dataServidorUTC = new Date().toISOString();
+        const idContratoGerado = "CONT_" + crypto.randomUUID();
+        const assinaturaAlunoLimpa = typeof dadosMatricula.assinaturaAluno === 'string' ? dadosMatricula.assinaturaAluno.slice(0, 250000) : '';
 
         console.log("Iniciando processamento da matrícula para:", email); 
 
@@ -328,17 +582,60 @@ router.post('/receber-matricula', async (req, res) => {
         }
         await database.collection('financeiro').insertMany(parcelas);
 
-        // 4. Gravação no Cofre de Contratos
+        // 4. Gravação Imutável no Cofre de Contratos (com Assinaturas, Hash SHA-256 e Auditoria)
+        const hashSha256 = gerarHashContrato({
+            idContrato: idContratoGerado,
+            escolaId,
+            nome,
+            cpf: dadosMatricula.cpf,
+            email: emailLimpo,
+            planoCurso,
+            conteudoHTML: conteudoHTML || '',
+            assinaturaAluno: assinaturaAlunoLimpa,
+            dataUTC: dataServidorUTC
+        });
+
+        const auditoriaContrato = {
+            ip: ipReal,
+            userAgent: userAgentReal,
+            fusoCliente: String(dadosMatricula.fusoHorario || 'America/Sao_Paulo'),
+            dataUTC: dataServidorUTC,
+            dataBrasilia: new Date(dataServidorUTC).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+            otpVerificado,
+            emailVerificado: emailLimpo
+        };
+
+        const metaJuridica = {
+            idContrato: idContratoGerado,
+            hashSha256,
+            assinaturaAluno: assinaturaAlunoLimpa,
+            assinaturaAlunoModo: dadosMatricula.assinaturaAlunoModo || 'desenho',
+            assinaturaInstituicao: escola.assinaturaInstituicao || '',
+            representanteNome: escola.representanteNome || '',
+            representanteCargo: escola.representanteCargo || '',
+            auditoria: auditoriaContrato
+        };
+
         if (conteudoHTML) {
+            const dadosLimposContrato = { ...dadosMatricula };
+            delete dadosLimposContrato.codigoOtp;
+
             await database.collection('contratos').insertOne({
-                ...dadosMatricula,
-                id: "CONT_" + crypto.randomUUID(),
+                ...dadosLimposContrato,
+                id: idContratoGerado,
                 alunoId: idAlunoGerado,
                 nomeAluno: nome,
                 enderecoCompleto: `${dadosMatricula.rua || ''}, ${dadosMatricula.numero || ''} - ${dadosMatricula.bairro || ''}, ${dadosMatricula.cidade || ''}`,
-                conteudoHTML: conteudoHTML, 
+                conteudoHTML: conteudoHTML,
+                assinaturaAluno: assinaturaAlunoLimpa,
+                assinaturaAlunoModo: metaJuridica.assinaturaAlunoModo,
+                assinaturaInstituicao: metaJuridica.assinaturaInstituicao,
+                representanteNome: metaJuridica.representanteNome,
+                representanteCargo: metaJuridica.representanteCargo,
+                hashSha256,
+                auditoria: auditoriaContrato,
                 status: 'Assinado',
-                dataCriacao: new Date().toISOString()
+                dataCriacao: dataServidorUTC
             });
         }
 
@@ -393,7 +690,7 @@ router.post('/receber-matricula', async (req, res) => {
             try {
                 console.log("Iniciando conversão de HTML para PDF via API externa...");
                 
-                const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula);
+                const htmlDoContrato = montarHtmlContratoOficial(conteudoHTML, escola, dadosMatricula, metaJuridica);
                 const htmlDoCarne = montarHtmlCarnesOficial(parcelas, nome, escola);
                 
                 // Pede os PDFs à API
@@ -455,7 +752,7 @@ router.post('/receber-matricula', async (req, res) => {
             }
         }
 
-        res.json({ success: true, message: 'Matrícula processada com sucesso!' });
+        res.json({ success: true, idContrato: idContratoGerado, message: 'Matrícula processada com sucesso!' });
     } catch (error) {
         console.error("Erro crítico ao processar matrícula:", error);
         res.status(500).json({ error: 'Erro ao processar matrícula.' });
