@@ -987,8 +987,8 @@ router.post('/live/evento', verificarToken, async (req, res) => {
             );
         }
 
-        // 🔄 Mantém o status de Microfone, Câmara e Saída sincronizado na lista oficial de participantes da Live
-        if (b.salaCodigo && ['STATUS_MIC', 'STATUS_CAM', 'SAIU_ALUNO'].includes(b.subtipo)) {
+        // 🔄 Mantém o status de Microfone, Câmara, Mão Levantada e Saída sincronizado na lista oficial da Live
+        if (b.salaCodigo && ['STATUS_MIC', 'STATUS_CAM', 'MAO_LEVANTADA', 'SAIU_ALUNO'].includes(b.subtipo)) {
             const live = await db.collection('workspace_video_lives').findOne({ codigoSala: b.salaCodigo, ativa: true });
             if (live) {
                 const agoraMs = Date.now();
@@ -1013,6 +1013,9 @@ router.post('/live/evento', verificarToken, async (req, res) => {
                             ...p,
                             micAtivo: b.subtipo === 'STATUS_MIC' ? (b.texto === 'ATIVO' || Boolean(b.micAtivo)) : Boolean(p.micAtivo),
                             camAtiva: b.subtipo === 'STATUS_CAM' ? (b.texto === 'ATIVA' || Boolean(b.camAtiva)) : Boolean(p.camAtiva),
+                            maoLevantada: b.subtipo === 'MAO_LEVANTADA'
+                                ? (b.maoLevantada !== undefined ? Boolean(b.maoLevantada) : b.texto !== 'ABAIXADA')
+                                : Boolean(p.maoLevantada),
                             ultimoSinalMs: agoraMs
                         };
                     });
@@ -1040,6 +1043,7 @@ router.post('/live/evento', verificarToken, async (req, res) => {
                 lousaAtiva: Boolean(b.lousaAtiva),
                 micAtivo: Boolean(b.micAtivo),
                 camAtiva: Boolean(b.camAtiva),
+                maoLevantada: b.maoLevantada !== undefined ? Boolean(b.maoLevantada) : (b.subtipo === 'MAO_LEVANTADA' && b.texto !== 'ABAIXADA'),
                 horario: new Date().toISOString(),
                 escolaId: b.escolaId || 'DEFAULT'
             });
@@ -1096,6 +1100,7 @@ router.post('/live/presenca', verificarToken, async (req, res) => {
                 role: role,
                 micAtivo: b.micAtivo !== undefined ? Boolean(b.micAtivo) : Boolean(existente?.micAtivo),
                 camAtiva: b.camAtiva !== undefined ? Boolean(b.camAtiva) : Boolean(existente?.camAtiva),
+                maoLevantada: b.maoLevantada !== undefined ? Boolean(b.maoLevantada) : Boolean(existente?.maoLevantada),
                 entrouEm: existente?.entrouEm || new Date(agoraMs).toISOString(),
                 ultimoSinalMs: agoraMs
             };
