@@ -89,6 +89,23 @@ router.get('/sistema/higienizar-turmas', async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🕵️ AUDITORIA PROFUNDA: CONSULTAS DE VERIFICAÇÃO DE CONTRATOS (POR ESCOLA)
+// ============================================================================
+router.get('/sistema/logs-validacao-contratos', async (req, res) => {
+    try {
+        const database = await connectDB();
+        const logs = await database.collection('logs_validacao_contratos')
+            .find(filtroTenant(req))
+            .sort({ dataUTC: -1 })
+            .limit(500)
+            .toArray();
+        res.json(logs.map(({ _id, ...rest }) => rest));
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao carregar logs de verificação.' });
+    }
+});
+
 // --- CRUD GENÉRICO RESTAURADO ---
 router.get('/:collection', async (req, res) => {
     if (!COLECOES_OK.includes(req.params.collection)) return res.status(403).send();

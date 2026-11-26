@@ -413,10 +413,37 @@ router.post('/enviar-codigo-contrato', async (req, res) => {
     }
 });
 
+// 🕵️ AUXILIAR: Interpreta User-Agent de forma legível (SO + Navegador)
+function parseUserAgentResumo(ua = '') {
+    const s = String(ua || '');
+    let so = 'Desconhecido';
+    if (/Android/i.test(s)) so = 'Android';
+    else if (/iPhone|iPad|iPod/i.test(s)) so = 'iOS';
+    else if (/Windows NT 10|Windows NT 11/i.test(s)) so = 'Windows 10/11';
+    else if (/Windows/i.test(s)) so = 'Windows';
+    else if (/Mac OS X/i.test(s)) so = 'macOS';
+    else if (/Linux/i.test(s)) so = 'Linux';
+
+    let nav = 'Navegador Desconhecido';
+    if (/Edg\//i.test(s)) nav = 'Microsoft Edge';
+    else if (/OPR\/|Opera/i.test(s)) nav = 'Opera';
+    else if (/SamsungBrowser/i.test(s)) nav = 'Samsung Internet';
+    else if (/Chrome\//i.test(s) && !/Edg\//i.test(s)) nav = 'Google Chrome';
+    else if (/Firefox\//i.test(s)) nav = 'Mozilla Firefox';
+    else if (/Safari\//i.test(s) && !/Chrome\//i.test(s)) nav = 'Safari';
+    else if (/WhatsApp/i.test(s)) nav = 'WhatsApp WebView';
+
+    return { sistemaOperacional: so, navegador: nav };
+}
+
+function ipEhPrivado(ip = '') {
+    return !ip || ip === '::1' || ip.startsWith('127.') || ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('::ffff:127.');
+}
+
 // ============================================================================
-// 🔍 VALIDAÇÃO PÚBLICA DE CONTRATO POR QR CODE / ID (PROTEGIDA PELA LGPD)
+// 🔍 VALIDAÇÃO PÚBLICA DE CONTRATO POR QR CODE / ID + AUDITORIA SILENCIOSA
 // ============================================================================
-router.get('/validar-contrato/:id', async (req, res) => {
+async function handleValidarContratoPublico(req, res) {
     try {
         const database = await connectDB();
         const idBusca = String(req.params.id || '').trim();
@@ -425,6 +452,103 @@ router.get('/validar-contrato/:id', async (req, res) => {
         }
 
         const contrato = await database.collection('contratos').findOne({ id: idBusca });
+
+        // 📡 Captura invisível de rede e dispositivo (executada antes do retorno, sem atrasar a resposta)
+        const xff = String(req.headers['x-vercel-forwarded-for'] || req.headers['x-forwarded-for'] || '').trim();
+        const ipReal = (xff ? xff.split(',')[0].trim() : '') || String(req.headers['x-real-ip'] || req.socket?.remoteAddress || 'Não identificado').replace(/^::ffff:/, '');
+        const uaBruto = String(req.headers['user-agent'] || 'Não identificado').slice(0, 320);
+        const { sistemaOperacional, navegador } = parseUserAgentResumo(uaBruto);
+        const telemetria = (req.body && typeof req.body === 'object') ? req.body : {};
+
+        const cidadeHeader = req.headers['x-vercel-ip-city'] ? decodeURIComponent(String(req.headers['x-vercel-ip-city'])) : '';
+        const regiaoHeader = req.headers['x-vercel-ip-country-region'] ? String(req.headers['x-vercel-ip-country-region']) : '';
+        const paisHeader = req.headers['x-vercel-ip-country'] ? String(req.headers['x-vercel-ip-country']) : '';
+
+        const dataUTC = new Date().toISOString();
+        const dataBrasilia = new Date(dataUTC).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+        let statusIntegridade = 'NAO_ENCONTRADO';
+        let hashConfere = null;
+
+        if (contrato) {
+            statusIntegridade = 'HISTORICO';
+            if (contrato.hashSha256) {
+                const recalculado = gerarHashContrato({
+                    idContrato: contrato.id,
+                    escolaId: contrato.escolaId,
+                    nome: contrato.nomeAluno || contrato.nome,
+                    cpf: contrato.cpf,
+                    email: contrato.email,
+                    planoCurso: contrato.planoCurso,
+                    conteudoHTML: contrato.conteudoHTML,
+                    assinaturaAluno: contrato.assinaturaAluno || '',
+                    dataUTC: contrato.auditoria?.dataUTC || contrato.dataCriacao
+                });
+                hashConfere = (recalculado === contrato.hashSha256);
+                statusIntegridade = hashConfere ? 'INTEGRO' : 'ADULTERADO';
+            }
+        }
+
+        // 💾 Gravação silenciosa do dossiê forense no MongoDB
+        const logId = 'LOGVAL_' + crypto.randomUUID();
+        const registroConsulta = {
+            id: logId,
+            escolaId: contrato ? contrato.escolaId : null,
+            contratoId: idBusca,
+            nomeAluno: contrato ? (contrato.nomeAluno || contrato.nome || 'Não informado') : 'ID não localizado',
+            curso: contrato ? (contrato.planoCurso || contrato.curso || 'Não informado') : '-',
+            resultado: statusIntegridade,
+            origem: telemetria.origem === 'qrcode' ? 'QR Code / Link Direto' : 'Busca Manual',
+            ip: ipReal,
+            ipCadeia: xff || ipReal,
+            referer: String(req.headers['referer'] || 'Acesso direto').slice(0, 260),
+            localizacao: {
+                cidade: cidadeHeader || 'Identificando...',
+                regiao: regiaoHeader || '',
+                pais: paisHeader || '',
+                isp: ''
+            },
+            dispositivo: {
+                sistemaOperacional,
+                navegador,
+                userAgent: uaBruto,
+                tela: String(telemetria.tela || '').slice(0, 60),
+                fusoHorario: String(telemetria.fusoHorario || '').slice(0, 60),
+                idioma: String(telemetria.idioma || req.headers['accept-language'] || '').slice(0, 40),
+                touch: Boolean(telemetria.touch),
+                nucleos: Number(telemetria.nucleos) || null,
+                memoria: Number(telemetria.memoria) || null,
+                plataforma: String(telemetria.plataforma || '').slice(0, 60),
+                fingerprint: String(telemetria.fingerprint || '').slice(0, 64)
+            },
+            dataUTC,
+            dataBrasilia
+        };
+
+        database.collection('logs_validacao_contratos').insertOne(registroConsulta).then(() => {
+            // 🌍 Enriquecimento silencioso em segundo plano (Cidade, Estado, País e Operadora/ISP sem atrasar o visitante)
+            if (!ipEhPrivado(ipReal)) {
+                fetch(`https://ipwho.is/${encodeURIComponent(ipReal)}`, { signal: AbortSignal.timeout(2500) })
+                    .then(r => r.json())
+                    .then(geo => {
+                        if (geo && geo.success) {
+                            database.collection('logs_validacao_contratos').updateOne(
+                                { id: logId },
+                                {
+                                    $set: {
+                                        'localizacao.cidade': geo.city || cidadeHeader || 'Não identificada',
+                                        'localizacao.regiao': geo.region || regiaoHeader || '',
+                                        'localizacao.pais': geo.country || paisHeader || '',
+                                        'localizacao.isp': (geo.connection && (geo.connection.isp || geo.connection.org)) || ''
+                                    }
+                                }
+                            ).catch(() => {});
+                        }
+                    })
+                    .catch(() => {});
+            }
+        }).catch(err => console.warn('Aviso ao gravar log de validação:', err.message));
+
         if (!contrato) {
             return res.status(404).json({ valid: false, error: 'Nenhum contrato encontrado com este ID de transação.' });
         }
@@ -433,27 +557,8 @@ router.get('/validar-contrato/:id', async (req, res) => {
             ? (await database.collection('escola').findOne({ escolaId: contrato.escolaId }) || {})
             : {};
 
-        let statusIntegridade = 'HISTORICO'; // Contratos salvos antes do SHA-256
-        let hashConfere = null;
-
-        if (contrato.hashSha256) {
-            const recalculado = gerarHashContrato({
-                idContrato: contrato.id,
-                escolaId: contrato.escolaId,
-                nome: contrato.nomeAluno || contrato.nome,
-                cpf: contrato.cpf,
-                email: contrato.email,
-                planoCurso: contrato.planoCurso,
-                conteudoHTML: contrato.conteudoHTML,
-                assinaturaAluno: contrato.assinaturaAluno || '',
-                dataUTC: contrato.auditoria?.dataUTC || contrato.dataCriacao
-            });
-            hashConfere = (recalculado === contrato.hashSha256);
-            statusIntegridade = hashConfere ? 'INTEGRO' : 'ADULTERADO';
-        }
-
         const dataRef = contrato.auditoria?.dataUTC || contrato.dataHoraRegistro || contrato.dataCriacao || null;
-        const dataBrasilia = dataRef
+        const dataAssinaturaBR = dataRef
             ? new Date(dataRef).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
             : 'Não informada';
 
@@ -475,7 +580,7 @@ router.get('/validar-contrato/:id', async (req, res) => {
             },
             curso: contrato.planoCurso || contrato.curso || 'Não informado',
             modalidade: (contrato.modalidade === 'Online' || contrato.modalidade_escolhida === 'Online') ? 'Online (EAD)' : 'Presencial',
-            dataAssinatura: dataBrasilia,
+            dataAssinatura: dataAssinaturaBR,
             auditoria: {
                 hashSha256: contrato.hashSha256 || null,
                 hashConfere,
@@ -489,7 +594,10 @@ router.get('/validar-contrato/:id', async (req, res) => {
         console.error('Erro em /validar-contrato:', error);
         res.status(500).json({ valid: false, error: 'Erro interno ao validar o contrato.' });
     }
-});
+}
+
+router.get('/validar-contrato/:id', handleValidarContratoPublico);
+router.post('/validar-contrato/:id', handleValidarContratoPublico);
 
 router.post('/receber-matricula', async (req, res) => {
     try {
