@@ -1303,4 +1303,66 @@ router.post('/live/convidar-aluno', verificarToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🌐 SERVIDORES ICE / TURN (DESTRAVA CONEXÕES ALUNO ↔ ALUNO NO 4G/5G)
+// ============================================================================
+const STUN_PADRAO_LIVE = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' }
+];
+let cacheIceTurn = { servers: null, expiraEm: 0 };
+
+router.get('/live/ice-servers', verificarToken, async (req, res) => {
+    try {
+        const agora = Date.now();
+        if (cacheIceTurn.servers && agora < cacheIceTurn.expiraEm) {
+            return res.status(200).json({ success: true, iceServers: cacheIceTurn.servers, turnAtivo: true });
+        }
+
+        let iceServers = [...STUN_PADRAO_LIVE];
+        let turnAtivo = false;
+
+        // 1. Opção recomendada: Metered.ca gratuito via API (credenciais renovadas automaticamente)
+        const meteredKey = String(process.env.METERED_API_KEY || '').trim();
+        const meteredApp = String(process.env.METERED_APP_NAME || '').trim();
+        if (meteredKey && meteredApp) {
+            try {
+                const urlMetered = `https://${encodeURIComponent(meteredApp)}.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(meteredKey)}`;
+                const resp = await fetch(urlMetered, { signal: AbortSignal.timeout(3500) });
+                if (resp.ok) {
+                    const listaTurn = await resp.json();
+                    if (Array.isArray(listaTurn) && listaTurn.length > 0) {
+                        iceServers = [...STUN_PADRAO_LIVE, ...listaTurn];
+                        turnAtivo = true;
+                        cacheIceTurn = { servers: iceServers, expiraEm: agora + 10 * 60 * 1000 };
+                    }
+                }
+            } catch (errMetered) {
+                console.warn('⚠️ Aviso Metered TURN (usando fallback STUN):', errMetered.message);
+            }
+        }
+
+        // 2. Alternativa: credenciais TURN estáticas no Render (TURN_URL, TURN_USERNAME, TURN_CREDENTIAL)
+        if (!turnAtivo && process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
+            const urlsTurn = String(process.env.TURN_URL).split(',').map(u => u.trim()).filter(Boolean);
+            if (urlsTurn.length > 0) {
+                iceServers.push({
+                    urls: urlsTurn,
+                    username: String(process.env.TURN_USERNAME).trim(),
+                    credential: String(process.env.TURN_CREDENTIAL).trim()
+                });
+                turnAtivo = true;
+                cacheIceTurn = { servers: iceServers, expiraEm: agora + 10 * 60 * 1000 };
+            }
+        }
+
+        res.status(200).json({ success: true, iceServers, turnAtivo });
+    } catch (error) {
+        res.status(200).json({ success: true, iceServers: STUN_PADRAO_LIVE, turnAtivo: false });
+    }
+});
+
 module.exports = router;
