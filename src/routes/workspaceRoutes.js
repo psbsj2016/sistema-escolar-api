@@ -91,7 +91,8 @@ router.get('/stream', verificarToken, (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders(); 
 
-    const escolaId = req.query.escolaId;
+    // 🔒 Usa sempre o escolaId validado pelo JWT (impede escutar eventos de outra escola via URL)
+    const escolaId = String(req.escolaId || '').trim();
 
     // 💓 Sinal de vida inicial e a cada 25s para evitar ERR_NETWORK_IO_SUSPENDED no navegador e no Render
     res.write(`: connected\n\n`);
@@ -101,8 +102,19 @@ router.get('/stream', verificarToken, (req, res) => {
         }
     }, 25000);
 
+    // Eventos de Live/Vídeos/Convites jamais aceitam broadcast 'DEFAULT' entre escolas
+    const eventosEstritosPorEscola = new Set([
+        'VIDEO_LIVE_STATUS',
+        'VIDEO_LIVE_EVENTO',
+        'VIDEO_AULA_NOVA',
+        'CONVITE_LIVE_DIRETO'
+    ]);
+
     const enviarEvento = (data) => {
-        if (!res.writableEnded && (data.escolaId === escolaId || data.escolaId === 'DEFAULT')) {
+        if (res.writableEnded || !data || !escolaId) return;
+        const mesmoTenant = String(data.escolaId || '') === escolaId;
+        const permiteBroadcastLegado = !eventosEstritosPorEscola.has(data.type) && data.escolaId === 'DEFAULT';
+        if (mesmoTenant || permiteBroadcastLegado) {
             res.write(`data: ${JSON.stringify(data)}\n\n`);
         }
     };
