@@ -1207,39 +1207,21 @@ router.get('/:salaId/estado', verificarToken, async (req, res) => {
 });
 
 // ============================================================================
-// 🎙️ TRANSCRIÇÃO UNIVERSAL EM NUVEM (GROQ WHISPER) - DETEÇÃO REAL DE FORMATO + ANTI-SILÊNCIO
+// 🎙️ TRANSCRIÇÃO EM NUVEM (GROQ WHISPER) - COMPATÍVEL COM ANDROID, IPHONE E PC
 // ============================================================================
 function detectarExtensaoAudioReal(buffer, mimeType) {
-    // 1. Inspeciona os primeiros bytes reais (magic bytes) para nunca falhar em iPhone/iPad/Android/PC
     if (buffer && buffer.length >= 12) {
         if (buffer[0] === 0x1A && buffer[1] === 0x45 && buffer[2] === 0xDF && buffer[3] === 0xA3) return 'webm';
         if (buffer[0] === 0x4F && buffer[1] === 0x67 && buffer[2] === 0x67 && buffer[3] === 0x53) return 'ogg';
         if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) return 'wav';
         if (buffer.subarray(4, 8).toString('ascii') === 'ftyp') return 'm4a';
-        if (buffer.subarray(0, 3).toString('ascii') === 'ID3' || (buffer[0] === 0xFF && (buffer[1] & 0xE0) === 0xE0)) return 'mp3';
     }
-    // 2. Fallback pelo mimeType enviado pelo navegador
     const mime = String(mimeType || '').toLowerCase();
     if (mime.includes('mp4') || mime.includes('m4a') || mime.includes('aac')) return 'm4a';
     if (mime.includes('ogg')) return 'ogg';
     if (mime.includes('wav')) return 'wav';
-    if (mime.includes('mpeg') || mime.includes('mp3')) return 'mp3';
     return 'webm';
 }
-
-const ALUCINACOES_SILENCIO_WHISPER = new Set([
-    'thank you',
-    'thanks for watching',
-    'thank you for watching',
-    'thanks for listening',
-    'you',
-    'bye',
-    'bye bye',
-    'subscribe',
-    'amara org',
-    'subtitles by the amara org community',
-    'mbc'
-]);
 
 router.post('/transcrever-audio', verificarToken, async (req, res) => {
     const fs = require('fs');
@@ -1250,18 +1232,18 @@ router.post('/transcrever-audio', verificarToken, async (req, res) => {
     try {
         const { audioBase64, mimeType } = req.body || {};
         if (!audioBase64) {
-            return res.status(400).json({ success: false, error: 'Áudio vazio. Tente gravar novamente.' });
+            return res.status(400).json({ success: false, error: 'Áudio vazio.' });
         }
 
         const chaveApi = process.env.GROQ_API_KEY;
         if (!chaveApi) {
-            return res.status(500).json({ success: false, error: 'Serviço de transcrição não configurado no servidor.' });
+            return res.status(500).json({ success: false, error: 'Chave API da Groq em falta.' });
         }
 
         const base64Limpo = String(audioBase64).replace(/^data:[^;]+;base64,/, '').trim();
         const buffer = Buffer.from(base64Limpo, 'base64');
-        if (buffer.length < 300) {
-            return res.status(200).json({ success: false, error: 'Áudio muito curto. Fale a frase completa antes de parar!' });
+        if (buffer.length < 200) {
+            return res.status(200).json({ success: false, error: 'Áudio muito curto.' });
         }
 
         const extensao = detectarExtensaoAudioReal(buffer, mimeType);
@@ -1275,37 +1257,19 @@ router.post('/transcrever-audio', verificarToken, async (req, res) => {
             file: fs.createReadStream(tempFilePath),
             model: 'whisper-large-v3-turbo',
             language: 'en',
-            prompt: 'Natural spoken English conversation.',
-            response_format: 'verbose_json',
+            response_format: 'json',
             temperature: 0.0
         });
 
         const textoCru = (transcricao && transcricao.text) ? String(transcricao.text).trim() : '';
-        const textoNormalizado = textoCru.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
-
-        // Verifica probabilidade real de silêncio nos segmentos do Whisper para bloquear alucinações sem bloquear falas reais
-        let probSilencio = 0;
-        if (Array.isArray(transcricao?.segments) && transcricao.segments.length > 0) {
-            const soma = transcricao.segments.reduce((acc, seg) => acc + (Number(seg.no_speech_prob) || 0), 0);
-            probSilencio = soma / transcricao.segments.length;
-        }
-
-        const ehAlucinacaoDeSilencio =
-            !textoNormalizado ||
-            probSilencio >= 0.92 ||
-            (probSilencio >= 0.72 && ALUCINACOES_SILENCIO_WHISPER.has(textoNormalizado));
-
-        if (ehAlucinacaoDeSilencio) {
-            return res.status(200).json({
-                success: false,
-                error: 'Não ouvimos nenhuma fala clara. Fale um pouco mais perto do microfone!'
-            });
+        if (!textoCru) {
+            return res.status(200).json({ success: false, error: 'Não foi possível ouvir a fala.' });
         }
 
         res.status(200).json({ success: true, textoTranscrito: textoCru });
     } catch (error) {
         console.error('🚨 Erro na transcrição Whisper da Arena:', error);
-        res.status(500).json({ success: false, error: 'Falha ao processar o áudio na nuvem. Tente novamente.' });
+        res.status(500).json({ success: false, error: 'Falha ao processar o áudio na nuvem.' });
     } finally {
         if (tempFilePath && fs.existsSync(tempFilePath)) {
             try { fs.unlinkSync(tempFilePath); } catch (e) {}
